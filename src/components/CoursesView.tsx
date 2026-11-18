@@ -14,7 +14,16 @@ import { PersonalCourse, StudyResource } from '../data/curriculumData';
 
 interface CoursesViewProps {
   courses: PersonalCourse[];
+  onAddCourse: (course: {
+    title: string;
+    category: string;
+    complementaryBook: string;
+    bookAuthor: string;
+    applicationMilestone: string;
+    linkedMonths: number[];
+  }) => void;
   onUpdateCourse: (id: number, updates: Partial<PersonalCourse>) => void;
+  onDeleteCourse: (id: number) => void;
   onToggleCourseTask: (courseId: number, taskId: string) => void;
   onAddCourseTask: (courseId: number, text: string) => void;
   onDeleteCourseTask: (courseId: number, taskId: string) => void;
@@ -30,7 +39,9 @@ interface CoursesViewProps {
 
 export default function CoursesView({
   courses,
+  onAddCourse,
   onUpdateCourse,
+  onDeleteCourse,
   onToggleCourseTask,
   onAddCourseTask,
   onDeleteCourseTask,
@@ -38,7 +49,16 @@ export default function CoursesView({
   onDeleteCourseResource,
   onJumpToMonth,
 }: CoursesViewProps) {
+  const [showAddCourse, setShowAddCourse] = useState(false);
+  const [newCourseTitle, setNewCourseTitle] = useState('');
+  const [newCourseCategory, setNewCourseCategory] = useState('');
+  const [newCourseBook, setNewCourseBook] = useState('');
+  const [newCourseAuthor, setNewCourseAuthor] = useState('');
+  const [newCourseMilestone, setNewCourseMilestone] = useState('');
+  const [newCourseMonths, setNewCourseMonths] = useState('1, 2');
+
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [addingResourceCourseId, setAddingResourceCourseId] = useState<
     number | null
   >(null);
@@ -51,6 +71,32 @@ export default function CoursesView({
   const [newResNote, setNewResNote] = useState('');
 
   const completedCount = courses.filter((c) => c.completed).length;
+
+  const handleCreateCourse = (e: React.FormEvent) => {
+    e.preventDefault();
+    const title = newCourseTitle.trim();
+    if (!title) return;
+    const parsedMonths = newCourseMonths
+      .split(/[,،\s]+/)
+      .map((n) => parseInt(n, 10))
+      .filter((n) => !Number.isNaN(n) && n >= 1 && n <= 100);
+
+    onAddCourse({
+      title,
+      category: newCourseCategory.trim() || 'تطوير شخصي',
+      complementaryBook: newCourseBook.trim() || 'مرجع مكمل مقترح',
+      bookAuthor: newCourseAuthor.trim() || 'مرجع عام',
+      applicationMilestone:
+        newCourseMilestone.trim() || 'تطبيق عملي من مخرجات الكورس.',
+      linkedMonths: parsedMonths.length > 0 ? parsedMonths : [1],
+    });
+    setNewCourseTitle('');
+    setNewCourseCategory('');
+    setNewCourseBook('');
+    setNewCourseAuthor('');
+    setNewCourseMilestone('');
+    setShowAddCourse(false);
+  };
 
   const handleTaskSubmit = (e: React.FormEvent, courseId: number) => {
     e.preventDefault();
@@ -80,24 +126,114 @@ export default function CoursesView({
       <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div className="space-y-2 max-w-3xl">
           <p className="text-xs text-slate-500">
-            التطوير الشخصي · مصادر مكملة ومهام تطبيقية صغيرة
+            التطوير الشخصي · مصادر مكملة ومهام تطبيقية صغيرة ({courses.length} كورسات)
           </p>
           <h1 className="font-editorial text-3xl font-bold text-slate-900">
-            الكورسات الستة ومصادرها وخطوات التنفيذ
+            الكورسات ومصادرها وخطوات التنفيذ
           </h1>
           <p className="text-sm text-slate-600 leading-relaxed">
-            أضفنا لكل كورس مجموعة مصادر مكملة (كتب ومحاضرات وأدوات عملية) مع مهام صغيرة قابلة للمتابعة، ويمكنك تعديل أسماء الكورسات أو إضافة مصادرك ومهامك الخاصة.
+            أضفنا لكل كورس مصادر مكملة ومهام صغيرة قابلة للمتابعة، ويمكنك إضافة كورس جديد أو تعديل الكورسات الحالية أو حذفها مع مزامنة فورية.
           </p>
         </div>
 
-        <div className="text-xs font-medium text-slate-600 tabular-nums shrink-0">
-          المنجز: {completedCount} / 6 كورسات
+        <div className="flex flex-wrap items-center gap-3 shrink-0">
+          <span className="text-xs font-medium text-slate-600 tabular-nums">
+            المنجز: {completedCount} / {courses.length}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowAddCourse((v) => !v)}
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" aria-hidden="true" />
+            <span>{showAddCourse ? 'إلغاء' : 'إضافة كورس جديد'}</span>
+          </button>
         </div>
       </div>
+
+      {showAddCourse && (
+        <form
+          onSubmit={handleCreateCourse}
+          className="bg-white border border-slate-200 rounded-xl p-6 space-y-4"
+        >
+          <h2 className="text-base font-semibold text-slate-900">
+            إضافة كورس تطوير شخصي جديد
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="block text-xs font-medium text-slate-600">
+              اسم الكورس
+              <input
+                type="text"
+                required
+                value={newCourseTitle}
+                onChange={(e) => setNewCourseTitle(e.target.value)}
+                placeholder="مثلاً: الكورس 7: إدارة المشاريع الشخصية"
+                className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+              />
+            </label>
+            <label className="block text-xs font-medium text-slate-600">
+              المجال المهاري
+              <input
+                type="text"
+                value={newCourseCategory}
+                onChange={(e) => setNewCourseCategory(e.target.value)}
+                placeholder="مثلاً: الإنتاجية / القيادة / الكتابة"
+                className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+              />
+            </label>
+            <label className="block text-xs font-medium text-slate-600">
+              المرجع الكتابي المكمل
+              <input
+                type="text"
+                value={newCourseBook}
+                onChange={(e) => setNewCourseBook(e.target.value)}
+                placeholder="اسم الكتاب أو المرجع..."
+                className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+              />
+            </label>
+            <label className="block text-xs font-medium text-slate-600">
+              الأشهر المرتبطة (أرقام مفصولة بفاصلة)
+              <input
+                type="text"
+                value={newCourseMonths}
+                onChange={(e) => setNewCourseMonths(e.target.value)}
+                placeholder="مثلاً: 4, 5"
+                className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+              />
+            </label>
+          </div>
+          <label className="block text-xs font-medium text-slate-600">
+            هدف التطبيق العملي
+            <textarea
+              rows={2}
+              value={newCourseMilestone}
+              onChange={(e) => setNewCourseMilestone(e.target.value)}
+              placeholder="ما الخطوة العملية التي تريد تحقيقها من هذا الكورس؟"
+              className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+            />
+          </label>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowAddCourse(false)}
+              className="px-4 py-2 text-xs font-medium text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 cursor-pointer"
+            >
+              إلغاء
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] cursor-pointer"
+            >
+              حفظ الكورس
+            </button>
+          </div>
+        </form>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {courses.map((course) => {
           const isEditing = editingId === course.id;
+          const isConfirmingDelete = confirmDeleteId === course.id;
           const isAddingRes = addingResourceCourseId === course.id;
           const tasksDone = course.tasks.filter((t) => t.done).length;
 
@@ -111,7 +247,9 @@ export default function CoursesView({
                 <div className="flex items-start justify-between gap-4">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 text-xs text-slate-500">
-                      <span className="tabular-nums">كورس 0{course.id}</span>
+                      <span className="tabular-nums">
+                        كورس {String(course.id).padStart(2, '0')}
+                      </span>
                       <span aria-hidden="true">·</span>
                       <span>{course.category}</span>
                     </div>
@@ -122,16 +260,49 @@ export default function CoursesView({
                     )}
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setEditingId(isEditing ? null : course.id)
-                    }
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-md hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>{isEditing ? 'حفظ' : 'تخصيص'}</span>
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditingId(isEditing ? null : course.id)
+                      }
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-md hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>{isEditing ? 'حفظ' : 'تخصيص'}</span>
+                    </button>
+
+                    {!isConfirmingDelete ? (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteId(course.id)}
+                        aria-label={`حذف ${course.title}`}
+                        className="p-1.5 text-slate-400 hover:text-red-600 rounded-md hover:bg-red-50 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    ) : (
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onDeleteCourse(course.id);
+                            setConfirmDeleteId(null);
+                          }}
+                          className="px-2 py-1 text-[11px] font-medium text-white bg-red-600 rounded-md hover:bg-red-700 cursor-pointer"
+                        >
+                          تأكيد الحذف
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="px-2 py-1 text-[11px] text-slate-600 bg-slate-100 rounded-md cursor-pointer"
+                        >
+                          إلغاء
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {isEditing ? (
@@ -172,6 +343,22 @@ export default function CoursesView({
                             complementaryBook: e.target.value,
                           })
                         }
+                        className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+                      />
+                    </label>
+
+                    <label className="block text-xs text-slate-600">
+                      الأشهر المرتبطة (مفصولة بفاصلة)
+                      <input
+                        type="text"
+                        value={course.linkedMonths.join(', ')}
+                        onChange={(e) => {
+                          const nums = e.target.value
+                            .split(/[,،\s]+/)
+                            .map((n) => parseInt(n, 10))
+                            .filter((n) => !Number.isNaN(n) && n >= 1 && n <= 100);
+                          onUpdateCourse(course.id, { linkedMonths: nums });
+                        }}
                         className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
                       />
                     </label>
@@ -260,39 +447,43 @@ export default function CoursesView({
                       )}
 
                       <div className="divide-y divide-slate-200 border border-slate-200 rounded-lg bg-slate-50/50">
-                        {course.resources.map((res) => (
-                          <div
-                            key={res.id}
-                            className="px-3.5 py-2.5 flex items-start justify-between gap-2"
-                          >
-                            <div className="space-y-0.5">
-                              <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                                <span className="font-medium text-slate-900">
-                                  {res.title}
-                                </span>
-                                <span aria-hidden="true" className="text-slate-300">
-                                  ·
-                                </span>
-                                <span className="text-slate-500">{res.type}</span>
+                        {course.resources.length === 0 ? (
+                          <p className="px-3.5 py-3 text-xs text-slate-500">
+                            لا توجد مصادر مضافة بعد — اضغط «+ إضافة مصدر» لإضافة مرجع.
+                          </p>
+                        ) : (
+                          course.resources.map((res) => (
+                            <div
+                              key={res.id}
+                              className="px-3.5 py-2.5 flex items-start justify-between gap-2"
+                            >
+                              <div className="space-y-0.5">
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                                  <span className="font-medium text-slate-900">
+                                    {res.title}
+                                  </span>
+                                  <span aria-hidden="true" className="text-slate-300">
+                                    ·
+                                  </span>
+                                  <span className="text-slate-500">{res.type}</span>
+                                </div>
+                                <p className="text-[11px] text-slate-600 leading-relaxed">
+                                  {res.note}
+                                </p>
                               </div>
-                              <p className="text-[11px] text-slate-600 leading-relaxed">
-                                {res.note}
-                              </p>
-                            </div>
 
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <a
-                                href={`https://www.google.com/search?q=${encodeURIComponent(
-                                  res.searchQuery
-                                )}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                aria-label={`بحث عن ${res.title}`}
-                                className="p-1 text-[#1E3A5F] hover:text-[#162C49]"
-                              >
-                                <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-                              </a>
-                              {res.custom && (
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <a
+                                  href={`https://www.google.com/search?q=${encodeURIComponent(
+                                    res.searchQuery
+                                  )}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  aria-label={`بحث عن ${res.title}`}
+                                  className="p-1 text-[#1E3A5F] hover:text-[#162C49]"
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+                                </a>
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -303,10 +494,10 @@ export default function CoursesView({
                                 >
                                   <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                                 </button>
-                              )}
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          ))
+                        )}
                       </div>
                     </div>
 
@@ -357,18 +548,16 @@ export default function CoursesView({
                               </span>
                             </button>
 
-                            {task.custom && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onDeleteCourseTask(course.id, task.id)
-                                }
-                                aria-label="حذف المهمة"
-                                className="p-0.5 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onDeleteCourseTask(course.id, task.id)
+                              }
+                              aria-label="حذف المهمة"
+                              className="p-0.5 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
                           </div>
                         ))}
                       </div>

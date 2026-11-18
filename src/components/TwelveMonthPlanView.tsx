@@ -13,33 +13,54 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Settings2,
   Square,
   Trash2,
 } from 'lucide-react';
 import {
-  DOMAINS,
   DomainId,
+  DomainInfo,
   MonthActivities,
   MonthPlan,
   MonthStatus,
   PersonalCourse,
+  QuarterInfo,
+  ResourceFormat,
   SmallTask,
+  StudyResource,
 } from '../data/curriculumData';
+import VoiceRecorderButton from './VoiceRecorderButton';
 
 interface TwelveMonthPlanViewProps {
+  quarters: QuarterInfo[];
   months: MonthPlan[];
+  domains: DomainInfo[];
   courses: PersonalCourse[];
   selectedMonthId: number;
   domainFilter: DomainId | 'all';
   onSelectMonth: (id: number) => void;
   onChangeDomainFilter: (domainId: DomainId | 'all') => void;
+  onAddQuarter: (title: string, subtitle: string) => void;
+  onUpdateQuarter: (id: string, updates: Partial<QuarterInfo>) => void;
+  onDeleteQuarter: (id: string) => void;
+  onAddMonth: (payload: {
+    quarter: number;
+    theme: string;
+    foundationalTitle: string;
+    foundationalAuthor: string;
+    exploratoryTitle: string;
+    exploratoryAuthor: string;
+    courseId: number;
+  }) => void;
+  onUpdateMonth: (id: number, updates: Partial<MonthPlan>) => void;
+  onDeleteMonth: (id: number) => void;
   onUpdateMonthStatus: (id: number, status: MonthStatus) => void;
   onToggleActivity: (id: number, key: keyof MonthActivities) => void;
   onUpdateMonthNotes: (id: number, notes: string) => void;
   onUpdateTrackItem: (
     id: number,
     track: 'foundational' | 'exploratory',
-    field: 'title' | 'author' | 'pace',
+    field: 'title' | 'author' | 'pace' | 'domainId' | 'format' | 'focus',
     value: string
   ) => void;
   onToggleMonthTask: (monthId: number, taskId: string) => void;
@@ -49,16 +70,15 @@ interface TwelveMonthPlanViewProps {
     track: SmallTask['track']
   ) => void;
   onDeleteMonthTask: (monthId: number, taskId: string) => void;
+  onAddMonthResource: (
+    monthId: number,
+    title: string,
+    type: StudyResource['type'],
+    note: string
+  ) => void;
+  onDeleteMonthResource: (monthId: number, resourceId: string) => void;
   onOpenBookNote: (bookTitle: string, author: string) => void;
 }
-
-const QUARTER_FILTERS: Array<{ id: 0 | 1 | 2 | 3 | 4; label: string }> = [
-  { id: 0, label: 'جميع الأشهر (12)' },
-  { id: 1, label: 'الربع الأول: التأسيس' },
-  { id: 2, label: 'الربع الثاني: النقد والإدراك' },
-  { id: 3, label: 'الربع الثالث: العمران والتحيز' },
-  { id: 4, label: 'الربع الرابع: التركيب والحصاد' },
-];
 
 const STATUS_META: Record<
   MonthStatus,
@@ -87,17 +107,21 @@ const TRACK_LABELS: Record<SmallTask['track'], string> = {
   action: 'تطبيق',
 };
 
-function getDomainTitle(domainId: DomainId): string {
-  return DOMAINS.find((d) => d.id === domainId)?.title ?? '';
-}
-
 export default function TwelveMonthPlanView({
+  quarters,
   months,
+  domains,
   courses,
   selectedMonthId,
   domainFilter,
   onSelectMonth,
   onChangeDomainFilter,
+  onAddQuarter,
+  onUpdateQuarter,
+  onDeleteQuarter,
+  onAddMonth,
+  onUpdateMonth,
+  onDeleteMonth,
   onUpdateMonthStatus,
   onToggleActivity,
   onUpdateMonthNotes,
@@ -105,15 +129,51 @@ export default function TwelveMonthPlanView({
   onToggleMonthTask,
   onAddMonthTask,
   onDeleteMonthTask,
+  onAddMonthResource,
+  onDeleteMonthResource,
   onOpenBookNote,
 }: TwelveMonthPlanViewProps) {
-  const [quarterFilter, setQuarterFilter] = useState<0 | 1 | 2 | 3 | 4>(0);
+  const [quarterFilter, setQuarterFilter] = useState<number>(0);
   const [statusFilter, setStatusFilter] = useState<MonthStatus | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isEditingTracks, setIsEditingTracks] = useState(false);
+
+  // Quarter manager UI state
+  const [showQuarterManager, setShowQuarterManager] = useState(false);
+  const [newQuarterTitle, setNewQuarterTitle] = useState('');
+  const [newQuarterSubtitle, setNewQuarterSubtitle] = useState('');
+
+  // Add Month UI state
+  const [showAddMonth, setShowAddMonth] = useState(false);
+  const [newMonthQuarter, setNewMonthQuarter] = useState<number>(
+    quarters[0]?.number ?? 1
+  );
+  const [newMonthTheme, setNewMonthTheme] = useState('');
+  const [newMonthFTitle, setNewMonthFTitle] = useState('');
+  const [newMonthFAuthor, setNewMonthFAuthor] = useState('');
+  const [newMonthETitle, setNewMonthETitle] = useState('');
+  const [newMonthEAuthor, setNewMonthEAuthor] = useState('');
+  const [newMonthCourseId, setNewMonthCourseId] = useState<number>(
+    courses[0]?.id ?? 1
+  );
+
+  // Edit active month state
+  const [isEditingMonth, setIsEditingMonth] = useState(false);
+  const [confirmDeleteMonthId, setConfirmDeleteMonthId] = useState<
+    number | null
+  >(null);
+
+  // Small task & resource inline inputs
   const [newTaskText, setNewTaskText] = useState('');
   const [newTaskTrack, setNewTaskTrack] =
     useState<SmallTask['track']>('foundational');
+  const [showAddResource, setShowAddResource] = useState(false);
+  const [newResTitle, setNewResTitle] = useState('');
+  const [newResType, setNewResType] =
+    useState<StudyResource['type']>('كتاب');
+  const [newResNote, setNewResNote] = useState('');
+
+  const getDomainTitle = (domainId: DomainId) =>
+    domains.find((d) => d.id === domainId)?.title ?? domainId;
 
   const filteredMonths = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -149,9 +209,15 @@ export default function TwelveMonthPlanView({
     filteredMonths[0] ??
     months[0];
 
-  const linkedCourse = courses.find((c) => c.id === activeMonth.courseId);
-  const doneCount = Object.values(activeMonth.activities).filter(Boolean).length;
-  const tasksDoneCount = activeMonth.tasks.filter((t) => t.done).length;
+  const linkedCourse = activeMonth
+    ? courses.find((c) => c.id === activeMonth.courseId)
+    : undefined;
+  const doneCount = activeMonth
+    ? Object.values(activeMonth.activities).filter(Boolean).length
+    : 0;
+  const tasksDoneCount = activeMonth
+    ? activeMonth.tasks.filter((t) => t.done).length
+    : 0;
 
   const resetFilters = () => {
     setQuarterFilter(0);
@@ -160,47 +226,130 @@ export default function TwelveMonthPlanView({
     setSearchQuery('');
   };
 
+  const handleSubmitQuarter = (e: React.FormEvent) => {
+    e.preventDefault();
+    const title = newQuarterTitle.trim();
+    if (!title) return;
+    onAddQuarter(title, newQuarterSubtitle.trim() || 'مرحلة مضافة للخطة');
+    setNewQuarterTitle('');
+    setNewQuarterSubtitle('');
+  };
+
+  const handleSubmitNewMonth = (e: React.FormEvent) => {
+    e.preventDefault();
+    const theme = newMonthTheme.trim();
+    if (!theme) return;
+    onAddMonth({
+      quarter: newMonthQuarter,
+      theme,
+      foundationalTitle: newMonthFTitle.trim() || 'مصدر تأسيسي مخصص',
+      foundationalAuthor: newMonthFAuthor.trim() || 'مفكر / محاضر',
+      exploratoryTitle: newMonthETitle.trim() || 'مصدر استكشافي مخصص',
+      exploratoryAuthor: newMonthEAuthor.trim() || 'مؤلف',
+      courseId: newMonthCourseId,
+    });
+    setNewMonthTheme('');
+    setNewMonthFTitle('');
+    setNewMonthFAuthor('');
+    setNewMonthETitle('');
+    setNewMonthEAuthor('');
+    setShowAddMonth(false);
+  };
+
   const handleSubmitTask = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!activeMonth) return;
     const cleaned = newTaskText.trim();
     if (!cleaned) return;
     onAddMonthTask(activeMonth.id, cleaned, newTaskTrack);
     setNewTaskText('');
   };
 
+  const handleSubmitResource = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeMonth) return;
+    const title = newResTitle.trim();
+    if (!title) return;
+    onAddMonthResource(
+      activeMonth.id,
+      title,
+      newResType,
+      newResNote.trim() || 'مصدر مضاف يدويًا لهذا الشهر.'
+    );
+    setNewResTitle('');
+    setNewResNote('');
+    setShowAddResource(false);
+  };
+
+  const handleAppendVoiceToMonthNotes = (transcript: string) => {
+    if (!activeMonth) return;
+    const current = activeMonth.notes.trim();
+    const next = current ? `${current}\n${transcript}` : transcript;
+    onUpdateMonthNotes(activeMonth.id, next);
+  };
+
   return (
     <div className="space-y-6">
-      {/* Workspace Filter Bar */}
+      {/* Workspace Filter Bar + Quarter Management Trigger */}
       <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div
-            role="tablist"
-            aria-label="تصفية حسب الفصول الأربعة"
-            className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg"
-          >
-            {QUARTER_FILTERS.map((q) => {
-              const active = quarterFilter === q.id;
-              return (
-                <button
-                  key={q.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setQuarterFilter(q.id)}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                    active
-                      ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {q.label}
-                </button>
-              );
-            })}
+          <div className="flex flex-wrap items-center gap-2">
+            <div
+              role="tablist"
+              aria-label="تصفية حسب الفصول الأربعة"
+              className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={quarterFilter === 0}
+                onClick={() => setQuarterFilter(0)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  quarterFilter === 0
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                جميع الأشهر ({months.length})
+              </button>
+              {quarters.map((q) => {
+                const active = quarterFilter === q.number;
+                const shortLabel = q.title.split('—')[0].slice(0, 28);
+                return (
+                  <button
+                    key={q.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setQuarterFilter(q.number)}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      active
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {shortLabel}
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowQuarterManager((v) => !v)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Settings2 className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>
+                {showQuarterManager
+                  ? 'إغلاق تعديل الأرباع'
+                  : 'إضافة / تعديل الأرباع'}
+              </span>
+            </button>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <div className="relative flex-1 sm:w-56">
+            <div className="relative flex-1 sm:w-52">
               <Search
                 className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
                 aria-hidden="true"
@@ -218,13 +367,11 @@ export default function TwelveMonthPlanView({
             <select
               aria-label="تصفية حسب المحور"
               value={domainFilter}
-              onChange={(e) =>
-                onChangeDomainFilter(e.target.value as DomainId | 'all')
-              }
+              onChange={(e) => onChangeDomainFilter(e.target.value)}
               className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:border-[#1E3A5F]"
             >
               <option value="all">كل المحاور المعرفية</option>
-              {DOMAINS.map((d) => (
+              {domains.map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.title}
                 </option>
@@ -246,19 +393,229 @@ export default function TwelveMonthPlanView({
             </select>
           </div>
         </div>
+
+        {/* Inline Quarter Manager (Edit الربع الأول / الثاني / إضافة ربع جديد) */}
+        {showQuarterManager && (
+          <div className="pt-4 border-t border-slate-200 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">
+                تعديل عناوين الأرباع (التأسيس، النقد، العمران...) أو إضافة ربع جديد
+              </h3>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {quarters.map((q) => (
+                <div
+                  key={q.id}
+                  className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2"
+                >
+                  <div className="flex items-center justify-between text-xs text-slate-500">
+                    <span className="font-semibold text-[#1E3A5F] tabular-nums">
+                      الربع رقم {q.number}
+                    </span>
+                    {quarters.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteQuarter(q.id)}
+                        className="text-slate-400 hover:text-red-600 cursor-pointer"
+                        aria-label={`حذف ${q.title}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    aria-label={`عنوان الربع ${q.number}`}
+                    value={q.title}
+                    onChange={(e) =>
+                      onUpdateQuarter(q.id, { title: e.target.value })
+                    }
+                    className="w-full px-2.5 py-1.5 text-xs font-medium bg-white border border-slate-300 rounded-md focus:outline-none focus:border-[#1E3A5F]"
+                  />
+                  <input
+                    type="text"
+                    aria-label={`وصف الربع ${q.number}`}
+                    value={q.subtitle}
+                    onChange={(e) =>
+                      onUpdateQuarter(q.id, { subtitle: e.target.value })
+                    }
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md focus:outline-none focus:border-[#1E3A5F]"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <form
+              onSubmit={handleSubmitQuarter}
+              className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2"
+            >
+              <input
+                type="text"
+                value={newQuarterTitle}
+                onChange={(e) => setNewQuarterTitle(e.target.value)}
+                placeholder="اسم ربع أو مرحلة جديدة (مثلاً: الربع الخامس: المراجعة والتوسع)..."
+                className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+              />
+              <input
+                type="text"
+                value={newQuarterSubtitle}
+                onChange={(e) => setNewQuarterSubtitle(e.target.value)}
+                placeholder="وصف مختصر..."
+                className="sm:w-56 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+              />
+              <button
+                type="submit"
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>إضافة ربع</span>
+              </button>
+            </form>
+          </div>
+        )}
       </div>
 
-      {/* Main Split: 12-Month Index List + Active Month Detail Workspace */}
+      {/* Add New Month Inline Drawer */}
+      {showAddMonth && (
+        <form
+          onSubmit={handleSubmitNewMonth}
+          className="bg-white border border-slate-200 rounded-xl p-6 space-y-4"
+        >
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold text-slate-900">
+              إضافة شهر أو محطة جديدة إلى الخطة
+            </h2>
+            <button
+              type="button"
+              onClick={() => setShowAddMonth(false)}
+              className="text-xs text-slate-500 hover:text-slate-800 cursor-pointer"
+            >
+              إلغاء
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <label className="block text-xs font-medium text-slate-600">
+              عنوان / محور الشهر
+              <input
+                type="text"
+                required
+                value={newMonthTheme}
+                onChange={(e) => setNewMonthTheme(e.target.value)}
+                placeholder="مثلاً: قراءة في تاريخ العلوم أو مراجعة التأسيس..."
+                className="mt-1 w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+              />
+            </label>
+
+            <label className="block text-xs font-medium text-slate-600">
+              الربع التابع له
+              <select
+                value={newMonthQuarter}
+                onChange={(e) => setNewMonthQuarter(Number(e.target.value))}
+                className="mt-1 w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+              >
+                {quarters.map((q) => (
+                  <option key={q.id} value={q.number}>
+                    {q.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block text-xs font-medium text-slate-600">
+              الكورس المرتبط
+              <select
+                value={newMonthCourseId}
+                onChange={(e) => setNewMonthCourseId(Number(e.target.value))}
+                className="mt-1 w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+              >
+                {courses.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block text-xs font-medium text-slate-600">
+              كتاب / سلسلة المسار التأسيسي
+              <input
+                type="text"
+                value={newMonthFTitle}
+                onChange={(e) => setNewMonthFTitle(e.target.value)}
+                placeholder="اسم الكتاب أو المحاضرة..."
+                className="mt-1 w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+              />
+            </label>
+
+            <label className="block text-xs font-medium text-slate-600">
+              مفكر المسار التأسيسي
+              <input
+                type="text"
+                value={newMonthFAuthor}
+                onChange={(e) => setNewMonthFAuthor(e.target.value)}
+                placeholder="اسم المفكر..."
+                className="mt-1 w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+              />
+            </label>
+
+            <label className="block text-xs font-medium text-slate-600">
+              كتاب المسار الاستكشافي
+              <input
+                type="text"
+                value={newMonthETitle}
+                onChange={(e) => setNewMonthETitle(e.target.value)}
+                placeholder="اسم الكتاب الاستكشافي..."
+                className="mt-1 w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+              />
+            </label>
+
+            <label className="block text-xs font-medium text-slate-600">
+              مؤلف المسار الاستكشافي
+              <input
+                type="text"
+                value={newMonthEAuthor}
+                onChange={(e) => setNewMonthEAuthor(e.target.value)}
+                placeholder="اسم المؤلف..."
+                className="mt-1 w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+              />
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="submit"
+              className="px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] cursor-pointer"
+            >
+              إضافة الشهر إلى الخطة
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* Main Split: Month Index List + Active Month Detail Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Month List (5 cols) */}
         <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">
-              الجدول الزمني للرحلة
-            </h2>
-            <span className="text-xs text-slate-500 tabular-nums">
-              {filteredMonths.length} من 12 شهرًا
-            </span>
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">
+                الجدول الزمني للرحلة
+              </h2>
+              <span className="text-xs text-slate-500 tabular-nums">
+                {filteredMonths.length} من {months.length} شهرًا
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowAddMonth((v) => !v)}
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>إضافة شهر</span>
+            </button>
           </div>
 
           {filteredMonths.length === 0 ? (
@@ -281,7 +638,7 @@ export default function TwelveMonthPlanView({
           ) : (
             <div className="divide-y divide-slate-200">
               {filteredMonths.map((month) => {
-                const isSelected = activeMonth.id === month.id;
+                const isSelected = activeMonth?.id === month.id;
                 const StatusIcon = STATUS_META[month.status].Icon;
                 const mTasksDone = month.tasks.filter((t) => t.done).length;
 
@@ -291,7 +648,8 @@ export default function TwelveMonthPlanView({
                     type="button"
                     onClick={() => {
                       onSelectMonth(month.id);
-                      setIsEditingTracks(false);
+                      setIsEditingMonth(false);
+                      setConfirmDeleteMonthId(null);
                     }}
                     className={`w-full text-right px-5 py-4 transition-colors duration-150 cursor-pointer flex flex-col gap-1.5 ${
                       isSelected
@@ -332,323 +690,490 @@ export default function TwelveMonthPlanView({
         </div>
 
         {/* Detail Workspace (7 cols) */}
-        <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-7">
-          {/* Header & Status Selector */}
-          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-6 border-b border-slate-200">
-            <div className="space-y-1.5">
-              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                <span className="font-semibold text-[#1E3A5F] tabular-nums">
-                  الشهر {activeMonth.id}
-                </span>
-                <span aria-hidden="true">·</span>
-                <span>{activeMonth.quarterTitle}</span>
-              </div>
-              <h2 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900">
-                {activeMonth.theme}
-              </h2>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => setIsEditingTracks((v) => !v)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>{isEditingTracks ? 'إنهاء التعديل' : 'تعديل المصادر'}</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Status Control Row */}
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <span className="text-xs font-medium text-slate-600">
-              حالة التقدم في هذا الشهر:
-            </span>
-            <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
-              {(['not_started', 'in_progress', 'completed'] as MonthStatus[]).map(
-                (st) => {
-                  const isCurrent = activeMonth.status === st;
-                  const MetaIcon = STATUS_META[st].Icon;
-                  return (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => onUpdateMonthStatus(activeMonth.id, st)}
-                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                        isCurrent
-                          ? 'bg-white text-slate-900 shadow-xs'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <MetaIcon
-                        className={`w-3.5 h-3.5 ${
-                          isCurrent ? STATUS_META[st].textColor : 'text-slate-400'
-                        }`}
-                        aria-hidden="true"
-                      />
-                      <span>{STATUS_META[st].label}</span>
-                    </button>
-                  );
-                }
-              )}
-            </div>
-          </div>
-
-          {/* Parallel Tracks Comparison */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Foundational */}
-            <div className="p-5 bg-slate-50 border border-slate-200 rounded-lg flex flex-col justify-between gap-3">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span className="font-semibold text-[#1E3A5F]">
-                    المسار التأسيسي
+        {activeMonth && (
+          <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-7">
+            {/* Header & Edit/Delete Actions */}
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-6 border-b border-slate-200">
+              <div className="space-y-1.5 flex-1">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <span className="font-semibold text-[#1E3A5F] tabular-nums">
+                    الشهر {activeMonth.id}
                   </span>
-                  <span>{activeMonth.foundational.format}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{activeMonth.quarterTitle}</span>
                 </div>
-
-                {isEditingTracks ? (
-                  <div className="space-y-2.5">
-                    <label className="block text-xs text-slate-600">
-                      الكتاب / السلسلة
-                      <input
-                        type="text"
-                        value={activeMonth.foundational.title}
+                {isEditingMonth ? (
+                  <div className="space-y-2.5 pt-1">
+                    <input
+                      type="text"
+                      aria-label="عنوان الشهر"
+                      value={activeMonth.theme}
+                      onChange={(e) =>
+                        onUpdateMonth(activeMonth.id, { theme: e.target.value })
+                      }
+                      className="w-full font-editorial text-xl font-bold text-slate-900 px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg"
+                    />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <select
+                        aria-label="الربع التابع له"
+                        value={activeMonth.quarter}
+                        onChange={(e) => {
+                          const qNum = Number(e.target.value);
+                          const qObj = quarters.find((q) => q.number === qNum);
+                          onUpdateMonth(activeMonth.id, {
+                            quarter: qNum,
+                            quarterTitle: qObj?.title ?? activeMonth.quarterTitle,
+                          });
+                        }}
+                        className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                      >
+                        {quarters.map((q) => (
+                          <option key={q.id} value={q.number}>
+                            {q.title}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        aria-label="الكورس المرتبط"
+                        value={activeMonth.courseId}
                         onChange={(e) =>
-                          onUpdateTrackItem(
-                            activeMonth.id,
-                            'foundational',
-                            'title',
-                            e.target.value
-                          )
+                          onUpdateMonth(activeMonth.id, {
+                            courseId: Number(e.target.value),
+                          })
                         }
-                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                      />
-                    </label>
-                    <label className="block text-xs text-slate-600">
-                      المفكر
-                      <input
-                        type="text"
-                        value={activeMonth.foundational.author}
-                        onChange={(e) =>
-                          onUpdateTrackItem(
-                            activeMonth.id,
-                            'foundational',
-                            'author',
-                            e.target.value
-                          )
-                        }
-                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                      />
-                    </label>
-                    <label className="block text-xs text-slate-600">
-                      الوتيرة الأسبوعية
-                      <input
-                        type="text"
-                        value={activeMonth.foundational.pace}
-                        onChange={(e) =>
-                          onUpdateTrackItem(
-                            activeMonth.id,
-                            'foundational',
-                            'pace',
-                            e.target.value
-                          )
-                        }
-                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                      />
-                    </label>
+                        className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                      >
+                        {courses.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 ) : (
-                  <>
-                    <div>
-                      <h3 className="text-base font-semibold text-slate-900 leading-snug">
-                        {activeMonth.foundational.title}
-                      </h3>
-                      <p className="text-xs text-slate-600 mt-1">
-                        {activeMonth.foundational.author} ·{' '}
-                        {getDomainTitle(activeMonth.foundational.domainId)}
-                      </p>
-                    </div>
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      {activeMonth.foundational.focus}
-                    </p>
-                  </>
+                  <h2 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900">
+                    {activeMonth.theme}
+                  </h2>
                 )}
               </div>
 
-              {!isEditingTracks && (
-                <div className="pt-2.5 border-t border-slate-200/80 flex items-center justify-between gap-2 text-xs">
-                  <span className="text-slate-500 truncate">
-                    {activeMonth.foundational.pace}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onOpenBookNote(
-                        activeMonth.foundational.title,
-                        activeMonth.foundational.author
-                      )
-                    }
-                    className="font-semibold text-[#1E3A5F] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    نوتس الكتاب
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Exploratory */}
-            <div className="p-5 bg-slate-50 border border-slate-200 rounded-lg flex flex-col justify-between gap-3">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span className="font-semibold text-slate-800">
-                    المسار الاستكشافي
-                  </span>
-                  <span>{activeMonth.exploratory.format}</span>
-                </div>
-
-                {isEditingTracks ? (
-                  <div className="space-y-2.5">
-                    <label className="block text-xs text-slate-600">
-                      الكتاب / السلسلة
-                      <input
-                        type="text"
-                        value={activeMonth.exploratory.title}
-                        onChange={(e) =>
-                          onUpdateTrackItem(
-                            activeMonth.id,
-                            'exploratory',
-                            'title',
-                            e.target.value
-                          )
-                        }
-                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                      />
-                    </label>
-                    <label className="block text-xs text-slate-600">
-                      المفكر / الأديب
-                      <input
-                        type="text"
-                        value={activeMonth.exploratory.author}
-                        onChange={(e) =>
-                          onUpdateTrackItem(
-                            activeMonth.id,
-                            'exploratory',
-                            'author',
-                            e.target.value
-                          )
-                        }
-                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                      />
-                    </label>
-                    <label className="block text-xs text-slate-600">
-                      الوتيرة الأسبوعية
-                      <input
-                        type="text"
-                        value={activeMonth.exploratory.pace}
-                        onChange={(e) =>
-                          onUpdateTrackItem(
-                            activeMonth.id,
-                            'exploratory',
-                            'pace',
-                            e.target.value
-                          )
-                        }
-                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                      />
-                    </label>
-                  </div>
-                ) : (
-                  <>
-                    <div>
-                      <h3 className="text-base font-semibold text-slate-900 leading-snug">
-                        {activeMonth.exploratory.title}
-                      </h3>
-                      <p className="text-xs text-slate-600 mt-1">
-                        {activeMonth.exploratory.author} ·{' '}
-                        {getDomainTitle(activeMonth.exploratory.domainId)}
-                      </p>
-                    </div>
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      {activeMonth.exploratory.focus}
-                    </p>
-                  </>
-                )}
-              </div>
-
-              {!isEditingTracks && (
-                <div className="pt-2.5 border-t border-slate-200/80 flex items-center justify-between gap-2 text-xs">
-                  <span className="text-slate-500 truncate">
-                    {activeMonth.exploratory.pace}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onOpenBookNote(
-                        activeMonth.exploratory.title,
-                        activeMonth.exploratory.author
-                      )
-                    }
-                    className="font-semibold text-[#1E3A5F] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    نوتس الكتاب
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Small Actionable Tasks Checklist */}
-          <div className="space-y-3 pt-1">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-slate-900">
-                المهام الصغيرة وخطوات التنفيذ في هذا الشهر
-              </h3>
-              <span className="text-xs text-slate-500 tabular-nums">
-                {tasksDoneCount} / {activeMonth.tasks.length} منجزة
-              </span>
-            </div>
-
-            <div className="border border-slate-200 rounded-lg divide-y divide-slate-200">
-              {activeMonth.tasks.map((task) => (
-                <div
-                  key={task.id}
-                  className="flex items-start justify-between gap-3 px-4 py-3 bg-white hover:bg-slate-50/70 transition-colors"
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingMonth((v) => !v)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
-                  <button
-                    type="button"
-                    onClick={() => onToggleMonthTask(activeMonth.id, task.id)}
-                    aria-pressed={task.done}
-                    className="flex items-start gap-3 text-right flex-1 cursor-pointer"
-                  >
-                    {task.done ? (
-                      <CheckSquare
-                        className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
-                        aria-hidden="true"
-                      />
-                    ) : (
-                      <Square
-                        className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
-                        aria-hidden="true"
-                      />
-                    )}
-                    <div className="space-y-0.5">
-                      <p
-                        className={`text-xs sm:text-sm leading-relaxed ${
-                          task.done
-                            ? 'line-through text-slate-400'
-                            : 'text-slate-800'
+                  <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{isEditingMonth ? 'إنهاء التعديل' : 'تعديل الشهر'}</span>
+                </button>
+
+                {months.length > 1 &&
+                  (confirmDeleteMonthId === activeMonth.id ? (
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onDeleteMonth(activeMonth.id);
+                          setConfirmDeleteMonthId(null);
+                        }}
+                        className="px-2.5 py-1.5 text-xs font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 cursor-pointer"
+                      >
+                        تأكيد الحذف
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteMonthId(null)}
+                        className="px-2.5 py-1.5 text-xs text-slate-600 bg-slate-100 rounded-lg cursor-pointer"
+                      >
+                        إلغاء
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteMonthId(activeMonth.id)}
+                      aria-label={`حذف الشهر ${activeMonth.id}`}
+                      className="p-2 text-slate-400 hover:text-red-600 bg-slate-100 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  ))}
+              </div>
+            </div>
+
+            {/* Status Control Row */}
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <span className="text-xs font-medium text-slate-600">
+                حالة التقدم في هذا الشهر:
+              </span>
+              <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+                {(['not_started', 'in_progress', 'completed'] as MonthStatus[]).map(
+                  (st) => {
+                    const isCurrent = activeMonth.status === st;
+                    const MetaIcon = STATUS_META[st].Icon;
+                    return (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => onUpdateMonthStatus(activeMonth.id, st)}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                          isCurrent
+                            ? 'bg-white text-slate-900 shadow-xs'
+                            : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
-                        {task.text}
-                      </p>
-                      <span className="text-[11px] text-slate-500">
-                        مسار {TRACK_LABELS[task.track]}
-                      </span>
-                    </div>
-                  </button>
+                        <MetaIcon
+                          className={`w-3.5 h-3.5 ${
+                            isCurrent ? STATUS_META[st].textColor : 'text-slate-400'
+                          }`}
+                          aria-hidden="true"
+                        />
+                        <span>{STATUS_META[st].label}</span>
+                      </button>
+                    );
+                  }
+                )}
+              </div>
+            </div>
 
-                  {task.custom && (
+            {/* Parallel Tracks Comparison */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Foundational */}
+              <div className="p-5 bg-slate-50 border border-slate-200 rounded-lg flex flex-col justify-between gap-3">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs text-slate-500">
+                    <span className="font-semibold text-[#1E3A5F]">
+                      المسار التأسيسي
+                    </span>
+                    <span>{activeMonth.foundational.format}</span>
+                  </div>
+
+                  {isEditingMonth ? (
+                    <div className="space-y-2">
+                      <label className="block text-xs text-slate-600">
+                        الكتاب / السلسلة
+                        <input
+                          type="text"
+                          value={activeMonth.foundational.title}
+                          onChange={(e) =>
+                            onUpdateTrackItem(
+                              activeMonth.id,
+                              'foundational',
+                              'title',
+                              e.target.value
+                            )
+                          }
+                          className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                        />
+                      </label>
+                      <label className="block text-xs text-slate-600">
+                        المفكر
+                        <input
+                          type="text"
+                          value={activeMonth.foundational.author}
+                          onChange={(e) =>
+                            onUpdateTrackItem(
+                              activeMonth.id,
+                              'foundational',
+                              'author',
+                              e.target.value
+                            )
+                          }
+                          className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                        />
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block text-xs text-slate-600">
+                          المحور
+                          <select
+                            value={activeMonth.foundational.domainId}
+                            onChange={(e) =>
+                              onUpdateTrackItem(
+                                activeMonth.id,
+                                'foundational',
+                                'domainId',
+                                e.target.value
+                              )
+                            }
+                            className="mt-1 w-full px-2 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                          >
+                            {domains.map((d) => (
+                              <option key={d.id} value={d.id}>
+                                {d.title}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block text-xs text-slate-600">
+                          النوع
+                          <select
+                            value={activeMonth.foundational.format}
+                            onChange={(e) =>
+                              onUpdateTrackItem(
+                                activeMonth.id,
+                                'foundational',
+                                'format',
+                                e.target.value as ResourceFormat
+                              )
+                            }
+                            className="mt-1 w-full px-2 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                          >
+                            <option value="كتاب">كتاب</option>
+                            <option value="سلسلة محاضرات">سلسلة محاضرات</option>
+                            <option value="كتاب + محاضرات">كتاب + محاضرات</option>
+                          </select>
+                        </label>
+                      </div>
+                      <label className="block text-xs text-slate-600">
+                        الوتيرة الأسبوعية
+                        <input
+                          type="text"
+                          value={activeMonth.foundational.pace}
+                          onChange={(e) =>
+                            onUpdateTrackItem(
+                              activeMonth.id,
+                              'foundational',
+                              'pace',
+                              e.target.value
+                            )
+                          }
+                          className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                        />
+                      </label>
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <h3 className="text-base font-semibold text-slate-900 leading-snug">
+                          {activeMonth.foundational.title}
+                        </h3>
+                        <p className="text-xs text-slate-600 mt-1">
+                          {activeMonth.foundational.author} ·{' '}
+                          {getDomainTitle(activeMonth.foundational.domainId)}
+                        </p>
+                      </div>
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        {activeMonth.foundational.focus}
+                      </p>
+                    </>
+                  )}
+                </div>
+
+                {!isEditingMonth && (
+                  <div className="pt-2.5 border-t border-slate-200/80 flex items-center justify-between gap-2 text-xs">
+                    <span className="text-slate-500 truncate">
+                      {activeMonth.foundational.pace}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenBookNote(
+                          activeMonth.foundational.title,
+                          activeMonth.foundational.author
+                        )
+                      }
+                      className="font-semibold text-[#1E3A5F] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      نوتس الكتاب
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Exploratory */}
+              <div className="p-5 bg-slate-50 border border-slate-200 rounded-lg flex flex-col justify-between gap-3">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs text-slate-500">
+                    <span className="font-semibold text-slate-800">
+                      المسار الاستكشافي
+                    </span>
+                    <span>{activeMonth.exploratory.format}</span>
+                  </div>
+
+                  {isEditingMonth ? (
+                    <div className="space-y-2">
+                      <label className="block text-xs text-slate-600">
+                        الكتاب / السلسلة
+                        <input
+                          type="text"
+                          value={activeMonth.exploratory.title}
+                          onChange={(e) =>
+                            onUpdateTrackItem(
+                              activeMonth.id,
+                              'exploratory',
+                              'title',
+                              e.target.value
+                            )
+                          }
+                          className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                        />
+                      </label>
+                      <label className="block text-xs text-slate-600">
+                        المفكر / الأديب
+                        <input
+                          type="text"
+                          value={activeMonth.exploratory.author}
+                          onChange={(e) =>
+                            onUpdateTrackItem(
+                              activeMonth.id,
+                              'exploratory',
+                              'author',
+                              e.target.value
+                            )
+                          }
+                          className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                        />
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block text-xs text-slate-600">
+                          المحور
+                          <select
+                            value={activeMonth.exploratory.domainId}
+                            onChange={(e) =>
+                              onUpdateTrackItem(
+                                activeMonth.id,
+                                'exploratory',
+                                'domainId',
+                                e.target.value
+                              )
+                            }
+                            className="mt-1 w-full px-2 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                          >
+                            {domains.map((d) => (
+                              <option key={d.id} value={d.id}>
+                                {d.title}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block text-xs text-slate-600">
+                          النوع
+                          <select
+                            value={activeMonth.exploratory.format}
+                            onChange={(e) =>
+                              onUpdateTrackItem(
+                                activeMonth.id,
+                                'exploratory',
+                                'format',
+                                e.target.value as ResourceFormat
+                              )
+                            }
+                            className="mt-1 w-full px-2 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                          >
+                            <option value="كتاب">كتاب</option>
+                            <option value="سلسلة محاضرات">سلسلة محاضرات</option>
+                            <option value="كتاب + محاضرات">كتاب + محاضرات</option>
+                          </select>
+                        </label>
+                      </div>
+                      <label className="block text-xs text-slate-600">
+                        الوتيرة الأسبوعية
+                        <input
+                          type="text"
+                          value={activeMonth.exploratory.pace}
+                          onChange={(e) =>
+                            onUpdateTrackItem(
+                              activeMonth.id,
+                              'exploratory',
+                              'pace',
+                              e.target.value
+                            )
+                          }
+                          className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                        />
+                      </label>
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <h3 className="text-base font-semibold text-slate-900 leading-snug">
+                          {activeMonth.exploratory.title}
+                        </h3>
+                        <p className="text-xs text-slate-600 mt-1">
+                          {activeMonth.exploratory.author} ·{' '}
+                          {getDomainTitle(activeMonth.exploratory.domainId)}
+                        </p>
+                      </div>
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        {activeMonth.exploratory.focus}
+                      </p>
+                    </>
+                  )}
+                </div>
+
+                {!isEditingMonth && (
+                  <div className="pt-2.5 border-t border-slate-200/80 flex items-center justify-between gap-2 text-xs">
+                    <span className="text-slate-500 truncate">
+                      {activeMonth.exploratory.pace}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenBookNote(
+                          activeMonth.exploratory.title,
+                          activeMonth.exploratory.author
+                        )
+                      }
+                      className="font-semibold text-[#1E3A5F] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      نوتس الكتاب
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Small Actionable Tasks Checklist */}
+            <div className="space-y-3 pt-1">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-slate-900">
+                  المهام الصغيرة وخطوات التنفيذ في هذا الشهر
+                </h3>
+                <span className="text-xs text-slate-500 tabular-nums">
+                  {tasksDoneCount} / {activeMonth.tasks.length} منجزة
+                </span>
+              </div>
+
+              <div className="border border-slate-200 rounded-lg divide-y divide-slate-200">
+                {activeMonth.tasks.map((task) => (
+                  <div
+                    key={task.id}
+                    className="flex items-start justify-between gap-3 px-4 py-3 bg-white hover:bg-slate-50/70 transition-colors"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onToggleMonthTask(activeMonth.id, task.id)}
+                      aria-pressed={task.done}
+                      className="flex items-start gap-3 text-right flex-1 cursor-pointer"
+                    >
+                      {task.done ? (
+                        <CheckSquare
+                          className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <Square
+                          className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <div className="space-y-0.5">
+                        <p
+                          className={`text-xs sm:text-sm leading-relaxed ${
+                            task.done
+                              ? 'line-through text-slate-400'
+                              : 'text-slate-800'
+                          }`}
+                        >
+                          {task.text}
+                        </p>
+                        <span className="text-[11px] text-slate-500">
+                          مسار {TRACK_LABELS[task.track]}
+                        </span>
+                      </div>
+                    </button>
+
                     <button
                       type="button"
                       onClick={() => onDeleteMonthTask(activeMonth.id, task.id)}
@@ -657,201 +1182,296 @@ export default function TwelveMonthPlanView({
                     >
                       <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                     </button>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            {/* Add custom small task */}
-            <form
-              onSubmit={handleSubmitTask}
-              className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1"
-            >
-              <input
-                type="text"
-                value={newTaskText}
-                onChange={(e) => setNewTaskText(e.target.value)}
-                placeholder="أضف مهمة صغيرة (مثلاً: قراءة الفصل الثالث من فؤاد زكريا)..."
-                aria-label="إضافة مهمة صغيرة جديدة"
-                className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
-              />
-              <select
-                aria-label="مسار المهمة"
-                value={newTaskTrack}
-                onChange={(e) =>
-                  setNewTaskTrack(e.target.value as SmallTask['track'])
-                }
-                className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:border-[#1E3A5F]"
-              >
-                <option value="foundational">مسار تأسيسي</option>
-                <option value="exploratory">مسار استكشافي</option>
-                <option value="action">تطبيق عملي</option>
-              </select>
-              <button
-                type="submit"
-                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>إضافة مهمة</span>
-              </button>
-            </form>
-          </div>
-
-          {/* Suggested Study Resources for this Month */}
-          <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-slate-900">
-              المصادر والمحاضرات المقترحة لهذا الشهر
-            </h3>
-            <div className="divide-y divide-slate-200 border border-slate-200 rounded-lg">
-              {activeMonth.resources.map((res) => (
-                <div
-                  key={res.id}
-                  className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white"
-                >
-                  <div className="space-y-0.5">
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <span className="font-semibold text-slate-900">
-                        {res.title}
-                      </span>
-                      <span aria-hidden="true" className="text-slate-300">
-                        ·
-                      </span>
-                      <span className="text-slate-500">{res.type}</span>
-                    </div>
-                    <p className="text-xs text-slate-600">{res.note}</p>
                   </div>
+                ))}
+              </div>
 
-                  <a
-                    href={`https://www.google.com/search?q=${encodeURIComponent(
-                      res.searchQuery
-                    )}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs font-medium text-[#1E3A5F] hover:underline whitespace-nowrap shrink-0"
-                  >
-                    <span>بحث عن المصدر</span>
-                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                  </a>
-                </div>
-              ))}
+              {/* Add custom small task */}
+              <form
+                onSubmit={handleSubmitTask}
+                className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1"
+              >
+                <input
+                  type="text"
+                  value={newTaskText}
+                  onChange={(e) => setNewTaskText(e.target.value)}
+                  placeholder="أضف مهمة صغيرة (مثلاً: قراءة الفصل الثالث من فؤاد زكريا)..."
+                  aria-label="إضافة مهمة صغيرة جديدة"
+                  className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+                />
+                <select
+                  aria-label="مسار المهمة"
+                  value={newTaskTrack}
+                  onChange={(e) =>
+                    setNewTaskTrack(e.target.value as SmallTask['track'])
+                  }
+                  className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:border-[#1E3A5F]"
+                >
+                  <option value="foundational">مسار تأسيسي</option>
+                  <option value="exploratory">مسار استكشافي</option>
+                  <option value="action">تطبيق عملي</option>
+                </select>
+                <button
+                  type="submit"
+                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>إضافة مهمة</span>
+                </button>
+              </form>
             </div>
-          </div>
 
-          {/* 4 Pillars Checklist (Reading, Listening, Summarizing, Discussing) */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-900">
-                أركان الشهر الأربعة (بدون سباق لإنهاء الكتب)
-              </h3>
-              <span className="text-xs text-slate-500 tabular-nums">
-                {doneCount} / 4 مكتمل
-              </span>
-            </div>
+            {/* Suggested Study Resources for this Month */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-900">
+                  المصادر والمحاضرات المقترحة لهذا الشهر
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowAddResource((v) => !v)}
+                  className="text-xs font-medium text-[#1E3A5F] hover:underline cursor-pointer"
+                >
+                  {showAddResource ? 'إلغاء' : '+ إضافة مصدر'}
+                </button>
+              </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {(
-                [
-                  { key: 'reading', label: 'القراءة المتأنية', Icon: BookOpen },
-                  { key: 'listening', label: 'الاستماع للمحاضرات', Icon: Headphones },
-                  { key: 'summarizing', label: 'التلخيص الشخصي', Icon: PenLine },
-                  {
-                    key: 'discussing',
-                    label: 'المناقشة والتطبيق',
-                    Icon: MessageSquare,
-                  },
-                ] as const
-              ).map(({ key, label, Icon }) => {
-                const checked = activeMonth.activities[key];
-                return (
+              {showAddResource && (
+                <form
+                  onSubmit={handleSubmitResource}
+                  className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2"
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      value={newResTitle}
+                      onChange={(e) => setNewResTitle(e.target.value)}
+                      placeholder="اسم الكتاب أو المحاضرة..."
+                      className="sm:col-span-2 px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                    />
+                    <select
+                      value={newResType}
+                      onChange={(e) =>
+                        setNewResType(e.target.value as StudyResource['type'])
+                      }
+                      className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                    >
+                      <option value="كتاب">كتاب</option>
+                      <option value="سلسلة محاضرات">سلسلة محاضرات</option>
+                      <option value="مقال / مدخل">مقال / مدخل</option>
+                      <option value="أداة تطبيق">أداة تطبيق</option>
+                    </select>
+                  </div>
+                  <input
+                    type="text"
+                    value={newResNote}
+                    onChange={(e) => setNewResNote(e.target.value)}
+                    placeholder="ملاحظة مختصرة عن المصدر..."
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                  />
                   <button
-                    key={key}
-                    type="button"
-                    onClick={() => onToggleActivity(activeMonth.id, key)}
-                    aria-pressed={checked}
-                    className={`p-3 rounded-lg border text-right transition-colors cursor-pointer flex flex-col gap-2 ${
-                      checked
-                        ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
-                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                    }`}
+                    type="submit"
+                    className="px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-md cursor-pointer"
                   >
-                    <div className="flex items-center justify-between w-full">
-                      <Icon
-                        className={`w-4 h-4 ${
-                          checked ? 'text-emerald-700' : 'text-slate-400'
-                        }`}
-                        aria-hidden="true"
-                      />
-                      <span className="text-[11px] font-medium">
-                        {checked ? 'تم' : 'معلّق'}
-                      </span>
-                    </div>
-                    <span className="text-xs font-medium leading-snug">
-                      {label}
-                    </span>
+                    حفظ المصدر
                   </button>
-                );
-              })}
-            </div>
-          </div>
+                </form>
+              )}
 
-          {/* Discussion, Application & Linked Course */}
-          <div className="divide-y divide-slate-200 border-t border-b border-slate-200 py-2 text-sm">
-            <div className="py-3 space-y-1">
-              <p className="text-xs font-semibold text-slate-500">
-                سؤال المناقشة والفهم المقارن
-              </p>
-              <p className="text-slate-800 leading-relaxed">
-                {activeMonth.discussionPrompt}
-              </p>
+              <div className="divide-y divide-slate-200 border border-slate-200 rounded-lg">
+                {activeMonth.resources.map((res) => (
+                  <div
+                    key={res.id}
+                    className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="font-semibold text-slate-900">
+                          {res.title}
+                        </span>
+                        <span aria-hidden="true" className="text-slate-300">
+                          ·
+                        </span>
+                        <span className="text-slate-500">{res.type}</span>
+                      </div>
+                      <p className="text-xs text-slate-600">{res.note}</p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <a
+                        href={`https://www.google.com/search?q=${encodeURIComponent(
+                          res.searchQuery
+                        )}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-[#1E3A5F] hover:underline whitespace-nowrap"
+                      >
+                        <span>بحث عن المصدر</span>
+                        <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onDeleteMonthResource(activeMonth.id, res.id)
+                        }
+                        aria-label="حذف المصدر"
+                        className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="py-3 space-y-1">
-              <p className="text-xs font-semibold text-slate-500">
-                التطبيق العملي المقترح
-              </p>
-              <p className="text-slate-800 leading-relaxed">
-                {activeMonth.applicationTask}
-              </p>
+
+            {/* 4 Pillars Checklist */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-slate-900">
+                  أركان الشهر الأربعة (بدون سباق لإنهاء الكتب)
+                </h3>
+                <span className="text-xs text-slate-500 tabular-nums">
+                  {doneCount} / 4 مكتمل
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {(
+                  [
+                    { key: 'reading', label: 'القراءة المتأنية', Icon: BookOpen },
+                    {
+                      key: 'listening',
+                      label: 'الاستماع للمحاضرات',
+                      Icon: Headphones,
+                    },
+                    { key: 'summarizing', label: 'التلخيص الشخصي', Icon: PenLine },
+                    {
+                      key: 'discussing',
+                      label: 'المناقشة والتطبيق',
+                      Icon: MessageSquare,
+                    },
+                  ] as const
+                ).map(({ key, label, Icon }) => {
+                  const checked = activeMonth.activities[key];
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => onToggleActivity(activeMonth.id, key)}
+                      aria-pressed={checked}
+                      className={`p-3 rounded-lg border text-right transition-colors cursor-pointer flex flex-col gap-2 ${
+                        checked
+                          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <Icon
+                          className={`w-4 h-4 ${
+                            checked ? 'text-emerald-700' : 'text-slate-400'
+                          }`}
+                          aria-hidden="true"
+                        />
+                        <span className="text-[11px] font-medium">
+                          {checked ? 'تم' : 'معلّق'}
+                        </span>
+                      </div>
+                      <span className="text-xs font-medium leading-snug">
+                        {label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            {linkedCourse && (
+
+            {/* Discussion, Application & Linked Course */}
+            <div className="divide-y divide-slate-200 border-t border-b border-slate-200 py-2 text-sm">
               <div className="py-3 space-y-1">
                 <p className="text-xs font-semibold text-slate-500">
-                  كورس التطوير الشخصي المرتبط ({linkedCourse.category})
+                  سؤال المناقشة والفهم المقارن
                 </p>
-                <p className="text-slate-900 font-medium">
-                  {linkedCourse.title}
-                </p>
-                <p className="text-xs text-slate-600">
-                  {linkedCourse.complementaryBook} · {linkedCourse.bookAuthor}
-                </p>
+                {isEditingMonth ? (
+                  <textarea
+                    rows={2}
+                    value={activeMonth.discussionPrompt}
+                    onChange={(e) =>
+                      onUpdateMonth(activeMonth.id, {
+                        discussionPrompt: e.target.value,
+                      })
+                    }
+                    className="w-full p-2 text-xs bg-slate-50 border border-slate-300 rounded-md"
+                  />
+                ) : (
+                  <p className="text-slate-800 leading-relaxed">
+                    {activeMonth.discussionPrompt}
+                  </p>
+                )}
               </div>
-            )}
-          </div>
-
-          {/* Month Reflection / Summary Box */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label
-                htmlFor={`month-notes-${activeMonth.id}`}
-                className="text-sm font-semibold text-slate-900"
-              >
-                خلاصة الشهر وملاحظاتك الشخصية
-              </label>
-              <span className="text-xs text-slate-500">
-                يُحفظ محليًا ويُصدَّر إلى ملف Excel
-              </span>
+              <div className="py-3 space-y-1">
+                <p className="text-xs font-semibold text-slate-500">
+                  التطبيق العملي المقترح
+                </p>
+                {isEditingMonth ? (
+                  <textarea
+                    rows={2}
+                    value={activeMonth.applicationTask}
+                    onChange={(e) =>
+                      onUpdateMonth(activeMonth.id, {
+                        applicationTask: e.target.value,
+                      })
+                    }
+                    className="w-full p-2 text-xs bg-slate-50 border border-slate-300 rounded-md"
+                  />
+                ) : (
+                  <p className="text-slate-800 leading-relaxed">
+                    {activeMonth.applicationTask}
+                  </p>
+                )}
+              </div>
+              {linkedCourse && (
+                <div className="py-3 space-y-1">
+                  <p className="text-xs font-semibold text-slate-500">
+                    كورس التطوير الشخصي المرتبط ({linkedCourse.category})
+                  </p>
+                  <p className="text-slate-900 font-medium">
+                    {linkedCourse.title}
+                  </p>
+                  <p className="text-xs text-slate-600">
+                    {linkedCourse.complementaryBook} · {linkedCourse.bookAuthor}
+                  </p>
+                </div>
+              )}
             </div>
-            <textarea
-              id={`month-notes-${activeMonth.id}`}
-              rows={4}
-              value={activeMonth.notes}
-              onChange={(e) =>
-                onUpdateMonthNotes(activeMonth.id, e.target.value)
-              }
-              placeholder="اكتب هنا أهم 3 أفكار خرجت بها من قراءات واستماع هذا الشهر، أو إجابتك عن سؤال المناقشة..."
-              className="w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#1E3A5F] focus:bg-white transition-colors leading-relaxed"
-            />
+
+            {/* Month Reflection / Summary Box + Voice Dictation */}
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label
+                  htmlFor={`month-notes-${activeMonth.id}`}
+                  className="text-sm font-semibold text-slate-900"
+                >
+                  خلاصة الشهر وملاحظاتك الشخصية
+                </label>
+                <VoiceRecorderButton
+                  label="سجّل ملاحظتك بالصوت"
+                  onTranscript={handleAppendVoiceToMonthNotes}
+                />
+              </div>
+              <textarea
+                id={`month-notes-${activeMonth.id}`}
+                rows={4}
+                value={activeMonth.notes}
+                onChange={(e) =>
+                  onUpdateMonthNotes(activeMonth.id, e.target.value)
+                }
+                placeholder="اكتب هنا أو اضغط «سجّل ملاحظتك بالصوت» لإملاء خلاصة الشهر بلغتك..."
+                className="w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#1E3A5F] focus:bg-white transition-colors leading-relaxed"
+              />
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

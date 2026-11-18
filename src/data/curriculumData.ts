@@ -1,14 +1,15 @@
-export type DomainId =
-  | 'islamic_thought'
-  | 'philosophy'
-  | 'psychology'
-  | 'society_history'
-  | 'literature_biographies'
-  | 'personal_dev';
+export type DomainId = string;
 
 export type MonthStatus = 'not_started' | 'in_progress' | 'completed';
 
 export type ResourceFormat = 'كتاب' | 'سلسلة محاضرات' | 'كتاب + محاضرات';
+
+export interface QuarterInfo {
+  id: string;
+  number: number;
+  title: string;
+  subtitle: string;
+}
 
 export interface SmallTask {
   id: string;
@@ -45,7 +46,8 @@ export interface MonthActivities {
 
 export interface MonthPlan {
   id: number;
-  quarter: 1 | 2 | 3 | 4;
+  docId?: string;
+  quarter: number;
   quarterTitle: string;
   theme: string;
   foundational: TrackItem;
@@ -69,6 +71,7 @@ export interface ThinkerInfo {
 
 export interface DomainInfo {
   id: DomainId;
+  order?: number;
   title: string;
   subtitle: string;
   purpose: string;
@@ -77,6 +80,7 @@ export interface DomainInfo {
 
 export interface PersonalCourse {
   id: number;
+  docId?: string;
   title: string;
   category: string;
   linkedMonths: number[];
@@ -107,6 +111,33 @@ export interface WeeklyRhythmSlot {
 }
 
 export const HERO_IMAGE_PATH = '/src/assets/images/editorial_study_library_1795029579941.jpg';
+
+export const INITIAL_QUARTERS: QuarterInfo[] = [
+  {
+    id: 'quarter-1',
+    number: 1,
+    title: 'الربع الأول: التأسيس المنهجي وبوصلة العقل والذات',
+    subtitle: 'الأشهر 1–3 · بناء المنهج قبل كثرة المحفوظات',
+  },
+  {
+    id: 'quarter-2',
+    number: 2,
+    title: 'الربع الثاني: قراءة الأفكار، النقد الفلسفي، وآليات الإدراك',
+    subtitle: 'الأشهر 4–6 · التفكير الناقد والانحيازات والمكان',
+  },
+  {
+    id: 'quarter-3',
+    number: 3,
+    title: 'الربع الثالث: العمران البشري، التحيز المعرفي، والعمق الفكري',
+    subtitle: 'الأشهر 7–9 · سنن الاجتماع والنموذج المعرفي',
+  },
+  {
+    id: 'quarter-4',
+    number: 4,
+    title: 'الربع الرابع: التركيب، التجارب الإنسانية، والمناقشة والتطبيق',
+    subtitle: 'الأشهر 10–12 · الحصاد والربط التطبيقي',
+  },
+];
 
 export const DOMAINS: DomainInfo[] = [
   {

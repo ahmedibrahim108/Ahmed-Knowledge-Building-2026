@@ -3,6 +3,7 @@ import {
   BookNote,
   DOMAINS,
   DomainId,
+  DomainInfo,
   MonthPlan,
   MonthStatus,
   PersonalCourse,
@@ -15,8 +16,8 @@ const STATUS_AR: Record<MonthStatus, string> = {
   completed: 'مكتمل',
 };
 
-function getDomainName(domainId: DomainId): string {
-  return DOMAINS.find((d) => d.id === domainId)?.title ?? domainId;
+function getDomainName(domainId: DomainId, domains: DomainInfo[]): string {
+  return domains.find((d) => d.id === domainId)?.title ?? domainId;
 }
 
 function sanitizeFilename(name: string): string {
@@ -32,7 +33,8 @@ function sanitizeFilename(name: string): string {
 export function exportPlanToExcel(
   months: MonthPlan[],
   courses: PersonalCourse[],
-  bookNotes: BookNote[] = []
+  bookNotes: BookNote[] = [],
+  domains: DomainInfo[] = DOMAINS
 ): void {
   const workbook = XLSX.utils.book_new();
   workbook.Workbook = {
@@ -51,12 +53,12 @@ export function exportPlanToExcel(
       'محور الشهر': m.theme,
       'المسار التأسيسي (الكتاب / السلسلة)': m.foundational.title,
       'مفكر المسار التأسيسي': m.foundational.author,
-      'مجال المسار التأسيسي': getDomainName(m.foundational.domainId),
+      'مجال المسار التأسيسي': getDomainName(m.foundational.domainId, domains),
       'نوع المصدر التأسيسي': m.foundational.format,
       'وتيرة التأسيسي': m.foundational.pace,
       'المسار الاستكشافي (الكتاب / السلسلة)': m.exploratory.title,
       'مفكر المسار الاستكشافي': m.exploratory.author,
-      'مجال المسار الاستكشافي': getDomainName(m.exploratory.domainId),
+      'مجال المسار الاستكشافي': getDomainName(m.exploratory.domainId, domains),
       'نوع المصدر الاستكشافي': m.exploratory.format,
       'وتيرة الاستكشافي': m.exploratory.pace,
       'كورس التطوير الشخصي المرتبط': linkedCourse ? linkedCourse.title : `كورس ${m.courseId}`,
@@ -105,7 +107,7 @@ export function exportPlanToExcel(
 
   // Sheet 2: المحاور والمفكرون
   const domainRows: Array<Record<string, string>> = [];
-  for (const domain of DOMAINS) {
+  for (const domain of domains) {
     for (const thinker of domain.thinkers) {
       domainRows.push({
         'المحور المعرفي': domain.title,

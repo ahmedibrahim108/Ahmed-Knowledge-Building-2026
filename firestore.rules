@@ -1,0 +1,313 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection check document (contains no sensitive data)
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+    }
+
+    // --- Reusable Hardened Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() {
+      return request.resource.data;
+    }
+    function existing() {
+      return resource.data;
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    function isValidStr(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+    function userExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'createdAt', 'updatedAt'])
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && isValidId(data.uid)
+        && isValidStr(data.displayName, 0, 120)
+        && isValidStr(data.email, 3, 200)
+        && (!('photoURL' in data) || isValidStr(data.photoURL, 0, 600))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidQuarter(data, userId, quarterId) {
+      return data.keys().hasAll(['id', 'ownerId', 'number', 'title', 'subtitle', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'number', 'title', 'subtitle', 'updatedAt'])
+        && data.id == quarterId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.number is int && data.number >= 1 && data.number <= 20
+        && isValidStr(data.title, 1, 200)
+        && isValidStr(data.subtitle, 0, 300)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTrackObj(t) {
+      return t is map
+        && t.keys().hasAll(['title', 'author', 'format', 'domainId', 'pace', 'focus'])
+        && t.keys().hasOnly(['title', 'author', 'format', 'domainId', 'pace', 'focus'])
+        && isValidStr(t.title, 1, 300)
+        && isValidStr(t.author, 0, 200)
+        && isValidStr(t.format, 1, 60)
+        && isValidStr(t.domainId, 1, 128)
+        && isValidStr(t.pace, 0, 300)
+        && isValidStr(t.focus, 0, 500);
+    }
+
+    function isValidActivitiesObj(a) {
+      return a is map
+        && a.keys().hasAll(['reading', 'listening', 'summarizing', 'discussing'])
+        && a.keys().hasOnly(['reading', 'listening', 'summarizing', 'discussing'])
+        && a.reading is bool
+        && a.listening is bool
+        && a.summarizing is bool
+        && a.discussing is bool;
+    }
+
+    function isValidMonth(data, userId, monthDocId) {
+      return data.keys().hasAll([
+          'id', 'docId', 'ownerId', 'quarter', 'quarterTitle', 'theme',
+          'foundational', 'exploratory', 'courseId', 'discussionPrompt',
+          'applicationTask', 'activities', 'status', 'notes', 'tasks', 'resources', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'docId', 'ownerId', 'quarter', 'quarterTitle', 'theme',
+          'foundational', 'exploratory', 'courseId', 'discussionPrompt',
+          'applicationTask', 'activities', 'status', 'notes', 'tasks', 'resources', 'updatedAt'
+        ])
+        && data.docId == monthDocId
+        && isValidId(data.docId)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.id is int && data.id >= 1 && data.id <= 100
+        && data.quarter is int && data.quarter >= 1 && data.quarter <= 20
+        && isValidStr(data.quarterTitle, 1, 200)
+        && isValidStr(data.theme, 1, 250)
+        && isValidTrackObj(data.foundational)
+        && isValidTrackObj(data.exploratory)
+        && data.courseId is int && data.courseId >= 0 && data.courseId <= 100
+        && isValidStr(data.discussionPrompt, 0, 1000)
+        && isValidStr(data.applicationTask, 0, 1000)
+        && isValidActivitiesObj(data.activities)
+        && data.status in ['not_started', 'in_progress', 'completed']
+        && isValidStr(data.notes, 0, 20000)
+        && data.tasks is list && data.tasks.size() <= 50
+        && (data.tasks.size() == 0 || (data.tasks[0] is map && data.tasks[0].keys().hasAll(['id', 'text', 'track', 'done'])))
+        && data.resources is list && data.resources.size() <= 30
+        && (data.resources.size() == 0 || (data.resources[0] is map && data.resources[0].keys().hasAll(['id', 'title', 'type'])))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDomain(data, userId, domainId) {
+      return data.keys().hasAll(['id', 'ownerId', 'order', 'title', 'subtitle', 'purpose', 'thinkers', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'order', 'title', 'subtitle', 'purpose', 'thinkers', 'updatedAt'])
+        && data.id == domainId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.order is int && data.order >= 0 && data.order <= 100
+        && isValidStr(data.title, 1, 200)
+        && isValidStr(data.subtitle, 0, 300)
+        && isValidStr(data.purpose, 0, 1000)
+        && data.thinkers is list && data.thinkers.size() <= 30
+        && (data.thinkers.size() == 0 || (data.thinkers[0] is map && data.thinkers[0].keys().hasAll(['name', 'role', 'keyWorks', 'contribution'])))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCourse(data, userId, courseDocId) {
+      return data.keys().hasAll([
+          'id', 'docId', 'ownerId', 'title', 'category', 'linkedMonths',
+          'complementaryBook', 'bookAuthor', 'applicationMilestone', 'completed',
+          'resources', 'tasks', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'docId', 'ownerId', 'title', 'category', 'linkedMonths',
+          'complementaryBook', 'bookAuthor', 'applicationMilestone', 'completed',
+          'resources', 'tasks', 'updatedAt'
+        ])
+        && data.docId == courseDocId
+        && isValidId(data.docId)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.id is int && data.id >= 1 && data.id <= 100
+        && isValidStr(data.title, 1, 250)
+        && isValidStr(data.category, 0, 120)
+        && data.linkedMonths is list && data.linkedMonths.size() <= 24
+        && (data.linkedMonths.size() == 0 || data.linkedMonths[0] is int)
+        && isValidStr(data.complementaryBook, 0, 300)
+        && isValidStr(data.bookAuthor, 0, 250)
+        && isValidStr(data.applicationMilestone, 0, 1000)
+        && data.completed is bool
+        && data.resources is list && data.resources.size() <= 30
+        && (data.resources.size() == 0 || (data.resources[0] is map && data.resources[0].keys().hasAll(['id', 'title', 'type'])))
+        && data.tasks is list && data.tasks.size() <= 50
+        && (data.tasks.size() == 0 || (data.tasks[0] is map && data.tasks[0].keys().hasAll(['id', 'text', 'track', 'done'])))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBookNote(data, userId, noteId) {
+      return data.keys().hasAll(['id', 'ownerId', 'bookTitle', 'author', 'progressMarker', 'content', 'quotes', 'updatedAtLabel', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'bookTitle', 'author', 'progressMarker', 'content', 'quotes', 'updatedAtLabel', 'updatedAt'])
+        && data.id == noteId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && isValidStr(data.bookTitle, 1, 300)
+        && isValidStr(data.author, 0, 200)
+        && isValidStr(data.progressMarker, 0, 200)
+        && isValidStr(data.content, 0, 40000)
+        && isValidStr(data.quotes, 0, 10000)
+        && isValidStr(data.updatedAtLabel, 0, 100)
+        && data.updatedAt is timestamp;
+    }
+
+    // --- User Profile Document (PII Isolated to Owner) ---
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isVerifiedUser()
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isVerifiedUser()
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'updatedAt']);
+      allow delete: if false;
+
+      // --- Quarters ---
+      match /quarters/{quarterId} {
+        allow get: if isValidId(userId) && isValidId(quarterId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(quarterId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidQuarter(incoming(), userId, quarterId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(quarterId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidQuarter(incoming(), userId, quarterId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['number', 'title', 'subtitle', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(quarterId) && isOwner(userId) && isVerifiedUser();
+      }
+
+      // --- Months ---
+      match /months/{monthId} {
+        allow get: if isValidId(userId) && isValidId(monthId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(monthId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidMonth(incoming(), userId, monthId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(monthId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidMonth(incoming(), userId, monthId)
+          && incoming().docId == existing().docId
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'id', 'quarter', 'quarterTitle', 'theme', 'foundational', 'exploratory',
+            'courseId', 'discussionPrompt', 'applicationTask', 'activities',
+            'status', 'notes', 'tasks', 'resources', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(monthId) && isOwner(userId) && isVerifiedUser();
+      }
+
+      // --- Domains ---
+      match /domains/{domainId} {
+        allow get: if isValidId(userId) && isValidId(domainId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(domainId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidDomain(incoming(), userId, domainId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(domainId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidDomain(incoming(), userId, domainId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'order', 'title', 'subtitle', 'purpose', 'thinkers', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(domainId) && isOwner(userId) && isVerifiedUser();
+      }
+
+      // --- Courses ---
+      match /courses/{courseId} {
+        allow get: if isValidId(userId) && isValidId(courseId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(courseId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidCourse(incoming(), userId, courseId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(courseId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidCourse(incoming(), userId, courseId)
+          && incoming().docId == existing().docId
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'id', 'title', 'category', 'linkedMonths', 'complementaryBook',
+            'bookAuthor', 'applicationMilestone', 'completed', 'resources', 'tasks', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(courseId) && isOwner(userId) && isVerifiedUser();
+      }
+
+      // --- Book Notes ---
+      match /bookNotes/{noteId} {
+        allow get: if isValidId(userId) && isValidId(noteId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(noteId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidBookNote(incoming(), userId, noteId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(noteId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidBookNote(incoming(), userId, noteId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'bookTitle', 'author', 'progressMarker', 'content', 'quotes', 'updatedAtLabel', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(noteId) && isOwner(userId) && isVerifiedUser();
+      }
+    }
+  }
+}

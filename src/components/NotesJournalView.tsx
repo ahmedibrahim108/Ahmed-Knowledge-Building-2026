@@ -13,6 +13,7 @@ import {
   exportSingleBookNoteAsExcel,
   exportSingleBookNoteAsMarkdown,
 } from '../utils/excelExport';
+import VoiceRecorderButton from './VoiceRecorderButton';
 
 interface NotesJournalViewProps {
   months: MonthPlan[];
@@ -44,6 +45,9 @@ export default function NotesJournalView({
   const [customTitle, setCustomTitle] = useState('');
   const [customAuthor, setCustomAuthor] = useState('');
   const [selectedCurriculumBook, setSelectedCurriculumBook] = useState('');
+  const [confirmDeleteNoteId, setConfirmDeleteNoteId] = useState<string | null>(
+    null
+  );
 
   // Build unique list of all curriculum books/series for quick selection
   const curriculumBookOptions = useMemo(() => {
@@ -96,19 +100,29 @@ export default function NotesJournalView({
     }
   };
 
+  const appendBookVoiceText = (
+    note: BookNote,
+    field: 'content' | 'quotes',
+    transcript: string
+  ) => {
+    const current = (note[field] || '').trim();
+    const next = current ? `${current}\n${transcript}` : transcript;
+    onUpdateBookNote(note.id, { [field]: next });
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Header + Mode Switch */}
       <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div className="space-y-2 max-w-3xl">
           <p className="text-xs text-slate-500">
-            القراءة والاستماع والتلخيص والمناقشة والتطبيق
+            القراءة والاستماع والتلخيص · الإملاء الصوتي المباشر
           </p>
           <h1 className="font-editorial text-3xl font-bold text-slate-900">
             دفتر التلخيص وملاحظات الكتب
           </h1>
           <p className="text-sm text-slate-600 leading-relaxed">
-            اكتب ملاحظاتك لأي كتاب أو مادة تقرؤها حاليًا وحمّلها فورًا في ملف مستقل، أو دوّن خلاصاتك الشهرية الشاملة.
+            اكتب ملاحظاتك أو سجّلها بصوتك لأي كتاب تقرؤه حاليًا وحوّلها تلقائيًا إلى نص قابل للتعديل والتحميل في ملف مستقل.
           </p>
         </div>
 
@@ -134,7 +148,7 @@ export default function NotesJournalView({
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              ملخصات الأشهر (12)
+              ملخصات الأشهر ({months.length})
             </button>
           </div>
 
@@ -167,7 +181,7 @@ export default function NotesJournalView({
                   onChange={(e) => handlePickCurriculumBook(e.target.value)}
                   className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:border-[#1E3A5F]"
                 >
-                  <option value="">اختر كتابًا أو سلسلة من خطة 12 شهرًا...</option>
+                  <option value="">اختر كتابًا أو سلسلة من الخطة...</option>
                   {curriculumBookOptions.map((opt) => (
                     <option key={opt.label} value={opt.label}>
                       {opt.label}
@@ -236,7 +250,7 @@ export default function NotesJournalView({
                 لا توجد دفاتر كتب مضافة بعد
               </p>
               <p className="text-xs text-slate-500">
-                اختر كتابًا من القائمة أعلاه أو اكتب اسم الكتاب الذي تقرؤه حاليًا للبدء بتدوين ملاحظاتك وتنزيلها.
+                اختر كتابًا من القائمة أعلاه أو اكتب اسم الكتاب الذي تقرؤه حاليًا للبدء بتدوين ملاحظاتك بالكتابة أو بالصوت.
               </p>
             </div>
           ) : (
@@ -259,7 +273,10 @@ export default function NotesJournalView({
                       <button
                         key={bn.id}
                         type="button"
-                        onClick={() => onSelectBookNote(bn.id)}
+                        onClick={() => {
+                          onSelectBookNote(bn.id);
+                          setConfirmDeleteNoteId(null);
+                        }}
                         className={`w-full text-right px-5 py-4 transition-colors cursor-pointer space-y-1 ${
                           isSelected
                             ? 'bg-slate-100/90'
@@ -284,7 +301,7 @@ export default function NotesJournalView({
                 </div>
               </div>
 
-              {/* Active Book Editor & Per-Book Download */}
+              {/* Active Book Editor & Voice Dictation & Per-Book Download */}
               {activeNote && (
                 <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-5 border-b border-slate-200">
@@ -305,14 +322,36 @@ export default function NotesJournalView({
                       />
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => onDeleteBookNote(activeNote.id)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-red-700 bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>حذف الدفتر</span>
-                    </button>
+                    {confirmDeleteNoteId === activeNote.id ? (
+                      <div className="inline-flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onDeleteBookNote(activeNote.id);
+                            setConfirmDeleteNoteId(null);
+                          }}
+                          className="px-3 py-1.5 text-xs font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 cursor-pointer"
+                        >
+                          تأكيد الحذف
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteNoteId(null)}
+                          className="px-3 py-1.5 text-xs text-slate-600 bg-slate-100 rounded-lg cursor-pointer"
+                        >
+                          إلغاء
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteNoteId(activeNote.id)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 hover:text-red-700 bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>حذف الدفتر</span>
+                      </button>
+                    )}
                   </div>
 
                   {/* Book Metadata Fields */}
@@ -348,10 +387,24 @@ export default function NotesJournalView({
                     </label>
                   </div>
 
-                  {/* Main Notes Editor */}
-                  <label className="block text-xs font-semibold text-slate-700">
-                    النوتس والأفكار المستخلصة (بلغتك الخاصة)
+                  {/* Main Notes Editor + Voice Recording */}
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label
+                        htmlFor={`book-content-${activeNote.id}`}
+                        className="text-xs font-semibold text-slate-700"
+                      >
+                        النوتس والأفكار المستخلصة (كتابةً أو بالصوت)
+                      </label>
+                      <VoiceRecorderButton
+                        label="تسجيل نوت بالصوت"
+                        onTranscript={(text) =>
+                          appendBookVoiceText(activeNote, 'content', text)
+                        }
+                      />
+                    </div>
                     <textarea
+                      id={`book-content-${activeNote.id}`}
                       rows={7}
                       value={activeNote.content}
                       onChange={(e) =>
@@ -359,15 +412,29 @@ export default function NotesJournalView({
                           content: e.target.value,
                         })
                       }
-                      placeholder="دوّن هنا الأفكار الرئيسية، ما أعجبك، ما تناقضه أو تحتاج مراجعته..."
-                      className="mt-1.5 w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#1E3A5F] focus:bg-white leading-relaxed"
+                      placeholder="دوّن هنا الأفكار الرئيسية أو اضغط «تسجيل نوت بالصوت» لتسجيل فكرتك وتحويلها لنص..."
+                      className="w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#1E3A5F] focus:bg-white leading-relaxed"
                     />
-                  </label>
+                  </div>
 
-                  {/* Quotes & Discussion Points */}
-                  <label className="block text-xs font-semibold text-slate-700">
-                    اقتباسات مهمة أو أسئلة للنقاش
+                  {/* Quotes & Discussion Points + Voice Recording */}
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label
+                        htmlFor={`book-quotes-${activeNote.id}`}
+                        className="text-xs font-semibold text-slate-700"
+                      >
+                        اقتباسات مهمة أو أسئلة للنقاش
+                      </label>
+                      <VoiceRecorderButton
+                        label="سؤال نقاشي بالصوت"
+                        onTranscript={(text) =>
+                          appendBookVoiceText(activeNote, 'quotes', text)
+                        }
+                      />
+                    </div>
                     <textarea
+                      id={`book-quotes-${activeNote.id}`}
                       rows={3}
                       value={activeNote.quotes}
                       onChange={(e) =>
@@ -376,9 +443,9 @@ export default function NotesJournalView({
                         })
                       }
                       placeholder="اقتباس من الكتاب أو سؤال تود طرحه للنقاش..."
-                      className="mt-1.5 w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#1E3A5F] focus:bg-white leading-relaxed"
+                      className="w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#1E3A5F] focus:bg-white leading-relaxed"
                     />
-                  </label>
+                  </div>
 
                   {/* Per-Book Direct Download Actions */}
                   <div className="pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
@@ -419,9 +486,12 @@ export default function NotesJournalView({
             <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
               {(
                 [
-                  { id: 'all', label: `الكل (12)` },
+                  { id: 'all', label: `الكل (${months.length})` },
                   { id: 'written', label: `مكتوب (${writtenCount})` },
-                  { id: 'empty', label: `بانتظار التدوين (${12 - writtenCount})` },
+                  {
+                    id: 'empty',
+                    label: `بانتظار التدوين (${months.length - writtenCount})`,
+                  },
                 ] as const
               ).map((opt) => (
                 <button
@@ -475,6 +545,17 @@ export default function NotesJournalView({
                         {month.theme}
                       </h2>
                     </div>
+
+                    <VoiceRecorderButton
+                      label="إملاء صوتي"
+                      onTranscript={(text) => {
+                        const prev = month.notes.trim();
+                        onUpdateMonthNotes(
+                          month.id,
+                          prev ? `${prev}\n${text}` : text
+                        );
+                      }}
+                    />
                   </div>
 
                   <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-lg space-y-1">
@@ -493,7 +574,7 @@ export default function NotesJournalView({
                     onChange={(e) =>
                       onUpdateMonthNotes(month.id, e.target.value)
                     }
-                    placeholder="اكتب خلاصتك وأفكارك القابلة للتطبيق هنا..."
+                    placeholder="اكتب خلاصتك أو سجّلها بالصوت..."
                     className="w-full p-3 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#1E3A5F] focus:bg-white transition-colors leading-relaxed"
                   />
                 </section>

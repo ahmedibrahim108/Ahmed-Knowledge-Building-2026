@@ -124,10 +124,10 @@ export default function OverviewView({
             <CheckCircle2 className="w-4 h-4 text-emerald-700" aria-hidden="true" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
-            {completedMonths} <span className="text-sm font-normal text-slate-500">/ 12 شهرًا</span>
+            {completedMonths} <span className="text-sm font-normal text-slate-500">/ {months.length} شهرًا</span>
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            الشهر الحالي: الشهر {activeMonth.id}
+            {activeMonth ? `الشهر الحالي: الشهر ${activeMonth.id}` : 'أضف شهرك الأول من الخطة'}
           </p>
         </div>
 
@@ -146,11 +146,11 @@ export default function OverviewView({
 
         <div className="bg-white border border-slate-200 rounded-xl p-5">
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>الكورسات الستة المربوطة</span>
+            <span>الكورسات المربوطة</span>
             <Layers className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
-            {completedCourses} <span className="text-sm font-normal text-slate-500">/ 6 كورسات</span>
+            {completedCourses} <span className="text-sm font-normal text-slate-500">/ {courses.length} كورسات</span>
           </p>
           <p className="mt-1 text-xs text-slate-500">
             مربوطة بمراجع مكملة وتطبيق عملي
@@ -163,7 +163,7 @@ export default function OverviewView({
             <PenLine className="w-4 h-4 text-slate-600" aria-hidden="true" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
-            {notesWritten} <span className="text-sm font-normal text-slate-500">/ 12 دفترًا</span>
+            {notesWritten} <span className="text-sm font-normal text-slate-500">/ {months.length} دفترًا</span>
           </p>
           <p className="mt-1 text-xs text-slate-500">
             تُحفظ تلقائيًا وتُصدَّر في ملف Excel

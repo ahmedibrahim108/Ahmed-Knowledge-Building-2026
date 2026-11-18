@@ -1,6 +1,6 @@
 {
   "name": "ميزان المعرفة — خطة 12 شهرًا",
   "description": "خطة معرفية متوازنة لمدة 12 شهرًا بمسارين تأسيسي واستكشافي تشمل الفكر الإسلامي والفلسفة وعلم النفس والتاريخ والأدب وتطوير الذات مع التصدير إلى Excel.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,0 +1,352 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile stored privately under the user's UID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 600
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "displayName", "email", "createdAt", "updatedAt"]
+    },
+    "QuarterItem": {
+      "title": "QuarterItem",
+      "description": "Editable quarterly phase of the balanced curriculum.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "number": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerId", "number", "title", "subtitle", "updatedAt"]
+    },
+    "MonthItem": {
+      "title": "MonthItem",
+      "description": "A single month or milestone in the balanced study plan.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "docId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "quarter": {
+          "type": "integer"
+        },
+        "quarterTitle": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "theme": {
+          "type": "string",
+          "maxLength": 250
+        },
+        "foundational": {
+          "type": "object"
+        },
+        "exploratory": {
+          "type": "object"
+        },
+        "courseId": {
+          "type": "integer"
+        },
+        "discussionPrompt": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "applicationTask": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "activities": {
+          "type": "object"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["not_started", "in_progress", "completed"]
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "tasks": {
+          "type": "array"
+        },
+        "resources": {
+          "type": "array"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "docId",
+        "ownerId",
+        "quarter",
+        "quarterTitle",
+        "theme",
+        "foundational",
+        "exploratory",
+        "courseId",
+        "discussionPrompt",
+        "applicationTask",
+        "activities",
+        "status",
+        "notes",
+        "tasks",
+        "resources",
+        "updatedAt"
+      ]
+    },
+    "DomainItem": {
+      "title": "DomainItem",
+      "description": "Intellectual domain and its curated thinkers.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "order": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "purpose": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "thinkers": {
+          "type": "array"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "ownerId", "order", "title", "subtitle", "purpose", "thinkers", "updatedAt"]
+    },
+    "CourseItem": {
+      "title": "CourseItem",
+      "description": "Personal development course linked with complementary references and tasks.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "docId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 250
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "linkedMonths": {
+          "type": "array"
+        },
+        "complementaryBook": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "bookAuthor": {
+          "type": "string",
+          "maxLength": 250
+        },
+        "applicationMilestone": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "resources": {
+          "type": "array"
+        },
+        "tasks": {
+          "type": "array"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "docId",
+        "ownerId",
+        "title",
+        "category",
+        "linkedMonths",
+        "complementaryBook",
+        "bookAuthor",
+        "applicationMilestone",
+        "completed",
+        "resources",
+        "tasks",
+        "updatedAt"
+      ]
+    },
+    "BookNoteItem": {
+      "title": "BookNoteItem",
+      "description": "Per-book or per-reading notes authored by the user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "bookTitle": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "author": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "progressMarker": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 40000
+        },
+        "quotes": {
+          "type": "string",
+          "maxLength": 10000
+        },
+        "updatedAtLabel": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "bookTitle",
+        "author",
+        "progressMarker",
+        "content",
+        "quotes",
+        "updatedAtLabel",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-only user profile document."
+    },
+    "/users/{userId}/quarters/{quarterId}": {
+      "schema": { "$ref": "#/entities/QuarterItem" },
+      "description": "User's editable quarters."
+    },
+    "/users/{userId}/months/{monthId}": {
+      "schema": { "$ref": "#/entities/MonthItem" },
+      "description": "User's editable monthly plan items."
+    },
+    "/users/{userId}/domains/{domainId}": {
+      "schema": { "$ref": "#/entities/DomainItem" },
+      "description": "User's editable intellectual domains and thinkers."
+    },
+    "/users/{userId}/courses/{courseId}": {
+      "schema": { "$ref": "#/entities/CourseItem" },
+      "description": "User's editable personal development courses."
+    },
+    "/users/{userId}/bookNotes/{noteId}": {
+      "schema": { "$ref": "#/entities/BookNoteItem" },
+      "description": "User's per-book notes and quotes."
+    }
+  }
+}
