@@ -13,6 +13,7 @@ import Header, { ActiveTab } from './components/Header';
 import NotesJournalView from './components/NotesJournalView';
 import OfflineIndicator from './components/OfflineIndicator';
 import OverviewView from './components/OverviewView';
+import PWAInstallButton from './components/PWAInstallButton';
 import TwelveMonthPlanView from './components/TwelveMonthPlanView';
 import {
   BookNote,
@@ -1154,14 +1155,15 @@ export default function App() {
     title: string;
     content: string;
     moodTag: ReflectionMood;
-  }) => {
+  }): string | undefined => {
     if (!user) {
       handleRequireAuth();
-      return;
+      return undefined;
     }
     const now = Date.now();
+    const newId = `refl-${now}-${Math.floor(Math.random() * 1000)}`;
     const newReflection: PersonalReflection = {
-      id: `refl-${now}-${Math.floor(Math.random() * 1000)}`,
+      id: newId,
       title: payload.title,
       content: payload.content,
       moodTag: payload.moodTag,
@@ -1177,6 +1179,7 @@ export default function App() {
       detail: `الوسم: ${payload.moodTag}`,
       targetTab: 'overview',
     });
+    return newId;
   };
 
   const handleUpdateReflection = (
@@ -1498,10 +1501,12 @@ export default function App() {
 
       <footer className="border-t border-slate-200 bg-white mt-auto">
         <div className="max-w-[1280px] mx-auto px-4 sm:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
-          <p>
+          <p className="text-center sm:text-right">
             ميزان المعرفة · خطة الدراسة العامة المتوازنة (قراءة · استماع · تلخيص · مناقشة وتطبيق)
           </p>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4">
+            <PWAInstallButton compact />
+            <span aria-hidden="true" className="hidden sm:inline">·</span>
             <button
               type="button"
               onClick={handleExportExcel}

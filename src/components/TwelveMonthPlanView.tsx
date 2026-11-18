@@ -38,6 +38,7 @@ import {
   parseDocumentFile,
   saveLocalAttachment,
 } from '../utils/documentImportExport';
+import ImageAttachmentGallery from './ImageAttachmentGallery';
 import VoiceRecorderButton from './VoiceRecorderButton';
 
 interface TwelveMonthPlanViewProps {
@@ -1512,6 +1513,14 @@ export default function TwelveMonthPlanView({
                   );
                 })}
               </div>
+
+              <ImageAttachmentGallery
+                scopeKey={`month:${activeMonth.id}`}
+                title="صور ومخططات الوحدة المرفقة (صورة أو أكثر)"
+                canEdit={canEdit}
+                onRequireAuth={onRequireAuth}
+                hideEmptyWhenReadOnly
+              />
             </div>
 
             {/* 4 Pillars Checklist */}

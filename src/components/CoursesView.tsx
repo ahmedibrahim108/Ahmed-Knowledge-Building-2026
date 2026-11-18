@@ -20,6 +20,7 @@ import {
   parseDocumentFile,
   saveLocalAttachment,
 } from '../utils/documentImportExport';
+import ImageAttachmentGallery from './ImageAttachmentGallery';
 
 interface CoursesViewProps {
   canEdit: boolean;
@@ -702,6 +703,14 @@ export default function CoursesView({
                           })
                         )}
                       </div>
+
+                      <ImageAttachmentGallery
+                        scopeKey={`course:${course.id}`}
+                        title="صور ومرفقات الكورس (صورة أو أكثر)"
+                        canEdit={canEdit}
+                        compact
+                        hideEmptyWhenReadOnly
+                      />
                     </div>
 
                     {/* Small Tasks for this Course */}

@@ -39,9 +39,10 @@ import {
   VoiceDialectMode,
   WEEKLY_RHYTHM,
 } from '../data/curriculumData';
+import { moveImagesScope } from '../utils/imageStorage';
 import { ActiveTab } from './Header';
+import ImageAttachmentGallery from './ImageAttachmentGallery';
 import ProgressCharts from './ProgressCharts';
-import PWAInstallButton from './PWAInstallButton';
 import VoiceRecorderButton from './VoiceRecorderButton';
 
 interface OverviewViewProps {
@@ -73,7 +74,7 @@ interface OverviewViewProps {
     title: string;
     content: string;
     moodTag: ReflectionMood;
-  }) => void;
+  }) => string | void;
   onUpdateReflection: (
     id: string,
     updates: Partial<PersonalReflection>
@@ -138,6 +139,7 @@ export default function OverviewView({
   );
   const [editingRefTitle, setEditingRefTitle] = useState('');
   const [editingRefContent, setEditingRefContent] = useState('');
+  const [draftImgRefresh, setDraftImgRefresh] = useState(0);
 
   // Progress Calculations
   const completedMonths = months.filter((m) => m.status === 'completed').length;
@@ -234,7 +236,7 @@ export default function OverviewView({
     setShowAddCategory(false);
   };
 
-  const handleCreateReflection = (e: React.FormEvent) => {
+  const handleCreateReflection = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canEdit) {
       onRequireAuth();
@@ -242,11 +244,15 @@ export default function OverviewView({
     }
     const content = refContent.trim();
     if (!content) return;
-    onAddReflection({
+    const createdId = onAddReflection({
       title: refTitle.trim(),
       content,
       moodTag: refMood,
     });
+    if (createdId) {
+      await moveImagesScope('draft-reflection', `reflection:${createdId}`);
+      setDraftImgRefresh((n) => n + 1);
+    }
     setRefTitle('');
     setRefContent('');
   };
@@ -348,8 +354,6 @@ export default function OverviewView({
                 <CalendarDays className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
                 <span>التقويم</span>
               </button>
-
-              <PWAInstallButton />
 
               {!user && (
                 <button
@@ -875,6 +879,15 @@ export default function OverviewView({
               className="w-full p-3 text-xs sm:text-sm bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] leading-relaxed"
             />
 
+            <ImageAttachmentGallery
+              scopeKey="draft-reflection"
+              title="إرفاق صورة أو أكثر مع الخاطرة"
+              canEdit={canEdit}
+              onRequireAuth={onRequireAuth}
+              compact
+              refreshToken={draftImgRefresh}
+            />
+
             <button
               type="submit"
               disabled={!canEdit}
@@ -1030,6 +1043,14 @@ export default function OverviewView({
                           <p className="text-xs sm:text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
                             {refItem.content}
                           </p>
+                          <ImageAttachmentGallery
+                            scopeKey={`reflection:${refItem.id}`}
+                            title="صور الخاطرة"
+                            canEdit={canEdit}
+                            onRequireAuth={onRequireAuth}
+                            compact
+                            hideEmptyWhenReadOnly
+                          />
                         </>
                       )}
                     </article>

@@ -47,6 +47,7 @@ import {
   ensureRichHtml,
   richHtmlToPlainText,
 } from '../utils/richText';
+import ImageAttachmentGallery from './ImageAttachmentGallery';
 import ReadAloudButton from './ReadAloudButton';
 import RichTextNoteEditor from './RichTextNoteEditor';
 import VoiceRecorderButton from './VoiceRecorderButton';
@@ -775,6 +776,13 @@ export default function NotesJournalView({
             if (canEdit) onUpdatePreferences({ noteHighlightColor: color });
           }}
           minHeightClass="min-h-[240px]"
+        />
+
+        <ImageAttachmentGallery
+          scopeKey={`note:${note.id}`}
+          title="الصور والمخططات المرفقة بهذه الملاحظة (صورة أو أكثر)"
+          canEdit={canEdit}
+          onRequireAuth={onRequireAuth}
         />
       </div>
 
