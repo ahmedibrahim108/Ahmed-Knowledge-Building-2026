@@ -513,6 +513,60 @@
         "readAloudSpeed",
         "updatedAt"
       ]
+    },
+    "PersonalReflectionItem": {
+      "title": "PersonalReflectionItem",
+      "description": "User's private personal reflections and study thoughts stored on their dashboard.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 10000
+        },
+        "moodTag": {
+          "type": "string",
+          "enum": ["تأمل", "فكرة", "امتنان", "هدف"]
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "createdAtLabel": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "createdAtMs": {
+          "type": "integer"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "title",
+        "content",
+        "moodTag",
+        "pinned",
+        "createdAtLabel",
+        "createdAtMs",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -551,6 +605,10 @@
     "/users/{userId}/preferences/{prefId}": {
       "schema": { "$ref": "#/entities/UserPreferencesItem" },
       "description": "User's personal customization for notes editor and voice controls."
+    },
+    "/users/{userId}/reflections/{reflectionId}": {
+      "schema": { "$ref": "#/entities/PersonalReflectionItem" },
+      "description": "User's private personal reflections and thoughts on the dashboard."
     }
   }
 }

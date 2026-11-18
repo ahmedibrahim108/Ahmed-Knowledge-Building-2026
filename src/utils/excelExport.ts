@@ -352,3 +352,113 @@ export function exportSingleBookNoteAsExcel(note: BookNote): void {
   XLSX.utils.book_append_sheet(workbook, ws, 'نوتس_منظم');
   XLSX.writeFile(workbook, `نوتس_${sanitizeFilename(note.bookTitle)}.xlsx`);
 }
+
+export function exportNotebookBundleAsMarkdown(
+  notebookTitle: string,
+  notes: BookNote[]
+): void {
+  if (notes.length === 0) return;
+
+  const lines: string[] = [
+    `# دفتر تلخيص: ${notebookTitle}`,
+    '',
+    `- **عدد الملاحظات المصدّرة:** ${notes.length}`,
+    '',
+    '---',
+    '',
+  ];
+
+  notes.forEach((note, index) => {
+    const typeLabel =
+      note.noteType === 'course_lecture'
+        ? 'كورس / محاضرة'
+        : note.noteType === 'general'
+        ? 'ملاحظة عامة'
+        : 'كتاب';
+
+    lines.push(`## ${index + 1}. ${note.bookTitle}`);
+    lines.push('');
+    lines.push(`- **النوع:** ${typeLabel}`);
+    if (note.courseTitle) lines.push(`- **الكورس:** ${note.courseTitle}`);
+    if (note.lectureTitle) lines.push(`- **المحاضرة:** ${note.lectureTitle}`);
+    if (note.categoryLabel) lines.push(`- **التصنيف:** ${note.categoryLabel}`);
+    lines.push(`- **المؤلف / المحاضر:** ${note.author || 'غير محدد'}`);
+    if (note.progressMarker) {
+      lines.push(`- **الموضع:** ${note.progressMarker}`);
+    }
+    lines.push(`- **آخر تحديث:** ${note.updatedAt}`);
+    lines.push('');
+    lines.push('### النوتس والأفكار المستخلصة');
+    lines.push('');
+    lines.push(richHtmlToMarkdown(note.content) || '_لم تُكتب ملاحظات بعد._');
+    lines.push('');
+
+    const quotesMd = richHtmlToMarkdown(note.quotes);
+    if (quotesMd) {
+      lines.push('### اقتباسات وأسئلة للمناقشة', '', quotesMd, '');
+    }
+
+    lines.push('---', '');
+  });
+
+  lines.push('_تم التصدير من منصة ميزان المعرفة_');
+
+  const blob = new Blob(['\uFEFF' + lines.join('\n')], {
+    type: 'text/markdown;charset=utf-8',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `دفتر_${sanitizeFilename(notebookTitle)}.md`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function exportNotebookBundleAsExcel(
+  notebookTitle: string,
+  notes: BookNote[]
+): void {
+  if (notes.length === 0) return;
+
+  const workbook = XLSX.utils.book_new();
+  workbook.Workbook = { Views: [{ RTL: true }] };
+
+  const rows = notes.map((note, idx) => ({
+    'الرقم': idx + 1,
+    'النوع':
+      note.noteType === 'course_lecture'
+        ? 'كورس / محاضرة'
+        : note.noteType === 'general'
+        ? 'ملاحظة عامة'
+        : 'كتاب',
+    'العنوان / الكتاب': note.bookTitle,
+    'الكورس المرتبط': note.courseTitle || '—',
+    'المحاضرة': note.lectureTitle || '—',
+    'التصنيف': note.categoryLabel || '—',
+    'المؤلف / المحاضر': note.author || '—',
+    'الفصل / رقم الصفحة': note.progressMarker || '—',
+    'النوتس والأفكار المستخلصة': richHtmlToPlainText(note.content) || '—',
+    'اقتباسات أو أسئلة مناقشة': richHtmlToPlainText(note.quotes) || '—',
+    'آخر تحديث': note.updatedAt,
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!views'] = [{ rightToLeft: true }];
+  ws['!cols'] = [
+    { wch: 8 },
+    { wch: 16 },
+    { wch: 30 },
+    { wch: 28 },
+    { wch: 24 },
+    { wch: 20 },
+    { wch: 22 },
+    { wch: 22 },
+    { wch: 60 },
+    { wch: 46 },
+    { wch: 22 },
+  ];
+  XLSX.utils.book_append_sheet(workbook, ws, 'دفتر_التلخيص');
+  XLSX.writeFile(workbook, `دفتر_${sanitizeFilename(notebookTitle)}.xlsx`);
+}

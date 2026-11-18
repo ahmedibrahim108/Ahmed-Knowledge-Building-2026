@@ -20,7 +20,9 @@ import {
   DomainInfo,
   MonthPlan,
   PersonalCourse,
+  PersonalReflection,
   QuarterInfo,
+  ReflectionMood,
   StudyHistoryEntry,
   UserPreferences,
 } from '../data/curriculumData';
@@ -179,6 +181,25 @@ function buildHistoryPayload(uid: string, entry: StudyHistoryEntry) {
     ),
     timestampLabel: clip(entry.timestampLabel || '', 100),
     createdAtMs: Math.max(0, Math.round(entry.createdAtMs || Date.now())),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function buildReflectionPayload(uid: string, r: PersonalReflection) {
+  const id = sanitizeId(r.id);
+  const allowedMoods: ReflectionMood[] = ['تأمل', 'فكرة', 'امتنان', 'هدف'];
+  const moodTag: ReflectionMood = allowedMoods.includes(r.moodTag)
+    ? r.moodTag
+    : 'تأمل';
+  return {
+    id,
+    ownerId: uid,
+    title: clip(r.title || '', 200),
+    content: clip(r.content || '', 10000),
+    moodTag,
+    pinned: Boolean(r.pinned),
+    createdAtLabel: clip(r.createdAtLabel || '', 100),
+    createdAtMs: Math.max(0, Math.round(r.createdAtMs || Date.now())),
     updatedAt: serverTimestamp(),
   };
 }
@@ -361,6 +382,7 @@ export function subscribeUserWorkspace(
     onCustomCategories: (items: CustomCategory[]) => void;
     onHistory: (items: StudyHistoryEntry[]) => void;
     onPreferences?: (prefs: UserPreferences) => void;
+    onReflections?: (items: PersonalReflection[]) => void;
   }
 ): () => void {
   const unsubQuarters = onSnapshot(
@@ -509,6 +531,38 @@ export function subscribeUserWorkspace(
       handleFirestoreError(err, OperationType.LIST, `users/${uid}/preferences`)
   );
 
+  const unsubReflections = onSnapshot(
+    query(collection(db, 'users', uid, 'reflections'), where('ownerId', '==', uid)),
+    (snap) => {
+      if (!callbacks.onReflections) return;
+      const list = snap.docs
+        .map((d) => {
+          const raw = d.data() as Record<string, unknown>;
+          const moodRaw = String(raw.moodTag ?? 'تأمل');
+          const moodTag: ReflectionMood =
+            moodRaw === 'فكرة' || moodRaw === 'امتنان' || moodRaw === 'هدف'
+              ? moodRaw
+              : 'تأمل';
+          return {
+            id: String(raw.id ?? d.id),
+            title: String(raw.title ?? ''),
+            content: String(raw.content ?? ''),
+            moodTag,
+            pinned: Boolean(raw.pinned),
+            createdAtLabel: String(raw.createdAtLabel ?? ''),
+            createdAtMs: Number(raw.createdAtMs ?? 0),
+          } satisfies PersonalReflection;
+        })
+        .sort((a, b) => {
+          if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+          return b.createdAtMs - a.createdAtMs;
+        });
+      callbacks.onReflections(list);
+    },
+    (err) =>
+      handleFirestoreError(err, OperationType.LIST, `users/${uid}/reflections`)
+  );
+
   return () => {
     unsubQuarters();
     unsubMonths();
@@ -518,6 +572,7 @@ export function subscribeUserWorkspace(
     unsubCategories();
     unsubHistory();
     unsubPrefs();
+    unsubReflections();
   };
 }
 
@@ -687,5 +742,31 @@ export async function saveUserPreferencesDoc(
     await setDoc(doc(db, 'users', uid, 'preferences', 'settings'), p);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function saveReflectionDoc(
+  uid: string,
+  reflection: PersonalReflection
+): Promise<void> {
+  const p = buildReflectionPayload(uid, reflection);
+  const path = `users/${uid}/reflections/${p.id}`;
+  try {
+    await setDoc(doc(db, 'users', uid, 'reflections', p.id), p);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteReflectionDoc(
+  uid: string,
+  reflectionId: string
+): Promise<void> {
+  const id = sanitizeId(reflectionId);
+  const path = `users/${uid}/reflections/${id}`;
+  try {
+    await deleteDoc(doc(db, 'users', uid, 'reflections', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }

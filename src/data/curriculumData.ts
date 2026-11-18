@@ -129,6 +129,18 @@ export interface StudyHistoryEntry {
   createdAtMs: number;
 }
 
+export type ReflectionMood = 'تأمل' | 'فكرة' | 'امتنان' | 'هدف';
+
+export interface PersonalReflection {
+  id: string;
+  title: string;
+  content: string;
+  moodTag: ReflectionMood;
+  pinned: boolean;
+  createdAtLabel: string;
+  createdAtMs: number;
+}
+
 export type HighlightColorKey = 'amber' | 'emerald' | 'sky' | 'rose';
 export type VoiceDialectMode = 'standard_arabic' | 'egyptian_arabic' | 'bilingual';
 export type VoiceInsertMode = 'append_paragraph' | 'append_bullet' | 'append_quote';

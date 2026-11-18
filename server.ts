@@ -45,6 +45,37 @@ function normalizeAudioMimeType(raw?: string): string {
   return base.startsWith('audio/') ? base : 'audio/webm';
 }
 
+async function callTranscribeWithRetry(
+  ai: GoogleGenAI,
+  model: string,
+  audioPart: { inlineData: { mimeType: string; data: string } },
+  promptPart: { text: string }
+) {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await ai.models.generateContent({
+        model,
+        contents: { parts: [audioPart, promptPart] },
+      });
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const isTransient =
+        msg.includes('503') ||
+        msg.includes('500') ||
+        msg.includes('UNAVAILABLE') ||
+        msg.includes('fetch failed') ||
+        msg.includes('ECONNRESET');
+      if (!isTransient || attempt === 1) {
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, 600));
+    }
+  }
+  throw lastErr;
+}
+
 app.post('/api/transcribe', async (req, res) => {
   try {
     const ai = createGeminiClient();
@@ -63,6 +94,13 @@ app.post('/api/transcribe', async (req, res) => {
 
     if (!body?.audioBase64 || typeof body.audioBase64 !== 'string') {
       res.status(400).json({ error: 'بيانات الصوت مفقودة أو غير صالحة.' });
+      return;
+    }
+
+    if (body.audioBase64.length < 100) {
+      res.status(422).json({
+        error: 'التسجيل قصير جدًا أو فارغ. تحدّث لمدة ثانية على الأقل ثم أوقف التسجيل.',
+      });
       return;
     }
 
@@ -88,18 +126,27 @@ app.post('/api/transcribe', async (req, res) => {
 
     let response;
     try {
-      response = await ai.models.generateContent({
-        model: 'gemini-3.5-transcribe',
-        contents: { parts: [audioPart, promptPart] },
-      });
+      response = await callTranscribeWithRetry(
+        ai,
+        'gemini-3.5-transcribe',
+        audioPart,
+        promptPart
+      );
     } catch (primaryErr) {
       const msg =
         primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-      if (msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('not found')) {
-        response = await ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents: { parts: [audioPart, promptPart] },
-        });
+      if (
+        msg.includes('404') ||
+        msg.includes('NOT_FOUND') ||
+        msg.includes('not found') ||
+        msg.includes('400')
+      ) {
+        response = await callTranscribeWithRetry(
+          ai,
+          'gemini-4-hydrogen',
+          audioPart,
+          promptPart
+        );
       } else {
         throw primaryErr;
       }
@@ -108,7 +155,7 @@ app.post('/api/transcribe', async (req, res) => {
     const text = (response.text ?? '').trim();
     if (!text) {
       res.status(422).json({
-        error: 'لم يتم التعرف على كلام واضح في التسجيل. حاول التسجيل مرة أخرى.',
+        error: 'لم يتم التعرف على كلام واضح في التسجيل. حاول التحدث بوضوح وإعادة المحاولة.',
       });
       return;
     }
@@ -116,9 +163,15 @@ app.post('/api/transcribe', async (req, res) => {
     res.json({ text });
   } catch (err) {
     console.error('Transcription error:', err);
-    const message =
+    const rawMsg =
       err instanceof Error ? err.message : 'تعذر تحويل الصوت إلى نص حاليًا.';
-    res.status(500).json({ error: message });
+    if (rawMsg.includes('429') || rawMsg.includes('RESOURCE_EXHAUSTED')) {
+      res.status(429).json({
+        error: 'تم تجاوز حد الطلبات مؤقتًا. انتظر لحظات ثم أعد المحاولة.',
+      });
+      return;
+    }
+    res.status(500).json({ error: rawMsg });
   }
 });
 

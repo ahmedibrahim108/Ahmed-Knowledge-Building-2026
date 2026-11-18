@@ -257,6 +257,28 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidReflection(data, userId, reflectionId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'title', 'content', 'moodTag',
+          'pinned', 'createdAtLabel', 'createdAtMs', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'title', 'content', 'moodTag',
+          'pinned', 'createdAtLabel', 'createdAtMs', 'updatedAt'
+        ])
+        && data.id == reflectionId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && isValidStr(data.title, 0, 200)
+        && isValidStr(data.content, 1, 10000)
+        && data.moodTag in ['تأمل', 'فكرة', 'امتنان', 'هدف']
+        && data.pinned is bool
+        && isValidStr(data.createdAtLabel, 0, 100)
+        && data.createdAtMs is int && data.createdAtMs >= 0
+        && data.updatedAt is timestamp;
+    }
+
     // --- User Profile Document (PII Isolated to Owner) ---
     match /users/{userId} {
       allow get: if isValidId(userId) && isOwner(userId);
@@ -449,6 +471,27 @@ service cloud.firestore {
             'readAloudVoice', 'readAloudSpeed', 'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(prefId) && isOwner(userId) && isVerifiedUser();
+      }
+
+      // --- Personal Reflections (خواطري) ---
+      match /reflections/{reflectionId} {
+        allow get: if isValidId(userId) && isValidId(reflectionId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(reflectionId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidReflection(incoming(), userId, reflectionId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(reflectionId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidReflection(incoming(), userId, reflectionId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'content', 'moodTag', 'pinned', 'createdAtLabel', 'createdAtMs', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(reflectionId) && isOwner(userId) && isVerifiedUser();
       }
     }
   }

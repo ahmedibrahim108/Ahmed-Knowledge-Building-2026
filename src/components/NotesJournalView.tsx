@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   BookOpen,
+  CheckSquare,
   Download,
   FileSpreadsheet,
   FileText,
@@ -12,6 +13,7 @@ import {
   Plus,
   Search,
   SlidersHorizontal,
+  Square,
   Tag,
   Trash2,
   X,
@@ -29,6 +31,8 @@ import {
   VoiceInsertMode,
 } from '../data/curriculumData';
 import {
+  exportNotebookBundleAsExcel,
+  exportNotebookBundleAsMarkdown,
   exportSingleBookNoteAsExcel,
   exportSingleBookNoteAsMarkdown,
 } from '../utils/excelExport';
@@ -135,6 +139,26 @@ export default function NotesJournalView({
   const [confirmDeleteNoteId, setConfirmDeleteNoteId] = useState<string | null>(
     null
   );
+  const [selectedExportIds, setSelectedExportIds] = useState<string[]>([]);
+
+  const toggleExportSelection = (noteId: string) => {
+    setSelectedExportIds((prev) =>
+      prev.includes(noteId)
+        ? prev.filter((id) => id !== noteId)
+        : [...prev, noteId]
+    );
+  };
+
+  const toggleSelectAllInList = (notesList: BookNote[]) => {
+    const ids = notesList.map((n) => n.id);
+    const allSelected =
+      ids.length > 0 && ids.every((id) => selectedExportIds.includes(id));
+    if (allSelected) {
+      setSelectedExportIds((prev) => prev.filter((id) => !ids.includes(id)));
+    } else {
+      setSelectedExportIds((prev) => Array.from(new Set([...prev, ...ids])));
+    }
+  };
 
   // Open workspace automatically when another tab jumps to a specific note
   const prevActiveIdRef = useRef<string | null>(activeBookNoteId);
@@ -1060,6 +1084,36 @@ export default function NotesJournalView({
                       <span className="tabular-nums">
                         {selectedCourseNotes.length} محاضرات / ملخصات
                       </span>
+                      {selectedCourseNotes.length > 0 && (
+                        <div className="flex items-center gap-1.5 mr-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              exportNotebookBundleAsMarkdown(
+                                selectedCourse.title,
+                                selectedCourseNotes
+                              )
+                            }
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            <FileText className="w-3 h-3" aria-hidden="true" />
+                            <span>تصدير الدفتر (.md)</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              exportNotebookBundleAsExcel(
+                                selectedCourse.title,
+                                selectedCourseNotes
+                              )
+                            }
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            <Download className="w-3 h-3" aria-hidden="true" />
+                            <span>تصدير الدفتر (.xlsx)</span>
+                          </button>
+                        </div>
+                      )}
                     </>
                   ) : activeNote ? (
                     <>
@@ -1085,6 +1139,69 @@ export default function NotesJournalView({
                           {selectedCourseNotes.length}
                         </span>
                       </div>
+
+                      {selectedCourseNotes.length > 0 && (() => {
+                        const selectedInCourse = selectedCourseNotes.filter((n) =>
+                          selectedExportIds.includes(n.id)
+                        );
+                        const allChecked =
+                          selectedInCourse.length === selectedCourseNotes.length;
+                        return (
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px]">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                toggleSelectAllInList(selectedCourseNotes)
+                              }
+                              className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 font-medium cursor-pointer"
+                            >
+                              {allChecked ? (
+                                <CheckSquare
+                                  className="w-3.5 h-3.5 text-[#1E3A5F]"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <Square
+                                  className="w-3.5 h-3.5 text-slate-400"
+                                  aria-hidden="true"
+                                />
+                              )}
+                              <span>
+                                {allChecked ? 'إلغاء تحديد الكل' : 'تحديد للتصدير'}
+                              </span>
+                            </button>
+
+                            {selectedInCourse.length > 0 && (
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    exportNotebookBundleAsMarkdown(
+                                      `${selectedCourse.title}_مختارات`,
+                                      selectedInCourse
+                                    )
+                                  }
+                                  className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded font-medium cursor-pointer"
+                                >
+                                  .md ({selectedInCourse.length})
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    exportNotebookBundleAsExcel(
+                                      `${selectedCourse.title}_مختارات`,
+                                      selectedInCourse
+                                    )
+                                  }
+                                  className="px-2 py-1 bg-[#1E3A5F] hover:bg-[#162C49] text-white rounded font-medium cursor-pointer"
+                                >
+                                  تصدير المحدد ({selectedInCourse.length})
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {canEdit && (
                         <form
@@ -1133,32 +1250,54 @@ export default function NotesJournalView({
                       <div className="divide-y divide-slate-200 max-h-[560px] overflow-y-auto">
                         {selectedCourseNotes.map((bn) => {
                           const isSelected = activeNote?.id === bn.id;
+                          const isChecked = selectedExportIds.includes(bn.id);
                           return (
-                            <button
+                            <div
                               key={bn.id}
-                              type="button"
-                              onClick={() => {
-                                onSelectBookNote(bn.id);
-                                setConfirmDeleteNoteId(null);
-                              }}
-                              className={`w-full text-right px-5 py-3.5 transition-colors cursor-pointer space-y-1 ${
+                              className={`flex items-start gap-2.5 px-4 py-3.5 transition-colors ${
                                 isSelected
-                                  ? 'bg-slate-100/90 font-semibold'
+                                  ? 'bg-slate-100/90'
                                   : 'bg-white hover:bg-slate-50'
                               }`}
                             >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs font-semibold text-[#1E3A5F]">
-                                  {bn.lectureTitle || 'محاضرة'}
-                                </span>
-                                <span className="text-[11px] text-slate-400">
-                                  {bn.updatedAt}
-                                </span>
-                              </div>
-                              <p className="text-sm font-medium text-slate-900 truncate">
-                                {bn.bookTitle}
-                              </p>
-                            </button>
+                              <button
+                                type="button"
+                                onClick={() => toggleExportSelection(bn.id)}
+                                aria-label={`تحديد ${bn.bookTitle} للتصدير`}
+                                className="mt-0.5 text-slate-400 hover:text-[#1E3A5F] cursor-pointer shrink-0"
+                              >
+                                {isChecked ? (
+                                  <CheckSquare
+                                    className="w-4 h-4 text-[#1E3A5F]"
+                                    aria-hidden="true"
+                                  />
+                                ) : (
+                                  <Square className="w-4 h-4" aria-hidden="true" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onSelectBookNote(bn.id);
+                                  setConfirmDeleteNoteId(null);
+                                }}
+                                className={`flex-1 min-w-0 text-right cursor-pointer space-y-1 ${
+                                  isSelected ? 'font-semibold' : ''
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs font-semibold text-[#1E3A5F]">
+                                    {bn.lectureTitle || 'محاضرة'}
+                                  </span>
+                                  <span className="text-[11px] text-slate-400">
+                                    {bn.updatedAt}
+                                  </span>
+                                </div>
+                                <p className="text-sm font-medium text-slate-900 truncate">
+                                  {bn.bookTitle}
+                                </p>
+                              </button>
+                            </div>
                           );
                         })}
                       </div>
@@ -1453,15 +1592,31 @@ export default function NotesJournalView({
                           </p>
                         </div>
 
-                        <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenCourseNotebook(course)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                          >
-                            <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
-                            <span>فتح دفتر الكورس</span>
-                          </button>
+                        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenCourseNotebook(course)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                            >
+                              <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>فتح دفتر الكورس</span>
+                            </button>
+
+                            {cNotes.length > 0 && (
+                              <button
+                                type="button"
+                                title="تصدير جميع ملاحظات هذا الكورس إلى Excel"
+                                onClick={() =>
+                                  exportNotebookBundleAsExcel(course.title, cNotes)
+                                }
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                              >
+                                <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>تصدير</span>
+                              </button>
+                            )}
+                          </div>
 
                           {canEdit && (
                             <button
@@ -1709,69 +1864,159 @@ export default function NotesJournalView({
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
               <div className="lg:col-span-4 bg-white border border-slate-200 rounded-xl overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-                  <h2 className="text-sm font-semibold text-slate-900">
-                    الملاحظات المرتّبة
-                  </h2>
-                  <span className="text-xs text-slate-500 tabular-nums">
-                    {filteredNotes.length}
-                  </span>
+                <div className="px-5 py-4 border-b border-slate-200 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-semibold text-slate-900">
+                      الملاحظات المرتّبة
+                    </h2>
+                    <span className="text-xs text-slate-500 tabular-nums">
+                      {filteredNotes.length}
+                    </span>
+                  </div>
+
+                  {filteredNotes.length > 0 && (() => {
+                    const selectedFiltered = filteredNotes.filter((n) =>
+                      selectedExportIds.includes(n.id)
+                    );
+                    const allChecked =
+                      selectedFiltered.length === filteredNotes.length;
+                    const bundleTitle =
+                      courseFilterId > 0
+                        ? courses.find((c) => c.id === courseFilterId)?.title ||
+                          'نوتس_مختارة'
+                        : 'نوتس_مختارة';
+                    return (
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => toggleSelectAllInList(filteredNotes)}
+                          className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 font-medium cursor-pointer"
+                        >
+                          {allChecked ? (
+                            <CheckSquare
+                              className="w-3.5 h-3.5 text-[#1E3A5F]"
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <Square
+                              className="w-3.5 h-3.5 text-slate-400"
+                              aria-hidden="true"
+                            />
+                          )}
+                          <span>
+                            {allChecked ? 'إلغاء تحديد الكل' : 'تحديد نوتس للتصدير'}
+                          </span>
+                        </button>
+
+                        {selectedFiltered.length > 0 && (
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                exportNotebookBundleAsMarkdown(
+                                  bundleTitle,
+                                  selectedFiltered
+                                )
+                              }
+                              className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded font-medium cursor-pointer"
+                            >
+                              .md ({selectedFiltered.length})
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                exportNotebookBundleAsExcel(
+                                  bundleTitle,
+                                  selectedFiltered
+                                )
+                              }
+                              className="px-2 py-1 bg-[#1E3A5F] hover:bg-[#162C49] text-white rounded font-medium cursor-pointer"
+                            >
+                              تصدير ({selectedFiltered.length})
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div className="divide-y divide-slate-200 max-h-[650px] overflow-y-auto">
                   {filteredNotes.map((bn) => {
                     const isSelected = activeNote?.id === bn.id;
+                    const isChecked = selectedExportIds.includes(bn.id);
                     const noteType = bn.noteType ?? 'book';
                     return (
-                      <button
+                      <div
                         key={bn.id}
-                        type="button"
-                        onClick={() => {
-                          onSelectBookNote(bn.id);
-                          setConfirmDeleteNoteId(null);
-                        }}
-                        className={`w-full text-right px-5 py-4 transition-colors cursor-pointer space-y-1.5 ${
+                        className={`flex items-start gap-2.5 px-4 py-4 transition-colors ${
                           isSelected
-                            ? 'bg-slate-100/90 font-semibold'
+                            ? 'bg-slate-100/90'
                             : 'bg-white hover:bg-slate-50'
                         }`}
                       >
-                        <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-medium">
-                          <span className="text-[#1E3A5F]">
-                            {NOTE_TYPE_LABELS[noteType]}
-                          </span>
-                          {bn.courseTitle && (
-                            <>
-                              <span aria-hidden="true" className="text-slate-300">
-                                ·
-                              </span>
-                              <span className="text-emerald-700 truncate max-w-[160px]">
-                                {bn.courseTitle}
-                              </span>
-                            </>
+                        <button
+                          type="button"
+                          onClick={() => toggleExportSelection(bn.id)}
+                          aria-label={`تحديد ${bn.bookTitle} للتصدير`}
+                          className="mt-1 text-slate-400 hover:text-[#1E3A5F] cursor-pointer shrink-0"
+                        >
+                          {isChecked ? (
+                            <CheckSquare
+                              className="w-4 h-4 text-[#1E3A5F]"
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <Square className="w-4 h-4" aria-hidden="true" />
                           )}
-                          {bn.categoryLabel && (
-                            <>
-                              <span aria-hidden="true" className="text-slate-300">
-                                ·
-                              </span>
-                              <span className="text-slate-500">
-                                {bn.categoryLabel}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                        <p className="text-sm font-semibold text-slate-900 leading-snug">
-                          {bn.bookTitle}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-                          {bn.lectureTitle && <span>{bn.lectureTitle}</span>}
-                          {bn.lectureTitle && bn.author && (
-                            <span aria-hidden="true">·</span>
-                          )}
-                          <span>{bn.author || 'غير محدد'}</span>
-                        </div>
-                      </button>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onSelectBookNote(bn.id);
+                            setConfirmDeleteNoteId(null);
+                          }}
+                          className={`flex-1 min-w-0 text-right cursor-pointer space-y-1.5 ${
+                            isSelected ? 'font-semibold' : ''
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-medium">
+                            <span className="text-[#1E3A5F]">
+                              {NOTE_TYPE_LABELS[noteType]}
+                            </span>
+                            {bn.courseTitle && (
+                              <>
+                                <span aria-hidden="true" className="text-slate-300">
+                                  ·
+                                </span>
+                                <span className="text-emerald-700 truncate max-w-[160px]">
+                                  {bn.courseTitle}
+                                </span>
+                              </>
+                            )}
+                            {bn.categoryLabel && (
+                              <>
+                                <span aria-hidden="true" className="text-slate-300">
+                                  ·
+                                </span>
+                                <span className="text-slate-500">
+                                  {bn.categoryLabel}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                          <p className="text-sm font-semibold text-slate-900 leading-snug">
+                            {bn.bookTitle}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                            {bn.lectureTitle && <span>{bn.lectureTitle}</span>}
+                            {bn.lectureTitle && bn.author && (
+                              <span aria-hidden="true">·</span>
+                            )}
+                            <span>{bn.author || 'غير محدد'}</span>
+                          </div>
+                        </button>
+                      </div>
                     );
                   })}
                 </div>

@@ -29,7 +29,9 @@ import {
   MonthStatus,
   NoteCategoryType,
   PersonalCourse,
+  PersonalReflection,
   QuarterInfo,
+  ReflectionMood,
   SmallTask,
   StudyHistoryEntry,
   StudyResource,
@@ -44,6 +46,7 @@ import {
   deleteHistoryEntryDoc,
   deleteMonthDoc,
   deleteQuarterDoc,
+  deleteReflectionDoc,
   ensureUserDocumentAndSeed,
   sanitizeId,
   saveBookNoteDoc,
@@ -53,6 +56,7 @@ import {
   saveHistoryEntryDoc,
   saveMonthDoc,
   saveQuarterDoc,
+  saveReflectionDoc,
   saveUserPreferencesDoc,
   subscribeUserWorkspace,
 } from './services/firestoreSync';
@@ -94,6 +98,7 @@ export default function App() {
     INITIAL_CUSTOM_CATEGORIES
   );
   const [history, setHistory] = useState<StudyHistoryEntry[]>([]);
+  const [reflections, setReflections] = useState<PersonalReflection[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences>(
     DEFAULT_USER_PREFERENCES
   );
@@ -121,6 +126,7 @@ export default function App() {
     setBookNotes(INITIAL_BOOK_NOTES);
     setCustomCategories(INITIAL_CUSTOM_CATEGORIES);
     setHistory([]);
+    setReflections([]);
     setPreferences(DEFAULT_USER_PREFERENCES);
     setActiveBookNoteId(INITIAL_BOOK_NOTES[0]?.id ?? null);
     setDomainFilter('all');
@@ -182,6 +188,9 @@ export default function App() {
             },
             onPreferences: (prefs) => {
               setPreferences(prefs);
+            },
+            onReflections: (items) => {
+              setReflections(items);
             },
           });
         } catch (err) {
@@ -465,6 +474,15 @@ export default function App() {
       handleRequireAuth();
       return;
     }
+    const targetMonth = months.find((m) => m.id === id);
+    const willBeDone = targetMonth ? !targetMonth.activities[key] : false;
+    const activityLabels: Record<keyof MonthActivities, string> = {
+      reading: 'القراءة',
+      listening: 'الاستماع',
+      summarizing: 'التلخيص',
+      discussing: 'النقاش والتطبيق',
+    };
+
     setMonths((prev) =>
       prev.map((m) => {
         if (m.id !== id) return m;
@@ -489,6 +507,16 @@ export default function App() {
         return next;
       })
     );
+
+    if (targetMonth && willBeDone) {
+      recordHistory({
+        actionType: 'month',
+        title: `أتممت ركيزة «${activityLabels[key]}» في الوحدة ${targetMonth.id}`,
+        detail: targetMonth.theme,
+        targetTab: 'plan',
+        targetMonthId: targetMonth.id,
+      });
+    }
   };
 
   const handleUpdateMonthNotes = (id: number, notes: string) => {
@@ -530,6 +558,10 @@ export default function App() {
       handleRequireAuth();
       return;
     }
+    const targetMonth = months.find((m) => m.id === monthId);
+    const targetTask = targetMonth?.tasks.find((t) => t.id === taskId);
+    const willBeDone = targetTask ? !targetTask.done : false;
+
     setMonths((prev) =>
       prev.map((m) => {
         if (m.id !== monthId) return m;
@@ -543,6 +575,16 @@ export default function App() {
         return next;
       })
     );
+
+    if (targetMonth && targetTask && willBeDone) {
+      recordHistory({
+        actionType: 'month',
+        title: `أنجزت مهمة في الوحدة ${targetMonth.id}: ${targetTask.text}`,
+        detail: targetMonth.theme,
+        targetTab: 'plan',
+        targetMonthId: targetMonth.id,
+      });
+    }
   };
 
   const handleAddMonthTask = (
@@ -764,6 +806,10 @@ export default function App() {
       handleRequireAuth();
       return;
     }
+    const targetCourse = courses.find((c) => c.id === courseId);
+    const targetTask = targetCourse?.tasks.find((t) => t.id === taskId);
+    const willBeDone = targetTask ? !targetTask.done : false;
+
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id !== courseId) return c;
@@ -777,6 +823,15 @@ export default function App() {
         return next;
       })
     );
+
+    if (targetCourse && targetTask && willBeDone) {
+      recordHistory({
+        actionType: 'course',
+        title: `أنجزت مهمة في ${targetCourse.title}: ${targetTask.text}`,
+        detail: targetCourse.category,
+        targetTab: 'courses',
+      });
+    }
   };
 
   const handleAddCourseTask = (courseId: number, text: string) => {
@@ -1043,6 +1098,68 @@ export default function App() {
     void deleteHistoryEntryDoc(user.uid, id);
   };
 
+  // --- Personal Reflections («خواطري») CRUD ---
+  const handleAddReflection = (payload: {
+    title: string;
+    content: string;
+    moodTag: ReflectionMood;
+  }) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    const now = Date.now();
+    const newReflection: PersonalReflection = {
+      id: `refl-${now}-${Math.floor(Math.random() * 1000)}`,
+      title: payload.title,
+      content: payload.content,
+      moodTag: payload.moodTag,
+      pinned: false,
+      createdAtLabel: formatArabicDateTime(),
+      createdAtMs: now,
+    };
+    setReflections((prev) => [newReflection, ...prev]);
+    void saveReflectionDoc(user.uid, newReflection);
+    recordHistory({
+      actionType: 'note',
+      title: `دوّنت خاطرة جديدة: ${payload.title || payload.moodTag}`,
+      detail: `الوسم: ${payload.moodTag}`,
+      targetTab: 'overview',
+    });
+  };
+
+  const handleUpdateReflection = (
+    id: string,
+    updates: Partial<PersonalReflection>
+  ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setReflections((prev) =>
+      prev
+        .map((r) => {
+          if (r.id !== id) return r;
+          const next = { ...r, ...updates };
+          void saveReflectionDoc(user.uid, next);
+          return next;
+        })
+        .sort((a, b) => {
+          if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+          return b.createdAtMs - a.createdAtMs;
+        })
+    );
+  };
+
+  const handleDeleteReflection = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setReflections((prev) => prev.filter((r) => r.id !== id));
+    void deleteReflectionDoc(user.uid, id);
+  };
+
   const handleResetPlan = () => {
     if (!user) {
       handleRequireAuth();
@@ -1148,12 +1265,16 @@ export default function App() {
           <OverviewView
             user={user}
             canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            voiceDialect={preferences.voiceDialect}
+            quarters={quarters}
             months={months}
             domains={domains}
             courses={courses}
             bookNotes={bookNotes}
             customCategories={customCategories}
             history={history}
+            reflections={reflections}
             onGoogleSignIn={handleGoogleSignIn}
             onNavigateTab={setActiveTab}
             onJumpToMonth={handleJumpToMonth}
@@ -1162,6 +1283,9 @@ export default function App() {
             onAddCustomCategory={handleAddCustomCategory}
             onDeleteCustomCategory={handleDeleteCustomCategory}
             onDeleteHistoryEntry={handleDeleteHistoryEntry}
+            onAddReflection={handleAddReflection}
+            onUpdateReflection={handleUpdateReflection}
+            onDeleteReflection={handleDeleteReflection}
           />
         )}
 
