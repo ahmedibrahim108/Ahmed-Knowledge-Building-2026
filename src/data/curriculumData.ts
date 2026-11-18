@@ -10,6 +10,23 @@ export type MonthStatus = 'not_started' | 'in_progress' | 'completed';
 
 export type ResourceFormat = 'كتاب' | 'سلسلة محاضرات' | 'كتاب + محاضرات';
 
+export interface SmallTask {
+  id: string;
+  text: string;
+  track: 'foundational' | 'exploratory' | 'action';
+  done: boolean;
+  custom?: boolean;
+}
+
+export interface StudyResource {
+  id: string;
+  title: string;
+  type: 'كتاب' | 'سلسلة محاضرات' | 'مقال / مدخل' | 'أداة تطبيق';
+  note: string;
+  searchQuery: string;
+  custom?: boolean;
+}
+
 export interface TrackItem {
   title: string;
   author: string;
@@ -39,6 +56,8 @@ export interface MonthPlan {
   activities: MonthActivities;
   status: MonthStatus;
   notes: string;
+  tasks: SmallTask[];
+  resources: StudyResource[];
 }
 
 export interface ThinkerInfo {
@@ -65,6 +84,18 @@ export interface PersonalCourse {
   bookAuthor: string;
   applicationMilestone: string;
   completed: boolean;
+  resources: StudyResource[];
+  tasks: SmallTask[];
+}
+
+export interface BookNote {
+  id: string;
+  bookTitle: string;
+  author: string;
+  progressMarker: string;
+  content: string;
+  quotes: string;
+  updatedAt: string;
 }
 
 export interface WeeklyRhythmSlot {
@@ -240,6 +271,34 @@ export const INITIAL_COURSES: PersonalCourse[] = [
     bookAuthor: 'مرجع مكمل: أحمد بن يوسف السيد (البوصلة القرآنية)',
     applicationMilestone: 'بناء نظام بطاقات التلخيص (Zettelkasten / دفاتر القراءة) لأول شهرين.',
     completed: false,
+    resources: [
+      {
+        id: 'c1-r1',
+        title: 'كتاب: كيف تقرأ كتابًا — مورتيمر أدلر (القراءة التحليلية)',
+        type: 'كتاب',
+        note: 'أفضل مرجع عملي للتفريق بين القراءة السريعة والقراءة الفاحصة والتلخيص.',
+        searchQuery: 'كتاب كيف تقرأ كتابا مورتيمر أدلر',
+      },
+      {
+        id: 'c1-r2',
+        title: 'سلسلة البناء المنهجي — أحمد بن يوسف السيد (المحاضرات التمهيدية)',
+        type: 'سلسلة محاضرات',
+        note: 'تشرح التدرج في تلقي العلوم وتفادي التشتت بين الكتب.',
+        searchQuery: 'سلسلة البناء المنهجي أحمد بن يوسف السيد',
+      },
+      {
+        id: 'c1-r3',
+        title: 'كتاب: القراءة الذكية — ساجد العبدلي',
+        type: 'كتاب',
+        note: 'مدخل عربي خفيف لتهيئة بيئة القراءة وكتابة الملاحظات.',
+        searchQuery: 'كتاب القراءة الذكية ساجد العبدلي',
+      },
+    ],
+    tasks: [
+      { id: 'c1-t1', text: 'تطبيق طريقة القراءة الاستكشافية (فهرس + مقدمة + خاتمة) قبل البدء بأي كتاب.', track: 'action', done: false },
+      { id: 'c1-t2', text: 'إنشاء قالب ثابت لبطاقة الفكرة (اسم الكتاب + الفكرة بلغة الكاتب + صياغتي الخاصة).', track: 'action', done: false },
+      { id: 'c1-t3', text: 'تلخيص الدرس الأول من الكورس وربطه بفصل من كتاب «البوصلة القرآنية».', track: 'foundational', done: false },
+    ],
   },
   {
     id: 2,
@@ -250,6 +309,34 @@ export const INITIAL_COURSES: PersonalCourse[] = [
     bookAuthor: 'مرجع مكمل: فؤاد زكريا وعبدالله العجيري',
     applicationMilestone: 'تحليل مقالتين معاصرتين وتفكيك المقدمات والنتائج فيهما كتابيًا.',
     completed: false,
+    resources: [
+      {
+        id: 'c2-r1',
+        title: 'كتاب: التفكير العلمي — فؤاد زكريا',
+        type: 'كتاب',
+        note: 'يعرض سمات العقلية العلمية وعقبات التفكير الخرافي والانطباعي.',
+        searchQuery: 'كتاب التفكير العلمي فؤاد زكريا',
+      },
+      {
+        id: 'c2-r2',
+        title: 'كتاب: المغالطات المنطقية — عادل مصطفى',
+        type: 'كتاب',
+        note: 'مرجع تطبيقي لرصد مغالطات الحوار اليومي والإعلامي بأمثلة عربية.',
+        searchQuery: 'كتاب المغالطات المنطقية عادل مصطفى',
+      },
+      {
+        id: 'c2-r3',
+        title: 'محاضرات: صناعة المحاور / التفكير الناقد — عبدالله العجيري',
+        type: 'سلسلة محاضرات',
+        note: 'تطبيق عملي للاستدلال العقلي والتمييز بين الدعوى والبرهان.',
+        searchQuery: 'محاضرات عبدالله العجيري التفكير الناقد',
+      },
+    ],
+    tasks: [
+      { id: 'c2-t1', text: 'كتابة قائمة بأشهر 5 مغالطات منطقية ومراقبة ظهورها في النقاشات اليومية.', track: 'exploratory', done: false },
+      { id: 'c2-t2', text: 'اختيار مقال رأي وتحديد: ما الدعوى؟ ما الدليل؟ وما الفرضية المستترة؟', track: 'action', done: false },
+      { id: 'c2-t3', text: 'مراجعة تمرينات حل المشكلات في الكورس وتطبيقها على تحدٍ واقعي واحد.', track: 'action', done: false },
+    ],
   },
   {
     id: 3,
@@ -260,6 +347,34 @@ export const INITIAL_COURSES: PersonalCourse[] = [
     bookAuthor: 'مرجع مكمل: فيكتور فرانكل وإريك فروم',
     applicationMilestone: 'تدوين مواقف القرارات السريعة والبطيئة أسبوعيًا وملاحظة الانحيازات.',
     completed: false,
+    resources: [
+      {
+        id: 'c3-r1',
+        title: 'كتاب: الإنسان يبحث عن المعنى — فيكتور فرانكل',
+        type: 'كتاب',
+        note: 'يفسر كيف يحمي وجود «غاية» الإنسان من الانهيار تحت الضغوط.',
+        searchQuery: 'كتاب الإنسان يبحث عن المعنى فيكتور فرانكل',
+      },
+      {
+        id: 'c3-r2',
+        title: 'كتاب: فن الحب — إريك فروم',
+        type: 'كتاب',
+        note: 'يفرّق بين النضج العاطفي المسؤول وبين التعلق والأنوية.',
+        searchQuery: 'كتاب فن الحب إريك فروم',
+      },
+      {
+        id: 'c3-r3',
+        title: 'كتاب: التفكير السريع والبطيء — دانيال كانيمان',
+        type: 'كتاب',
+        note: 'يساعد في ضبط الاندفاع العاطفي قبل القرارات المهمة.',
+        searchQuery: 'التفكير السريع والبطيء دانيال كانيمان',
+      },
+    ],
+    tasks: [
+      { id: 'c3-t1', text: 'تطبيق قاعدة التوقف 10 ثوانٍ (تفعيل النظام البطيء) في موقف ضغط خلال الأسبوع.', track: 'action', done: false },
+      { id: 'c3-t2', text: 'تدوين 3 مواقف استثارت غضبًا أو قلقًا وتحليل «الفكرة الكامنة» خلفها.', track: 'exploratory', done: false },
+      { id: 'c3-t3', text: 'استخلاص مهارة إنصات واحدة من الكورس وتجربتها في حوار عائلي أو مهني.', track: 'action', done: false },
+    ],
   },
   {
     id: 4,
@@ -270,6 +385,34 @@ export const INITIAL_COURSES: PersonalCourse[] = [
     bookAuthor: 'مرجع مكمل: غازي القصيبي',
     applicationMilestone: 'استخلاص 5 مبادئ قيادية واقعية وتطبيق أحدها في مشروع أو فريق عمل.',
     completed: false,
+    resources: [
+      {
+        id: 'c4-r1',
+        title: 'كتاب: حياة في الإدارة — غازي القصيبي',
+        type: 'كتاب',
+        note: 'سيرة إدارية عربية غنية بدروس التفويض، التعامل مع الأزمات، وإدارة الفرق.',
+        searchQuery: 'كتاب حياة في الإدارة غازي القصيبي',
+      },
+      {
+        id: 'c4-r2',
+        title: 'مقدمة ابن خلدون — فصول السياسة والعمران والملك',
+        type: 'كتاب',
+        note: 'لفهم ديناميكيات الجماعات والقيادة والتحولات المؤسسية.',
+        searchQuery: 'فصول القيادة والعمران في مقدمة ابن خلدون',
+      },
+      {
+        id: 'c4-r3',
+        title: 'كتاب: العادات السبع للناس الأكثر فاعلية — ستيفن كوفي',
+        type: 'كتاب',
+        note: 'مرجع كلاسيكي ممتاز لربط القيادة الذاتية بالقيادة الجماعية.',
+        searchQuery: 'العادات السبع ستيفن كوفي',
+      },
+    ],
+    tasks: [
+      { id: 'c4-t1', text: 'استخراج 5 قواعد إدارية من تجربة غازي القصيبي ومقارنتها بمحتوى الكورس.', track: 'exploratory', done: false },
+      { id: 'c4-t2', text: 'إعداد خطة تفويض أو تنظيم لمهمة متكررة في عملك أو دراستك.', track: 'action', done: false },
+      { id: 'c4-t3', text: 'تقييم أسلوب تواصلك في الاجتماعات بناءً على قائمة مهارات القيادة بالكورس.', track: 'action', done: false },
+    ],
   },
   {
     id: 5,
@@ -280,6 +423,34 @@ export const INITIAL_COURSES: PersonalCourse[] = [
     bookAuthor: 'مرجع مكمل: مصطفى صادق الرافعي ومالك بن نبي',
     applicationMilestone: 'كتابة مقال نقدي أو عرض صوتي لملخص كتاب بلغة عربية سليمة ومقنعة.',
     completed: false,
+    resources: [
+      {
+        id: 'c5-r1',
+        title: 'كتاب: وحي القلم (مختارات) — مصطفى صادق الرافعي',
+        type: 'كتاب',
+        note: 'يرفع الحس البلاغي وقوة الصياغة والقدرة على التأثير الوجداني والفكري.',
+        searchQuery: 'وحي القلم مصطفى صادق الرافعي',
+      },
+      {
+        id: 'c5-r2',
+        title: 'كتاب: مشكلة الأفكار في العالم الإسلامي — مالك بن نبي',
+        type: 'كتاب',
+        note: 'يعينك على امتلاك «محتوى فكري عميق» لا مجرد مهارة إلقاء شكلية.',
+        searchQuery: 'مشكلة الأفكار في العالم الإسلامي مالك بن نبي',
+      },
+      {
+        id: 'c5-r3',
+        title: 'سلسلة: فن الإلقاء وبناء الحجة المقنعة (مختارات مسموعة)',
+        type: 'سلسلة محاضرات',
+        note: 'تمارين عملية على ترتيب الحجة: المقدمة، الدليل، المثال، والخاتمة.',
+        searchQuery: 'مهارات الإلقاء وبناء الحجة المقنعة',
+      },
+    ],
+    tasks: [
+      { id: 'c5-t1', text: 'قراءة مقالتين للرافعي بصوت مسموع لتدريب اللسان على الإيقاع اللغوي.', track: 'exploratory', done: false },
+      { id: 'c5-t2', text: 'كتابة فقرة من 150 كلمة تشرح فكرة معقدة بأسلوب بسيط ومقنع لصديق.', track: 'action', done: false },
+      { id: 'c5-t3', text: 'تسجيل ملخص صوتي لمدة 3 دقائق لكتاب الشهر والاستماع إليه لتقييم الوضوح.', track: 'action', done: false },
+    ],
   },
   {
     id: 6,
@@ -290,6 +461,34 @@ export const INITIAL_COURSES: PersonalCourse[] = [
     bookAuthor: 'مرجع مكمل: جمال حمدان ومالك بن نبي',
     applicationMilestone: 'إعداد وثيقة الحصاد السنوي ورسم خطة السنة الثانية بناءً على الفجوات.',
     completed: false,
+    resources: [
+      {
+        id: 'c6-r1',
+        title: 'كتاب: شخصية مصر (مدخل عبقرية المكان) — جمال حمدان',
+        type: 'كتاب',
+        note: 'نموذج مذهل في الرؤية الاستراتيجية الشاملة وربط المعطيات ببعضها.',
+        searchQuery: 'شخصية مصر جمال حمدان',
+      },
+      {
+        id: 'c6-r2',
+        title: 'كتاب: شروط النهضة — مالك بن نبي',
+        type: 'كتاب',
+        note: 'التفكير في المشاريع الكبرى عبر توجيه الثقافة والوقت والطاقات.',
+        searchQuery: 'شروط النهضة مالك بن نبي',
+      },
+      {
+        id: 'c6-r3',
+        title: 'أداة عملية: نموذج التخطيط السنوي ومراجعة الأرباع الأربعة',
+        type: 'أداة تطبيق',
+        note: 'تقييم ما أنجزته في الـ 12 شهرًا وبناء أهداف السنة القادمة.',
+        searchQuery: 'نموذج التخطيط الاستراتيجي الشخصي السنوي',
+      },
+    ],
+    tasks: [
+      { id: 'c6-t1', text: 'تحديد 3 فجوات معرفية أو مهارية ظهرت لك خلال العام ووضعها في أولوية السنة الثانية.', track: 'action', done: false },
+      { id: 'c6-t2', text: 'ربط مشروع عملي واحد من الكورس السادس بملخصات قراءاتك الفكرية.', track: 'action', done: false },
+      { id: 'c6-t3', text: 'مراجعة كل دفاتر التلخيص وتصدير النسخة الختامية من ملف Excel.', track: 'foundational', done: false },
+    ],
   },
 ];
 
@@ -321,6 +520,36 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'in_progress',
     notes: '',
+    resources: [
+      {
+        id: 'm1-r1',
+        title: 'سلسلة البناء المنهجي — اللقاءات التأسيسية (أحمد بن يوسف السيد)',
+        type: 'سلسلة محاضرات',
+        note: 'ابدأ بالمحاضرة الأولى والثانية لفهم معنى التدرج وعدم القفز على التأسيس.',
+        searchQuery: 'البناء المنهجي أحمد بن يوسف السيد المحاضرة الأولى',
+      },
+      {
+        id: 'm1-r2',
+        title: 'كتاب البوصلة القرآنية — أحمد بن يوسف السيد',
+        type: 'كتاب',
+        note: 'فصول ترتيب الأولويات الإيمانية والمنهجية في بناء الوعي.',
+        searchQuery: 'كتاب البوصلة القرآنية أحمد بن يوسف السيد',
+      },
+      {
+        id: 'm1-r3',
+        title: 'كتاب التفكير العلمي — فؤاد زكريا (الفصل 1 و2)',
+        type: 'كتاب',
+        note: 'سمات التفكير العلمي ومعوقات التفكير النقدي في ثقافتنا.',
+        searchQuery: 'كتاب التفكير العلمي فؤاد زكريا',
+      },
+    ],
+    tasks: [
+      { id: 'm1-t1', text: 'تثبيت أوقات الإيقاع الأسبوعي (مثلًا 30 دقيقة قراءة يوميًا + ساعة تلخيص أسبوعية).', track: 'action', done: false },
+      { id: 'm1-t2', text: 'الاستماع لأول محاضرتين في «البناء المنهجي» وتدوين 5 قواعد لتجنب القراءة العشوائية.', track: 'foundational', done: false },
+      { id: 'm1-t3', text: 'قراءة الفصل الأول والثاني من «التفكير العلمي» لفؤاد زكريا وتلخيص عقبات التفكير.', track: 'exploratory', done: false },
+      { id: 'm1-t4', text: 'قراءة الثلث الأول من «البوصلة القرآنية» وكتابة بطاقة مقارنة بين الحفظ المجرد والبناء المنهجي.', track: 'foundational', done: false },
+      { id: 'm1-t5', text: 'كتابة إجابة سؤال المناقشة في دفتر التلخيص وربطها بمبادئ الكورس الأول.', track: 'action', done: false },
+    ],
   },
   {
     id: 2,
@@ -349,6 +578,35 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'not_started',
     notes: '',
+    resources: [
+      {
+        id: 'm2-r1',
+        title: 'كتاب الطريق إلى القرآن — إبراهيم السكران',
+        type: 'كتاب',
+        note: 'التركيز على فصول أسباب قسوة القلب وبواعث التدبر العملي.',
+        searchQuery: 'كتاب الطريق إلى القرآن إبراهيم السكران',
+      },
+      {
+        id: 'm2-r2',
+        title: 'كتاب الإنسان يبحث عن المعنى — فيكتور فرانكل',
+        type: 'كتاب',
+        note: 'القسم الأول (تجربة المعتقل) ثم القسم الثاني (العلاج بالمعنى).',
+        searchQuery: 'كتاب الإنسان يبحث عن المعنى فيكتور فرانكل',
+      },
+      {
+        id: 'm2-r3',
+        title: 'مناقشة صوتية لكتاب الطريق إلى القرآن',
+        type: 'سلسلة محاضرات',
+        note: 'استماع مرافق أثناء التنقل لتثبيت الأفكار الرئيسية.',
+        searchQuery: 'مراجعة ومناقشة كتاب الطريق إلى القرآن إبراهيم السكران',
+      },
+    ],
+    tasks: [
+      { id: 'm2-t1', text: 'قراءة النصف الأول من «الطريق إلى القرآن» وتحديد أسباب «فتور التلقي».', track: 'foundational', done: false },
+      { id: 'm2-t2', text: 'قراءة القسم السردي من «الإنسان يبحث عن المعنى» (حوالي 90 صفحة) بهدوء.', track: 'exploratory', done: false },
+      { id: 'm2-t3', text: 'تلخيص الركائز الثلاث للمعنى عند فرانكل في بطاقة فكرية.', track: 'exploratory', done: false },
+      { id: 'm2-t4', text: 'عقد جلسة نقاش (أو تسجيل صوتي ذاتي) لمقارنة مفهوم المعنى في الكتابين.', track: 'action', done: false },
+    ],
   },
   {
     id: 3,
@@ -377,6 +635,35 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'not_started',
     notes: '',
+    resources: [
+      {
+        id: 'm3-r1',
+        title: 'كتاب شروط النهضة — مالك بن نبي',
+        type: 'كتاب',
+        note: 'مفاهيم الدورة الحضارية، القابلية للاستعمار، ومعادلة النهضة.',
+        searchQuery: 'كتاب شروط النهضة مالك بن نبي',
+      },
+      {
+        id: 'm3-r2',
+        title: 'مدخل صوتي إلى مشروع مالك بن نبي الحضاري',
+        type: 'سلسلة محاضرات',
+        note: 'محاضرات شارحة لفكرة عالم الأشخاص وعالم الأفكار وعالم الأشياء.',
+        searchQuery: 'محاضرات شرح مشروع مالك بن نبي شروط النهضة',
+      },
+      {
+        id: 'm3-r3',
+        title: 'وحي القلم (الجزء الأول) — مصطفى صادق الرافعي',
+        type: 'كتاب',
+        note: 'ابدأ بمقالات مثل «سمو النفس» و«في اللهب ولا تحترق» و«فلسفة الصوم».',
+        searchQuery: 'وحي القلم الجزء الأول مصطفى صادق الرافعي',
+      },
+    ],
+    tasks: [
+      { id: 'm3-t1', text: 'الاستماع لمحاضرة تمهيدية عن فكر مالك بن نبي قبل البدء في «شروط النهضة».', track: 'foundational', done: false },
+      { id: 'm3-t2', text: 'تلخيص معادلة الحضارة (الإنسان + التراب + الوقت) وأمثلتها الواقعية.', track: 'foundational', done: false },
+      { id: 'm3-t3', text: 'قراءة 6 مقالات منتقاة من «وحي القلم» وتدوين 10 أساليب بلاغية لافتة.', track: 'exploratory', done: false },
+      { id: 'm3-t4', text: 'كتابة فقرة نقدية من 200 كلمة تطبق قواعد التفكير النقدي (الكورس 2) بأسلوب عربي متين.', track: 'action', done: false },
+    ],
   },
   {
     id: 4,
@@ -405,6 +692,34 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'not_started',
     notes: '',
+    resources: [
+      {
+        id: 'm4-r1',
+        title: 'كتاب شموع النهار — عبدالله العجيري',
+        type: 'كتاب',
+        note: 'التركيز على أدلة الإيمان الكلية وكيفية بناء اليقين العقلي.',
+        searchQuery: 'كتاب شموع النهار عبدالله العجيري',
+      },
+      {
+        id: 'm4-r2',
+        title: 'محاضرات عبدالله العجيري في قضايا الإلحاد والمعرفة',
+        type: 'سلسلة محاضرات',
+        note: 'متابعة الحلقات التطبيقية في نقض الشبهات الفلسفية.',
+        searchQuery: 'محاضرات عبدالله العجيري شموع النهار',
+      },
+      {
+        id: 'm4-r3',
+        title: 'كتاب تجديد الفكر العربي — زكي نجيب محمود',
+        type: 'كتاب',
+        note: 'قراءة نقدية متوازنة: نستفيد من صرامته التحليلية ونناقش حدود الوضعية المنطقية.',
+        searchQuery: 'كتاب تجديد الفكر العربي زكي نجيب محمود',
+      },
+    ],
+    tasks: [
+      { id: 'm4-t1', text: 'رسم خريطة للأدلة العقلية الواردة في «شموع النهار».', track: 'foundational', done: false },
+      { id: 'm4-t2', text: 'قراءة الفصول الأولى من «تجديد الفكر العربي» وتحديد موقف زكي نجيب محمود من التراث.', track: 'exploratory', done: false },
+      { id: 'm4-t3', text: 'كتابة ورقة مقارنة من صفحة واحدة بين منطلقات العجيري ومنطلقات زكي نجيب محمود.', track: 'action', done: false },
+    ],
   },
   {
     id: 5,
@@ -433,6 +748,27 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'not_started',
     notes: '',
+    resources: [
+      {
+        id: 'm5-r1',
+        title: 'كتاب التفكير السريع والبطيء — دانيال كانيمان (الأجزاء 1–2)',
+        type: 'كتاب',
+        note: 'اقرأ بتأنٍّ مع تسجيل التجارب النفسية البسيطة في هامش الكتاب.',
+        searchQuery: 'كتاب التفكير السريع والبطيء دانيال كانيمان',
+      },
+      {
+        id: 'm5-r2',
+        title: 'كتاب فن الحب — إريك فروم',
+        type: 'كتاب',
+        note: 'كتاب قصير وعميق عن النضج العاطفي والاهتمام والمسؤولية.',
+        searchQuery: 'كتاب فن الحب إريك فروم',
+      },
+    ],
+    tasks: [
+      { id: 'm5-t1', text: 'تلخيص الفروق بين النظام 1 (السريع التلقائي) والنظام 2 (البطيء التحليلي).', track: 'foundational', done: false },
+      { id: 'm5-t2', text: 'قراءة «فن الحب» لإريك فروم وتحديد العناصر الأربعة للحب الناضج.', track: 'exploratory', done: false },
+      { id: 'm5-t3', text: 'تدوين 3 مواقف شخصية انخدعت فيها بتحيز الإرساء أو التوفر وتصحيحها.', track: 'action', done: false },
+    ],
   },
   {
     id: 6,
@@ -461,6 +797,34 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'not_started',
     notes: '',
+    resources: [
+      {
+        id: 'm6-r1',
+        title: 'شخصية مصر (النسخة الموجزة أو المجلد الأول — المدخل)',
+        type: 'كتاب',
+        note: 'ممتاز كمدخل قبل التوسع في الأجزاء التفصيلية للموسوعة.',
+        searchQuery: 'شخصية مصر جمال حمدان النسخة الموجزة',
+      },
+      {
+        id: 'm6-r2',
+        title: 'وثائقي ومحاضرات تعريفية بجمال حمدان ومنهجه الجغرافي',
+        type: 'سلسلة محاضرات',
+        note: 'تساعدك على تخيل الخرائط والمفاهيم الجيوسياسية التي يكتب عنها.',
+        searchQuery: 'منهج جمال حمدان في شخصية مصر محاضرة',
+      },
+      {
+        id: 'm6-r3',
+        title: 'كتاب حياة في الإدارة — غازي القصيبي',
+        type: 'كتاب',
+        note: 'قراءة ممتعة ومباشرة، دوّن المواقف الإدارية القابلة للتطبيق فورًا.',
+        searchQuery: 'كتاب حياة في الإدارة غازي القصيبي',
+      },
+    ],
+    tasks: [
+      { id: 'm6-t1', text: 'الاستماع لمحاضرة تعريفية عن منهج جمال حمدان في «شخصية مصر».', track: 'foundational', done: false },
+      { id: 'm6-t2', text: 'قراءة الفصول التأسيسية حول «عبقرية المكان» وتدوين 4 مفاهيم جغرافية-اجتماعية.', track: 'foundational', done: false },
+      { id: 'm6-t3', text: 'قراءة «حياة في الإدارة» للقصيبي واستخلاص 5 دروس قيادية للكورس الرابع.', track: 'exploratory', done: false },
+    ],
   },
   {
     id: 7,
@@ -489,6 +853,27 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'not_started',
     notes: '',
+    resources: [
+      {
+        id: 'm7-r1',
+        title: 'محاضرات الدكتور سلطان العميري (فضاءات الحرية / التأصيل العقدي)',
+        type: 'سلسلة محاضرات',
+        note: 'ركّز على ضبط المصطلحات قبل مناقشة أي قضية فكرية.',
+        searchQuery: 'محاضرات سلطان العميري فضاءات الحرية',
+      },
+      {
+        id: 'm7-r2',
+        title: 'مقدمة ابن خلدون (طبعة مشروحة أو مختصر المقدمة)',
+        type: 'كتاب',
+        note: 'التركيز على الباب الأول والثاني والثالث (العمران والعصبية والدول).',
+        searchQuery: 'شرح مقدمة ابن خلدون العصبية والعمران',
+      },
+    ],
+    tasks: [
+      { id: 'm7-t1', text: 'الاستماع لمحاضرتين لسلطان العميري مع تدوين تعريف دقيق لمفهوم الحرية المنضبطة.', track: 'foundational', done: false },
+      { id: 'm7-t2', text: 'قراءة أخطاء المؤرخين في مقدمة ابن خلدون وتلخيص قواعد التثبت من الأخبار.', track: 'exploratory', done: false },
+      { id: 'm7-t3', text: 'رسم مخطط لأطوار الدولة الخمسة عند ابن خلدون.', track: 'action', done: false },
+    ],
   },
   {
     id: 8,
@@ -517,6 +902,27 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'not_started',
     notes: '',
+    resources: [
+      {
+        id: 'm8-r1',
+        title: 'كتاب رحلتي الفكرية: في البذور والجذور والثمر — عبد الوهاب المسيري',
+        type: 'كتاب',
+        note: 'مقدمة رائعة لفهم تحولات المسيري ونقده للعلمانية الشاملة.',
+        searchQuery: 'كتاب رحلتي الفكرية عبد الوهاب المسيري',
+      },
+      {
+        id: 'm8-r2',
+        title: 'محاضرة: النموذج المعرفي وإشكالية التحيز — عبد الوهاب المسيري',
+        type: 'سلسلة محاضرات',
+        note: 'توضح كيف تتخفى الرؤية الفلسفية داخل المصطلحات «المحايدة» ظاهرًا.',
+        searchQuery: 'محاضرة إشكالية التحيز عبد الوهاب المسيري',
+      },
+    ],
+    tasks: [
+      { id: 'm8-t1', text: 'تلخيص معنى «النموذج المعرفي» و«العلمانية الجزئية مقابل الشاملة» عند المسيري.', track: 'foundational', done: false },
+      { id: 'm8-t2', text: 'استكمال النصف الثاني من «التفكير السريع والبطيء» لكانيمان.', track: 'exploratory', done: false },
+      { id: 'm8-t3', text: 'تطبيق عملي: تفكيك 3 مصطلحات شائعة وكشف الفرضيات الكامنة خلفها.', track: 'action', done: false },
+    ],
   },
   {
     id: 9,
@@ -545,6 +951,27 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'not_started',
     notes: '',
+    resources: [
+      {
+        id: 'm9-r1',
+        title: 'كتاب مشكلة الأفكار في العالم الإسلامي — مالك بن نبي',
+        type: 'كتاب',
+        note: 'التركيز على فصول الأفكار المطبوعة والموضوعة والأفكار المميتة.',
+        searchQuery: 'مشكلة الأفكار في العالم الإسلامي مالك بن نبي',
+      },
+      {
+        id: 'm9-r2',
+        title: 'تحت راية القرآن / وحي القلم ج2 — مصطفى صادق الرافعي',
+        type: 'كتاب',
+        note: 'ملاحظة كيفية دفاع الرافعي عن الهوية اللغوية والأدبية.',
+        searchQuery: 'تحت راية القرآن مصطفى صادق الرافعي',
+      },
+    ],
+    tasks: [
+      { id: 'm9-t1', text: 'تلخيص الفرق بين الفكرة الحية والفكرة الميتة والفكرة القاتلة عند مالك بن نبي.', track: 'foundational', done: false },
+      { id: 'm9-t2', text: 'قراءة مختارات من «تحت راية القرآن» أو «وحي القلم ج2» للرافعي.', track: 'exploratory', done: false },
+      { id: 'm9-t3', text: 'كتابة مقال تطبيقي (400 كلمة) يدمج وضوح الفكرة مع رصانة البيان.', track: 'action', done: false },
+    ],
   },
   {
     id: 10,
@@ -573,6 +1000,27 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'not_started',
     notes: '',
+    resources: [
+      {
+        id: 'm10-r1',
+        title: 'كتاب مآلات الخطاب المدني — إبراهيم السكران',
+        type: 'كتاب',
+        note: 'مراجعة التحولات الفكرية بأسلوب رصين موثق.',
+        searchQuery: 'كتاب مآلات الخطاب المدني إبراهيم السكران',
+      },
+      {
+        id: 'm10-r2',
+        title: 'المعقول واللامعقول في تراثنا الفكري — زكي نجيب محمود',
+        type: 'كتاب',
+        note: 'قراءة متأنية لتمييز جوانب الاتفاق والاختلاف المنهجي.',
+        searchQuery: 'المعقول واللامعقول زكي نجيب محمود',
+      },
+    ],
+    tasks: [
+      { id: 'm10-t1', text: 'قراءة «مآلات الخطاب المدني» وتلخيص منهجية تتبع تطور الأفكار.', track: 'foundational', done: false },
+      { id: 'm10-t2', text: 'قراءة 4 فصول مختارة من «المعقول واللامعقول» لزكي نجيب محمود.', track: 'exploratory', done: false },
+      { id: 'm10-t3', text: 'التدرب على «صياغة حجة الخصم بأقوى صورة لها» قبل الرد عليها كتابيًا.', track: 'action', done: false },
+    ],
   },
   {
     id: 11,
@@ -601,6 +1049,27 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'not_started',
     notes: '',
+    resources: [
+      {
+        id: 'm11-r1',
+        title: 'استراتيجية الاستعمار والتحرير — جمال حمدان',
+        type: 'كتاب',
+        note: 'قراءة تحليلية رائدة لخرائط القوى الدولية وعوامل التحرر.',
+        searchQuery: 'استراتيجية الاستعمار والتحرير جمال حمدان',
+      },
+      {
+        id: 'm11-r2',
+        title: 'الطريق إلى مكة — محمد أسد',
+        type: 'كتاب',
+        note: 'من أجمل التجارب الإنسانية والفكرية في القرن العشرين.',
+        searchQuery: 'كتاب الطريق إلى مكة محمد أسد',
+      },
+    ],
+    tasks: [
+      { id: 'm11-t1', text: 'تلخيص الخريطة الاستراتيجية التي رسمها جمال حمدان في الكتاب.', track: 'foundational', done: false },
+      { id: 'm11-t2', text: 'قراءة رحلة محمد أسد وتدوين محطات التحول العقلي والروحي فيها.', track: 'exploratory', done: false },
+      { id: 'm11-t3', text: 'كتابة خلاصة مقارنة بين النظرة الجغرافية الكلية والتجربة الفردية.', track: 'action', done: false },
+    ],
   },
   {
     id: 12,
@@ -629,6 +1098,40 @@ export const INITIAL_MONTHS: MonthPlan[] = [
     activities: { reading: false, listening: false, summarizing: false, discussing: false },
     status: 'not_started',
     notes: '',
+    resources: [
+      {
+        id: 'm12-r1',
+        title: 'كتاب رقائق القرآن — إبراهيم السكران',
+        type: 'كتاب',
+        note: 'ختام روحي هادئ يوازن الجهد الفكري والعقلي خلال العام.',
+        searchQuery: 'كتاب رقائق القرآن إبراهيم السكران',
+      },
+      {
+        id: 'm12-r2',
+        title: 'مراجعة كل دفاتر التلخيص ونوتس الكتب الخاصة بك',
+        type: 'أداة تطبيق',
+        note: 'استخرج أهم 10 أفكار ستكمل معك في السنة الثانية.',
+        searchQuery: 'طريقة مراجعة ملاحظات القراءة السنوية',
+      },
+    ],
+    tasks: [
+      { id: 'm12-t1', text: 'قراءة «رقائق القرآن» بروح هادئة ومراجعة التوازن الإيماني والفكري.', track: 'foundational', done: false },
+      { id: 'm12-t2', text: 'مراجعة نوتس جميع الكتب التي قرأتها وتجميع أفضل 10 أفكار في وثيقة الحصاد.', track: 'action', done: false },
+      { id: 'm12-t3', text: 'تصدير ملف Excel النهائي ووضع ملامح خطة السنة الثانية بناءً على اهتماماتك الجديدة.', track: 'action', done: false },
+    ],
+  },
+];
+
+export const INITIAL_BOOK_NOTES: BookNote[] = [
+  {
+    id: 'bn-sample-1',
+    bookTitle: 'البوصلة القرآنية / التفكير العلمي (بداية الشهر 1)',
+    author: 'أحمد بن يوسف السيد / فؤاد زكريا',
+    progressMarker: 'الأسبوع الأول — المقدمات التأسيسية',
+    content:
+      'القاعدة الأساسية التي استوقفتني: كثرة القراءة بدون منهج تشبه تجميع أحجار بدون مخطط هندسي. البناء يبدأ بتحديد الأولويات ثم اختيار المصادر الموثوقة وتلخيصها بلغتنا الخاصة.',
+    quotes: '«ليست العبرة بكمّ الكتب التي تمر عليها، بل بمدى قدرتك على فهم الأفكار والربط بينها ومناقشتها».',
+    updatedAt: 'مثال استرشادي — يمكنك تعديله أو إضافة كتب جديدة',
   },
 ];
 

@@ -1,4 +1,5 @@
 import { FileSpreadsheet } from 'lucide-react';
+import BrandMark from './BrandMark';
 
 export type ActiveTab =
   | 'overview'
@@ -29,13 +30,16 @@ export default function Header({
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-200">
       <div className="max-w-[1280px] mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-8">
-        {/* Zone 1: Single-line Brand Wordmark */}
+        {/* Zone 1: Single-line Brand Wordmark + Custom Emblem */}
         <button
           type="button"
           onClick={() => onSelectTab('overview')}
-          className="font-editorial text-2xl font-bold text-slate-900 tracking-tight whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1E3A5F]"
+          className="inline-flex items-center gap-2.5 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1E3A5F]"
         >
-          ميزان المعرفة
+          <BrandMark className="w-8 h-8 shrink-0" />
+          <span className="font-editorial text-2xl font-bold text-slate-900 tracking-tight">
+            ميزان المعرفة
+          </span>
         </button>
 
         {/* Zone 2: 5 concise single-line text nav links */}

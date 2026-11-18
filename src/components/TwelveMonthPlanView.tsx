@@ -2,14 +2,19 @@ import { useMemo, useState } from 'react';
 import {
   BookOpen,
   CheckCircle2,
+  CheckSquare,
   Circle,
   Clock,
   Edit3,
+  ExternalLink,
   Headphones,
   MessageSquare,
   PenLine,
+  Plus,
   RotateCcw,
   Search,
+  Square,
+  Trash2,
 } from 'lucide-react';
 import {
   DOMAINS,
@@ -18,6 +23,7 @@ import {
   MonthPlan,
   MonthStatus,
   PersonalCourse,
+  SmallTask,
 } from '../data/curriculumData';
 
 interface TwelveMonthPlanViewProps {
@@ -36,6 +42,14 @@ interface TwelveMonthPlanViewProps {
     field: 'title' | 'author' | 'pace',
     value: string
   ) => void;
+  onToggleMonthTask: (monthId: number, taskId: string) => void;
+  onAddMonthTask: (
+    monthId: number,
+    text: string,
+    track: SmallTask['track']
+  ) => void;
+  onDeleteMonthTask: (monthId: number, taskId: string) => void;
+  onOpenBookNote: (bookTitle: string, author: string) => void;
 }
 
 const QUARTER_FILTERS: Array<{ id: 0 | 1 | 2 | 3 | 4; label: string }> = [
@@ -67,6 +81,12 @@ const STATUS_META: Record<
   },
 };
 
+const TRACK_LABELS: Record<SmallTask['track'], string> = {
+  foundational: 'تأسيسي',
+  exploratory: 'استكشافي',
+  action: 'تطبيق',
+};
+
 function getDomainTitle(domainId: DomainId): string {
   return DOMAINS.find((d) => d.id === domainId)?.title ?? '';
 }
@@ -82,11 +102,18 @@ export default function TwelveMonthPlanView({
   onToggleActivity,
   onUpdateMonthNotes,
   onUpdateTrackItem,
+  onToggleMonthTask,
+  onAddMonthTask,
+  onDeleteMonthTask,
+  onOpenBookNote,
 }: TwelveMonthPlanViewProps) {
   const [quarterFilter, setQuarterFilter] = useState<0 | 1 | 2 | 3 | 4>(0);
   const [statusFilter, setStatusFilter] = useState<MonthStatus | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [isEditingTracks, setIsEditingTracks] = useState(false);
+  const [newTaskText, setNewTaskText] = useState('');
+  const [newTaskTrack, setNewTaskTrack] =
+    useState<SmallTask['track']>('foundational');
 
   const filteredMonths = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -124,12 +151,21 @@ export default function TwelveMonthPlanView({
 
   const linkedCourse = courses.find((c) => c.id === activeMonth.courseId);
   const doneCount = Object.values(activeMonth.activities).filter(Boolean).length;
+  const tasksDoneCount = activeMonth.tasks.filter((t) => t.done).length;
 
   const resetFilters = () => {
     setQuarterFilter(0);
     setStatusFilter('all');
     onChangeDomainFilter('all');
     setSearchQuery('');
+  };
+
+  const handleSubmitTask = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = newTaskText.trim();
+    if (!cleaned) return;
+    onAddMonthTask(activeMonth.id, cleaned, newTaskTrack);
+    setNewTaskText('');
   };
 
   return (
@@ -247,9 +283,7 @@ export default function TwelveMonthPlanView({
               {filteredMonths.map((month) => {
                 const isSelected = activeMonth.id === month.id;
                 const StatusIcon = STATUS_META[month.status].Icon;
-                const monthActivitiesDone = Object.values(
-                  month.activities
-                ).filter(Boolean).length;
+                const mTasksDone = month.tasks.filter((t) => t.done).length;
 
                 return (
                   <button
@@ -287,7 +321,7 @@ export default function TwelveMonthPlanView({
                       <span>{month.exploratory.author}</span>
                       <span aria-hidden="true">·</span>
                       <span className="tabular-nums">
-                        {monthActivitiesDone}/4 ركائز
+                        {mTasksDone}/{month.tasks.length} مهام
                       </span>
                     </div>
                   </button>
@@ -364,165 +398,342 @@ export default function TwelveMonthPlanView({
           {/* Parallel Tracks Comparison */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Foundational */}
-            <div className="p-5 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
-              <div className="flex items-center justify-between text-xs text-slate-500">
-                <span className="font-semibold text-[#1E3A5F]">
-                  المسار التأسيسي
-                </span>
-                <span>{activeMonth.foundational.format}</span>
+            <div className="p-5 bg-slate-50 border border-slate-200 rounded-lg flex flex-col justify-between gap-3">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-slate-500">
+                  <span className="font-semibold text-[#1E3A5F]">
+                    المسار التأسيسي
+                  </span>
+                  <span>{activeMonth.foundational.format}</span>
+                </div>
+
+                {isEditingTracks ? (
+                  <div className="space-y-2.5">
+                    <label className="block text-xs text-slate-600">
+                      الكتاب / السلسلة
+                      <input
+                        type="text"
+                        value={activeMonth.foundational.title}
+                        onChange={(e) =>
+                          onUpdateTrackItem(
+                            activeMonth.id,
+                            'foundational',
+                            'title',
+                            e.target.value
+                          )
+                        }
+                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                      />
+                    </label>
+                    <label className="block text-xs text-slate-600">
+                      المفكر
+                      <input
+                        type="text"
+                        value={activeMonth.foundational.author}
+                        onChange={(e) =>
+                          onUpdateTrackItem(
+                            activeMonth.id,
+                            'foundational',
+                            'author',
+                            e.target.value
+                          )
+                        }
+                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                      />
+                    </label>
+                    <label className="block text-xs text-slate-600">
+                      الوتيرة الأسبوعية
+                      <input
+                        type="text"
+                        value={activeMonth.foundational.pace}
+                        onChange={(e) =>
+                          onUpdateTrackItem(
+                            activeMonth.id,
+                            'foundational',
+                            'pace',
+                            e.target.value
+                          )
+                        }
+                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                      />
+                    </label>
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-900 leading-snug">
+                        {activeMonth.foundational.title}
+                      </h3>
+                      <p className="text-xs text-slate-600 mt-1">
+                        {activeMonth.foundational.author} ·{' '}
+                        {getDomainTitle(activeMonth.foundational.domainId)}
+                      </p>
+                    </div>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      {activeMonth.foundational.focus}
+                    </p>
+                  </>
+                )}
               </div>
 
-              {isEditingTracks ? (
-                <div className="space-y-2.5">
-                  <label className="block text-xs text-slate-600">
-                    الكتاب / السلسلة
-                    <input
-                      type="text"
-                      value={activeMonth.foundational.title}
-                      onChange={(e) =>
-                        onUpdateTrackItem(
-                          activeMonth.id,
-                          'foundational',
-                          'title',
-                          e.target.value
-                        )
-                      }
-                      className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                    />
-                  </label>
-                  <label className="block text-xs text-slate-600">
-                    المفكر
-                    <input
-                      type="text"
-                      value={activeMonth.foundational.author}
-                      onChange={(e) =>
-                        onUpdateTrackItem(
-                          activeMonth.id,
-                          'foundational',
-                          'author',
-                          e.target.value
-                        )
-                      }
-                      className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                    />
-                  </label>
-                  <label className="block text-xs text-slate-600">
-                    الوتيرة الأسبوعية
-                    <input
-                      type="text"
-                      value={activeMonth.foundational.pace}
-                      onChange={(e) =>
-                        onUpdateTrackItem(
-                          activeMonth.id,
-                          'foundational',
-                          'pace',
-                          e.target.value
-                        )
-                      }
-                      className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                    />
-                  </label>
+              {!isEditingTracks && (
+                <div className="pt-2.5 border-t border-slate-200/80 flex items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-500 truncate">
+                    {activeMonth.foundational.pace}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenBookNote(
+                        activeMonth.foundational.title,
+                        activeMonth.foundational.author
+                      )
+                    }
+                    className="font-semibold text-[#1E3A5F] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    نوتس الكتاب
+                  </button>
                 </div>
-              ) : (
-                <>
-                  <div>
-                    <h3 className="text-base font-semibold text-slate-900 leading-snug">
-                      {activeMonth.foundational.title}
-                    </h3>
-                    <p className="text-xs text-slate-600 mt-1">
-                      {activeMonth.foundational.author} ·{' '}
-                      {getDomainTitle(activeMonth.foundational.domainId)}
-                    </p>
-                  </div>
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    {activeMonth.foundational.focus}
-                  </p>
-                  <p className="text-xs text-slate-500 pt-2 border-t border-slate-200/80">
-                    الوتيرة: {activeMonth.foundational.pace}
-                  </p>
-                </>
               )}
             </div>
 
             {/* Exploratory */}
-            <div className="p-5 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
-              <div className="flex items-center justify-between text-xs text-slate-500">
-                <span className="font-semibold text-slate-800">
-                  المسار الاستكشافي
-                </span>
-                <span>{activeMonth.exploratory.format}</span>
+            <div className="p-5 bg-slate-50 border border-slate-200 rounded-lg flex flex-col justify-between gap-3">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-slate-500">
+                  <span className="font-semibold text-slate-800">
+                    المسار الاستكشافي
+                  </span>
+                  <span>{activeMonth.exploratory.format}</span>
+                </div>
+
+                {isEditingTracks ? (
+                  <div className="space-y-2.5">
+                    <label className="block text-xs text-slate-600">
+                      الكتاب / السلسلة
+                      <input
+                        type="text"
+                        value={activeMonth.exploratory.title}
+                        onChange={(e) =>
+                          onUpdateTrackItem(
+                            activeMonth.id,
+                            'exploratory',
+                            'title',
+                            e.target.value
+                          )
+                        }
+                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                      />
+                    </label>
+                    <label className="block text-xs text-slate-600">
+                      المفكر / الأديب
+                      <input
+                        type="text"
+                        value={activeMonth.exploratory.author}
+                        onChange={(e) =>
+                          onUpdateTrackItem(
+                            activeMonth.id,
+                            'exploratory',
+                            'author',
+                            e.target.value
+                          )
+                        }
+                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                      />
+                    </label>
+                    <label className="block text-xs text-slate-600">
+                      الوتيرة الأسبوعية
+                      <input
+                        type="text"
+                        value={activeMonth.exploratory.pace}
+                        onChange={(e) =>
+                          onUpdateTrackItem(
+                            activeMonth.id,
+                            'exploratory',
+                            'pace',
+                            e.target.value
+                          )
+                        }
+                        className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                      />
+                    </label>
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-900 leading-snug">
+                        {activeMonth.exploratory.title}
+                      </h3>
+                      <p className="text-xs text-slate-600 mt-1">
+                        {activeMonth.exploratory.author} ·{' '}
+                        {getDomainTitle(activeMonth.exploratory.domainId)}
+                      </p>
+                    </div>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      {activeMonth.exploratory.focus}
+                    </p>
+                  </>
+                )}
               </div>
 
-              {isEditingTracks ? (
-                <div className="space-y-2.5">
-                  <label className="block text-xs text-slate-600">
-                    الكتاب / السلسلة
-                    <input
-                      type="text"
-                      value={activeMonth.exploratory.title}
-                      onChange={(e) =>
-                        onUpdateTrackItem(
-                          activeMonth.id,
-                          'exploratory',
-                          'title',
-                          e.target.value
-                        )
-                      }
-                      className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                    />
-                  </label>
-                  <label className="block text-xs text-slate-600">
-                    المفكر / الأديب
-                    <input
-                      type="text"
-                      value={activeMonth.exploratory.author}
-                      onChange={(e) =>
-                        onUpdateTrackItem(
-                          activeMonth.id,
-                          'exploratory',
-                          'author',
-                          e.target.value
-                        )
-                      }
-                      className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                    />
-                  </label>
-                  <label className="block text-xs text-slate-600">
-                    الوتيرة الأسبوعية
-                    <input
-                      type="text"
-                      value={activeMonth.exploratory.pace}
-                      onChange={(e) =>
-                        onUpdateTrackItem(
-                          activeMonth.id,
-                          'exploratory',
-                          'pace',
-                          e.target.value
-                        )
-                      }
-                      className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                    />
-                  </label>
+              {!isEditingTracks && (
+                <div className="pt-2.5 border-t border-slate-200/80 flex items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-500 truncate">
+                    {activeMonth.exploratory.pace}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenBookNote(
+                        activeMonth.exploratory.title,
+                        activeMonth.exploratory.author
+                      )
+                    }
+                    className="font-semibold text-[#1E3A5F] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    نوتس الكتاب
+                  </button>
                 </div>
-              ) : (
-                <>
-                  <div>
-                    <h3 className="text-base font-semibold text-slate-900 leading-snug">
-                      {activeMonth.exploratory.title}
-                    </h3>
-                    <p className="text-xs text-slate-600 mt-1">
-                      {activeMonth.exploratory.author} ·{' '}
-                      {getDomainTitle(activeMonth.exploratory.domainId)}
-                    </p>
-                  </div>
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    {activeMonth.exploratory.focus}
-                  </p>
-                  <p className="text-xs text-slate-500 pt-2 border-t border-slate-200/80">
-                    الوتيرة: {activeMonth.exploratory.pace}
-                  </p>
-                </>
               )}
+            </div>
+          </div>
+
+          {/* Small Actionable Tasks Checklist */}
+          <div className="space-y-3 pt-1">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-slate-900">
+                المهام الصغيرة وخطوات التنفيذ في هذا الشهر
+              </h3>
+              <span className="text-xs text-slate-500 tabular-nums">
+                {tasksDoneCount} / {activeMonth.tasks.length} منجزة
+              </span>
+            </div>
+
+            <div className="border border-slate-200 rounded-lg divide-y divide-slate-200">
+              {activeMonth.tasks.map((task) => (
+                <div
+                  key={task.id}
+                  className="flex items-start justify-between gap-3 px-4 py-3 bg-white hover:bg-slate-50/70 transition-colors"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onToggleMonthTask(activeMonth.id, task.id)}
+                    aria-pressed={task.done}
+                    className="flex items-start gap-3 text-right flex-1 cursor-pointer"
+                  >
+                    {task.done ? (
+                      <CheckSquare
+                        className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <Square
+                        className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
+                        aria-hidden="true"
+                      />
+                    )}
+                    <div className="space-y-0.5">
+                      <p
+                        className={`text-xs sm:text-sm leading-relaxed ${
+                          task.done
+                            ? 'line-through text-slate-400'
+                            : 'text-slate-800'
+                        }`}
+                      >
+                        {task.text}
+                      </p>
+                      <span className="text-[11px] text-slate-500">
+                        مسار {TRACK_LABELS[task.track]}
+                      </span>
+                    </div>
+                  </button>
+
+                  {task.custom && (
+                    <button
+                      type="button"
+                      onClick={() => onDeleteMonthTask(activeMonth.id, task.id)}
+                      aria-label="حذف المهمة"
+                      className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer shrink-0"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Add custom small task */}
+            <form
+              onSubmit={handleSubmitTask}
+              className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1"
+            >
+              <input
+                type="text"
+                value={newTaskText}
+                onChange={(e) => setNewTaskText(e.target.value)}
+                placeholder="أضف مهمة صغيرة (مثلاً: قراءة الفصل الثالث من فؤاد زكريا)..."
+                aria-label="إضافة مهمة صغيرة جديدة"
+                className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+              />
+              <select
+                aria-label="مسار المهمة"
+                value={newTaskTrack}
+                onChange={(e) =>
+                  setNewTaskTrack(e.target.value as SmallTask['track'])
+                }
+                className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:border-[#1E3A5F]"
+              >
+                <option value="foundational">مسار تأسيسي</option>
+                <option value="exploratory">مسار استكشافي</option>
+                <option value="action">تطبيق عملي</option>
+              </select>
+              <button
+                type="submit"
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>إضافة مهمة</span>
+              </button>
+            </form>
+          </div>
+
+          {/* Suggested Study Resources for this Month */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-slate-900">
+              المصادر والمحاضرات المقترحة لهذا الشهر
+            </h3>
+            <div className="divide-y divide-slate-200 border border-slate-200 rounded-lg">
+              {activeMonth.resources.map((res) => (
+                <div
+                  key={res.id}
+                  className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white"
+                >
+                  <div className="space-y-0.5">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-semibold text-slate-900">
+                        {res.title}
+                      </span>
+                      <span aria-hidden="true" className="text-slate-300">
+                        ·
+                      </span>
+                      <span className="text-slate-500">{res.type}</span>
+                    </div>
+                    <p className="text-xs text-slate-600">{res.note}</p>
+                  </div>
+
+                  <a
+                    href={`https://www.google.com/search?q=${encodeURIComponent(
+                      res.searchQuery
+                    )}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs font-medium text-[#1E3A5F] hover:underline whitespace-nowrap shrink-0"
+                  >
+                    <span>بحث عن المصدر</span>
+                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                  </a>
+                </div>
+              ))}
             </div>
           </div>
 
