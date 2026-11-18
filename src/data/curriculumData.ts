@@ -129,6 +129,33 @@ export interface StudyHistoryEntry {
   createdAtMs: number;
 }
 
+export type HighlightColorKey = 'amber' | 'emerald' | 'sky' | 'rose';
+export type VoiceDialectMode = 'standard_arabic' | 'egyptian_arabic' | 'bilingual';
+export type VoiceInsertMode = 'append_paragraph' | 'append_bullet' | 'append_quote';
+export type ReadAloudVoiceName = 'Kore' | 'Puck' | 'Charon' | 'Fenrir' | 'Zephyr';
+
+export interface UserPreferences {
+  noteFontSize: 'sm' | 'base' | 'lg';
+  noteHighlightColor: HighlightColorKey;
+  notePaperTone: 'clean' | 'warm' | 'slate';
+  autoAddTimestampOnVoice: boolean;
+  voiceDialect: VoiceDialectMode;
+  voiceInsertMode: VoiceInsertMode;
+  readAloudVoice: ReadAloudVoiceName;
+  readAloudSpeed: 'normal' | 'calm';
+}
+
+export const DEFAULT_USER_PREFERENCES: UserPreferences = {
+  noteFontSize: 'base',
+  noteHighlightColor: 'amber',
+  notePaperTone: 'clean',
+  autoAddTimestampOnVoice: false,
+  voiceDialect: 'standard_arabic',
+  voiceInsertMode: 'append_paragraph',
+  readAloudVoice: 'Kore',
+  readAloudSpeed: 'normal',
+};
+
 export interface WeeklyRhythmSlot {
   id: string;
   pillar: string;

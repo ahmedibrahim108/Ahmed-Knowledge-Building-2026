@@ -58,6 +58,7 @@ app.post('/api/transcribe', async (req, res) => {
     const body = req.body as {
       audioBase64?: string;
       mimeType?: string;
+      dialect?: 'standard_arabic' | 'egyptian_arabic' | 'bilingual';
     };
 
     if (!body?.audioBase64 || typeof body.audioBase64 !== 'string') {
@@ -74,8 +75,15 @@ app.post('/api/transcribe', async (req, res) => {
       },
     };
 
+    const dialectPrompt =
+      body.dialect === 'egyptian_arabic'
+        ? 'فرّغ هذا التسجيل الصوتي بدقة إلى نص عربي مع الحفاظ على تعبيرات اللهجة المصرية الطبيعية وعلامات الترقيم المناسبة. إذا وردت مصطلحات إنجليزية اكتبها كما هي. أعد النص المفرّغ فقط بدون أي مقدمات.'
+        : body.dialect === 'bilingual'
+        ? 'فرّغ هذا التسجيل الصوتي بدقة مع ضبط العربية والإنجليزية معًا وعلامات الترقيم المناسبة. أعد النص المفرّغ فقط بدون أي مقدمات أو تعليقات.'
+        : 'فرّغ هذا التسجيل الصوتي بدقة إلى نص عربي فصيح واضح ومضبوط الإملاء مع علامات الترقيم المناسبة. إذا كان الكلام بالإنجليزية ففرّغه كما هو. أعد النص المفرّغ فقط بدون أي مقدمات أو تعليقات.';
+
     const promptPart = {
-      text: 'فرّغ هذا التسجيل الصوتي بدقة إلى نص عربي واضح ومضبوط الإملاء مع علامات الترقيم المناسبة. إذا كان الكلام بالإنجليزية ففرّغه كما هو. أعد النص المفرّغ فقط بدون أي مقدمات أو تعليقات.',
+      text: dialectPrompt,
     };
 
     let response;
@@ -110,6 +118,78 @@ app.post('/api/transcribe', async (req, res) => {
     console.error('Transcription error:', err);
     const message =
       err instanceof Error ? err.message : 'تعذر تحويل الصوت إلى نص حاليًا.';
+    res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/tts', async (req, res) => {
+  try {
+    const ai = createGeminiClient();
+    if (!ai) {
+      res.status(500).json({
+        error: 'مفتاح GEMINI_API_KEY غير مهيأ على الخادم.',
+      });
+      return;
+    }
+
+    const body = req.body as {
+      text?: string;
+      voiceName?: string;
+      speed?: 'normal' | 'calm';
+    };
+
+    const cleanText = (body?.text ?? '').trim().slice(0, 3500);
+    if (!cleanText) {
+      res.status(400).json({ error: 'لا يوجد نص للقراءة الصوتية.' });
+      return;
+    }
+
+    const allowedVoices = ['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr'];
+    const voiceName = allowedVoices.includes(body.voiceName || '')
+      ? (body.voiceName as string)
+      : 'Kore';
+
+    const style =
+      body.speed === 'calm'
+        ? 'Calm, reflective, deliberate reading pace suitable for Arabic study notes'
+        : 'Clear, warm, well-paced educational narration';
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash-lite-tts',
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: cleanText,
+              speechMetadata: { style },
+            },
+          ],
+        },
+      ],
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName },
+          },
+        },
+      },
+    });
+
+    const audioBase64 =
+      response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+
+    if (!audioBase64) {
+      res.status(500).json({ error: 'تعذر توليد الصوت حاليًا.' });
+      return;
+    }
+
+    res.json({ audioBase64, mimeType: 'audio/wav' });
+  } catch (err) {
+    console.error('TTS error:', err);
+    const message =
+      err instanceof Error ? err.message : 'تعذر تشغيل القراءة الصوتية حاليًا.';
     res.status(500).json({ error: message });
   }
 });

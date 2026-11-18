@@ -4,8 +4,8 @@
  */
 
 import { User, onAuthStateChanged } from 'firebase/auth';
-import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CheckCircle2, Lock, LogIn } from 'lucide-react';
 import CoursesView from './components/CoursesView';
 import DomainsView from './components/DomainsView';
 import Header, { ActiveTab } from './components/Header';
@@ -15,6 +15,7 @@ import TwelveMonthPlanView from './components/TwelveMonthPlanView';
 import {
   BookNote,
   CustomCategory,
+  DEFAULT_USER_PREFERENCES,
   DOMAINS,
   DomainId,
   DomainInfo,
@@ -32,6 +33,7 @@ import {
   SmallTask,
   StudyHistoryEntry,
   StudyResource,
+  UserPreferences,
 } from './data/curriculumData';
 import { auth, signInWithGoogle, signOutUser } from './firebase';
 import {
@@ -51,134 +53,10 @@ import {
   saveHistoryEntryDoc,
   saveMonthDoc,
   saveQuarterDoc,
+  saveUserPreferencesDoc,
   subscribeUserWorkspace,
 } from './services/firestoreSync';
 import { exportPlanToExcel } from './utils/excelExport';
-
-const STORAGE_QUARTERS_KEY = 'balanced_plan_quarters_v1';
-const STORAGE_MONTHS_KEY = 'balanced_plan_months_v2';
-const STORAGE_DOMAINS_KEY = 'balanced_plan_domains_v1';
-const STORAGE_COURSES_KEY = 'balanced_plan_courses_v2';
-const STORAGE_BOOK_NOTES_KEY = 'balanced_plan_book_notes_v1';
-const STORAGE_CATEGORIES_KEY = 'balanced_plan_categories_v1';
-const STORAGE_HISTORY_KEY = 'balanced_plan_history_v1';
-
-function loadQuarters(): QuarterInfo[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_QUARTERS_KEY);
-    if (!raw) return INITIAL_QUARTERS;
-    const parsed = JSON.parse(raw) as QuarterInfo[];
-    return Array.isArray(parsed) && parsed.length > 0
-      ? parsed
-      : INITIAL_QUARTERS;
-  } catch {
-    return INITIAL_QUARTERS;
-  }
-}
-
-function loadMonths(): MonthPlan[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_MONTHS_KEY);
-    if (!raw) return INITIAL_MONTHS;
-    const parsed = JSON.parse(raw) as Partial<MonthPlan>[];
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed.map((saved, idx) => {
-        const fallback = INITIAL_MONTHS[idx] ?? INITIAL_MONTHS[0];
-        return {
-          ...fallback,
-          ...saved,
-          docId: saved.docId || `month-${saved.id ?? idx + 1}`,
-          tasks:
-            Array.isArray(saved.tasks) && saved.tasks.length > 0
-              ? saved.tasks
-              : fallback.tasks,
-          resources:
-            Array.isArray(saved.resources) && saved.resources.length > 0
-              ? saved.resources
-              : fallback.resources,
-        } as MonthPlan;
-      });
-    }
-    return INITIAL_MONTHS;
-  } catch {
-    return INITIAL_MONTHS;
-  }
-}
-
-function loadDomains(): DomainInfo[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_DOMAINS_KEY);
-    if (!raw) return DOMAINS;
-    const parsed = JSON.parse(raw) as DomainInfo[];
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : DOMAINS;
-  } catch {
-    return DOMAINS;
-  }
-}
-
-function loadCourses(): PersonalCourse[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_COURSES_KEY);
-    if (!raw) return INITIAL_COURSES;
-    const parsed = JSON.parse(raw) as Partial<PersonalCourse>[];
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed.map((saved, idx) => {
-        const fallback = INITIAL_COURSES[idx] ?? INITIAL_COURSES[0];
-        return {
-          ...fallback,
-          ...saved,
-          docId: saved.docId || `course-${saved.id ?? idx + 1}`,
-          resources:
-            Array.isArray(saved.resources) && saved.resources.length > 0
-              ? saved.resources
-              : fallback.resources,
-          tasks:
-            Array.isArray(saved.tasks) && saved.tasks.length > 0
-              ? saved.tasks
-              : fallback.tasks,
-        } as PersonalCourse;
-      });
-    }
-    return INITIAL_COURSES;
-  } catch {
-    return INITIAL_COURSES;
-  }
-}
-
-function loadBookNotes(): BookNote[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_BOOK_NOTES_KEY);
-    if (!raw) return INITIAL_BOOK_NOTES;
-    const parsed = JSON.parse(raw) as BookNote[];
-    return Array.isArray(parsed) ? parsed : INITIAL_BOOK_NOTES;
-  } catch {
-    return INITIAL_BOOK_NOTES;
-  }
-}
-
-function loadCustomCategories(): CustomCategory[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_CATEGORIES_KEY);
-    if (!raw) return INITIAL_CUSTOM_CATEGORIES;
-    const parsed = JSON.parse(raw) as CustomCategory[];
-    return Array.isArray(parsed) && parsed.length > 0
-      ? parsed
-      : INITIAL_CUSTOM_CATEGORIES;
-  } catch {
-    return INITIAL_CUSTOM_CATEGORIES;
-  }
-}
-
-function loadHistory(): StudyHistoryEntry[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_HISTORY_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as StudyHistoryEntry[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
 
 function formatArabicDate(): string {
   try {
@@ -207,20 +85,25 @@ function formatArabicDateTime(): string {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
-  const [quarters, setQuarters] = useState<QuarterInfo[]>(loadQuarters);
-  const [months, setMonths] = useState<MonthPlan[]>(loadMonths);
-  const [domains, setDomains] = useState<DomainInfo[]>(loadDomains);
-  const [courses, setCourses] = useState<PersonalCourse[]>(loadCourses);
-  const [bookNotes, setBookNotes] = useState<BookNote[]>(loadBookNotes);
-  const [customCategories, setCustomCategories] =
-    useState<CustomCategory[]>(loadCustomCategories);
-  const [history, setHistory] = useState<StudyHistoryEntry[]>(loadHistory);
+  const [quarters, setQuarters] = useState<QuarterInfo[]>(INITIAL_QUARTERS);
+  const [months, setMonths] = useState<MonthPlan[]>(INITIAL_MONTHS);
+  const [domains, setDomains] = useState<DomainInfo[]>(DOMAINS);
+  const [courses, setCourses] = useState<PersonalCourse[]>(INITIAL_COURSES);
+  const [bookNotes, setBookNotes] = useState<BookNote[]>(INITIAL_BOOK_NOTES);
+  const [customCategories, setCustomCategories] = useState<CustomCategory[]>(
+    INITIAL_CUSTOM_CATEGORIES
+  );
+  const [history, setHistory] = useState<StudyHistoryEntry[]>([]);
+  const [preferences, setPreferences] = useState<UserPreferences>(
+    DEFAULT_USER_PREFERENCES
+  );
   const [activeBookNoteId, setActiveBookNoteId] = useState<string | null>(
-    () => loadBookNotes()[0]?.id ?? null
+    () => INITIAL_BOOK_NOTES[0]?.id ?? null
   );
   const [selectedMonthId, setSelectedMonthId] = useState<number>(1);
   const [domainFilter, setDomainFilter] = useState<DomainId | 'all'>('all');
   const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [authPromptNotice, setAuthPromptNotice] = useState<string | null>(null);
 
   // Firebase Auth & Sync state
   const [user, setUser] = useState<User | null>(null);
@@ -228,86 +111,23 @@ export default function App() {
   const [syncingCloud, setSyncingCloud] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const localStateRef = useRef({
-    quarters,
-    months,
-    domains,
-    courses,
-    bookNotes,
-    customCategories,
-    history,
-  });
-  localStateRef.current = {
-    quarters,
-    months,
-    domains,
-    courses,
-    bookNotes,
-    customCategories,
-    history,
+  const canEdit = Boolean(user);
+
+  const resetToDefaultView = () => {
+    setQuarters(INITIAL_QUARTERS);
+    setMonths(INITIAL_MONTHS);
+    setDomains(DOMAINS);
+    setCourses(INITIAL_COURSES);
+    setBookNotes(INITIAL_BOOK_NOTES);
+    setCustomCategories(INITIAL_CUSTOM_CATEGORIES);
+    setHistory([]);
+    setPreferences(DEFAULT_USER_PREFERENCES);
+    setActiveBookNoteId(INITIAL_BOOK_NOTES[0]?.id ?? null);
+    setDomainFilter('all');
+    setSelectedMonthId(1);
   };
 
-  // LocalStorage persistence
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_QUARTERS_KEY, JSON.stringify(quarters));
-    } catch {
-      // ignore
-    }
-  }, [quarters]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_MONTHS_KEY, JSON.stringify(months));
-    } catch {
-      // ignore
-    }
-  }, [months]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_DOMAINS_KEY, JSON.stringify(domains));
-    } catch {
-      // ignore
-    }
-  }, [domains]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_COURSES_KEY, JSON.stringify(courses));
-    } catch {
-      // ignore
-    }
-  }, [courses]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_BOOK_NOTES_KEY, JSON.stringify(bookNotes));
-    } catch {
-      // ignore
-    }
-  }, [bookNotes]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        STORAGE_CATEGORIES_KEY,
-        JSON.stringify(customCategories)
-      );
-    } catch {
-      // ignore
-    }
-  }, [customCategories]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_HISTORY_KEY, JSON.stringify(history));
-    } catch {
-      // ignore
-    }
-  }, [history]);
-
-  // Listen to Firebase Auth state & attach Firestore listeners ONLY when authenticated
+  // Listen to Firebase Auth state & attach strict per-user Firestore workspace listeners ONLY when authenticated
   useEffect(() => {
     let unsubWorkspace: (() => void) | null = null;
 
@@ -320,11 +140,24 @@ export default function App() {
         unsubWorkspace = null;
       }
 
+      // Always reset in-memory state first so switching accounts or signing out never bleeds prior account data
+      resetToDefaultView();
+
       if (nextUser) {
         setSyncingCloud(true);
         setAuthError(null);
+        setAuthPromptNotice(null);
         try {
-          await ensureUserDocumentAndSeed(nextUser, localStateRef.current);
+          await ensureUserDocumentAndSeed(nextUser, {
+            quarters: INITIAL_QUARTERS,
+            months: INITIAL_MONTHS,
+            domains: DOMAINS,
+            courses: INITIAL_COURSES,
+            bookNotes: INITIAL_BOOK_NOTES,
+            customCategories: INITIAL_CUSTOM_CATEGORIES,
+            history: [],
+            preferences: DEFAULT_USER_PREFERENCES,
+          });
           unsubWorkspace = subscribeUserWorkspace(nextUser.uid, {
             onQuarters: (items) => {
               if (items.length > 0) setQuarters(items);
@@ -347,6 +180,9 @@ export default function App() {
             onHistory: (items) => {
               setHistory(items);
             },
+            onPreferences: (prefs) => {
+              setPreferences(prefs);
+            },
           });
         } catch (err) {
           setAuthError(
@@ -368,13 +204,16 @@ export default function App() {
 
   const handleGoogleSignIn = async () => {
     setAuthError(null);
+    setAuthPromptNotice(null);
     try {
       await signInWithGoogle();
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : 'تعذر تسجيل الدخول بحساب Google.';
       if (!msg.includes('popup-closed-by-user')) {
-        setAuthError('تعذر إتمام تسجيل الدخول. تأكد من السماح بالنوافذ المنبثقة.');
+        setAuthError(
+          'تعذر إتمام تسجيل الدخول. تأكد من السماح بالنوافذ المنبثقة.'
+        );
       }
     }
   };
@@ -382,6 +221,13 @@ export default function App() {
   const handleSignOut = async () => {
     setAuthError(null);
     await signOutUser();
+  };
+
+  const handleRequireAuth = () => {
+    setAuthPromptNotice(
+      'أنت تتصفح بوضع القراءة فقط. سجّل الدخول بحساب Google لإجراء التعديلات وحفظها في مساحتك الشخصية دون التأثير على حسابات الآخرين.'
+    );
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleExportExcel = () => {
@@ -397,6 +243,7 @@ export default function App() {
   const recordHistory = (
     payload: Omit<StudyHistoryEntry, 'id' | 'timestampLabel' | 'createdAtMs'>
   ) => {
+    if (!user) return;
     const entry: StudyHistoryEntry = {
       ...payload,
       id: `hist-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -404,7 +251,7 @@ export default function App() {
       createdAtMs: Date.now(),
     };
     setHistory((prev) => [entry, ...prev].slice(0, 40));
-    if (user) void saveHistoryEntryDoc(user.uid, entry);
+    void saveHistoryEntryDoc(user.uid, entry);
   };
 
   const handleJumpToMonth = (monthId: number) => {
@@ -426,8 +273,23 @@ export default function App() {
     setActiveTab('plan');
   };
 
+  // --- Preferences CRUD ---
+  const handleUpdatePreferences = (updates: Partial<UserPreferences>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    const nextPrefs: UserPreferences = { ...preferences, ...updates };
+    setPreferences(nextPrefs);
+    void saveUserPreferencesDoc(user.uid, nextPrefs);
+  };
+
   // --- Quarter CRUD ---
   const handleAddQuarter = (title: string, subtitle: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const nextNum =
       quarters.reduce((max, q) => Math.max(max, q.number), 0) + 1;
     const newQuarter: QuarterInfo = {
@@ -437,10 +299,14 @@ export default function App() {
       subtitle,
     };
     setQuarters((prev) => [...prev, newQuarter]);
-    if (user) void saveQuarterDoc(user.uid, newQuarter);
+    void saveQuarterDoc(user.uid, newQuarter);
   };
 
   const handleUpdateQuarter = (id: string, updates: Partial<QuarterInfo>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     let updatedQuarter: QuarterInfo | null = null;
     setQuarters((prev) =>
       prev.map((q) => {
@@ -456,19 +322,23 @@ export default function App() {
         prev.map((m) => {
           if (m.quarter !== qNumber) return m;
           const nextMonth = { ...m, quarterTitle: newTitle };
-          if (user) void saveMonthDoc(user.uid, nextMonth);
+          void saveMonthDoc(user.uid, nextMonth);
           return nextMonth;
         })
       );
     }
-    if (user && updatedQuarter) {
+    if (updatedQuarter) {
       void saveQuarterDoc(user.uid, updatedQuarter);
     }
   };
 
   const handleDeleteQuarter = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setQuarters((prev) => prev.filter((q) => q.id !== id));
-    if (user) void deleteQuarterDoc(user.uid, id);
+    void deleteQuarterDoc(user.uid, id);
   };
 
   // --- Month CRUD ---
@@ -481,6 +351,10 @@ export default function App() {
     exploratoryAuthor: string;
     courseId: number;
   }) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const nextId = months.reduce((max, m) => Math.max(max, m.id), 0) + 1;
     const qObj = quarters.find((q) => q.number === payload.quarter);
     const defaultDomainF = domains[0]?.id ?? 'islamic_thought';
@@ -490,7 +364,7 @@ export default function App() {
       id: nextId,
       docId: `month-${nextId}-${Date.now()}`,
       quarter: payload.quarter,
-      quarterTitle: qObj?.title ?? `الربع ${payload.quarter}`,
+      quarterTitle: qObj?.title ?? `المرحلة ${payload.quarter}`,
       theme: payload.theme,
       foundational: {
         title: payload.foundationalTitle,
@@ -509,7 +383,7 @@ export default function App() {
         focus: 'توسيع الأفق المعرفي.',
       },
       courseId: payload.courseId,
-      discussionPrompt: 'ما أبرز فكرة تستحق النقاش والتطبيق من هذا الشهر؟',
+      discussionPrompt: 'ما أبرز فكرة تستحق النقاش والتطبيق من هذه الوحدة؟',
       applicationTask: 'تلخيص أهم فكرتين وتطبيق إحداهما خلال الأسبوع.',
       activities: {
         reading: false,
@@ -533,7 +407,14 @@ export default function App() {
 
     setMonths((prev) => [...prev, newMonth]);
     setSelectedMonthId(newMonth.id);
-    if (user) void saveMonthDoc(user.uid, newMonth);
+    void saveMonthDoc(user.uid, newMonth);
+    recordHistory({
+      actionType: 'month',
+      title: `أضفت الوحدة ${newMonth.id}: ${newMonth.theme}`,
+      detail: newMonth.quarterTitle,
+      targetTab: 'plan',
+      targetMonthId: newMonth.id,
+    });
   };
 
   const syncMonth = (updated: MonthPlan) => {
@@ -541,6 +422,10 @@ export default function App() {
   };
 
   const handleUpdateMonth = (id: number, updates: Partial<MonthPlan>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setMonths((prev) =>
       prev.map((m) => {
         if (m.id !== id) return m;
@@ -552,22 +437,34 @@ export default function App() {
   };
 
   const handleDeleteMonth = (id: number) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const target = months.find((m) => m.id === id);
     const remaining = months.filter((m) => m.id !== id);
     setMonths(remaining);
     if (selectedMonthId === id && remaining.length > 0) {
       setSelectedMonthId(remaining[0].id);
     }
-    if (user && target) {
+    if (target) {
       void deleteMonthDoc(user.uid, target.docId || `month-${target.id}`);
     }
   };
 
   const handleUpdateMonthStatus = (id: number, status: MonthStatus) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     handleUpdateMonth(id, { status });
   };
 
   const handleToggleActivity = (id: number, key: keyof MonthActivities) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setMonths((prev) =>
       prev.map((m) => {
         if (m.id !== id) return m;
@@ -575,7 +472,8 @@ export default function App() {
           ...m.activities,
           [key]: !m.activities[key],
         };
-        const completedCount = Object.values(updatedActivities).filter(Boolean).length;
+        const completedCount =
+          Object.values(updatedActivities).filter(Boolean).length;
         let nextStatus = m.status;
         if (completedCount === 4) {
           nextStatus = 'completed';
@@ -594,6 +492,10 @@ export default function App() {
   };
 
   const handleUpdateMonthNotes = (id: number, notes: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     handleUpdateMonth(id, { notes });
   };
 
@@ -603,6 +505,10 @@ export default function App() {
     field: 'title' | 'author' | 'pace' | 'domainId' | 'format' | 'focus',
     value: string
   ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setMonths((prev) =>
       prev.map((m) => {
         if (m.id !== id) return m;
@@ -620,6 +526,10 @@ export default function App() {
   };
 
   const handleToggleMonthTask = (monthId: number, taskId: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setMonths((prev) =>
       prev.map((m) => {
         if (m.id !== monthId) return m;
@@ -640,6 +550,10 @@ export default function App() {
     text: string,
     track: SmallTask['track']
   ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const newTask: SmallTask = {
       id: `m${monthId}-custom-${Date.now()}`,
       text,
@@ -658,6 +572,10 @@ export default function App() {
   };
 
   const handleDeleteMonthTask = (monthId: number, taskId: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setMonths((prev) =>
       prev.map((m) => {
         if (m.id !== monthId) return m;
@@ -677,6 +595,10 @@ export default function App() {
     type: StudyResource['type'],
     note: string
   ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const newRes: StudyResource = {
       id: `m${monthId}-res-${Date.now()}`,
       title,
@@ -696,6 +618,10 @@ export default function App() {
   };
 
   const handleDeleteMonthResource = (monthId: number, resourceId: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setMonths((prev) =>
       prev.map((m) => {
         if (m.id !== monthId) return m;
@@ -711,13 +637,17 @@ export default function App() {
 
   // --- Domain CRUD ---
   const handleAddDomain = (payload: Omit<DomainInfo, 'id' | 'order'>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const newDomain: DomainInfo = {
       ...payload,
       id: sanitizeId(`domain_${Date.now()}`),
       order: domains.length,
     };
     setDomains((prev) => [...prev, newDomain]);
-    if (user) void saveDomainDoc(user.uid, newDomain, newDomain.order ?? 0);
+    void saveDomainDoc(user.uid, newDomain, newDomain.order ?? 0);
     recordHistory({
       actionType: 'domain',
       title: `أضفت محورًا معرفيًا: ${newDomain.title}`,
@@ -727,19 +657,27 @@ export default function App() {
   };
 
   const handleUpdateDomain = (id: DomainId, updates: Partial<DomainInfo>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setDomains((prev) =>
       prev.map((d, idx) => {
         if (d.id !== id) return d;
         const next = { ...d, ...updates };
-        if (user) void saveDomainDoc(user.uid, next, next.order ?? idx);
+        void saveDomainDoc(user.uid, next, next.order ?? idx);
         return next;
       })
     );
   };
 
   const handleDeleteDomain = (id: DomainId) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setDomains((prev) => prev.filter((d) => d.id !== id));
-    if (user) void deleteDomainDoc(user.uid, id);
+    void deleteDomainDoc(user.uid, id);
   };
 
   // --- Course CRUD ---
@@ -755,6 +693,10 @@ export default function App() {
     applicationMilestone: string;
     linkedMonths: number[];
   }) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const nextId = courses.reduce((max, c) => Math.max(max, c.id), 0) + 1;
     const newCourse: PersonalCourse = {
       id: nextId,
@@ -783,6 +725,10 @@ export default function App() {
     id: number,
     updates: Partial<PersonalCourse>
   ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id !== id) return c;
@@ -802,14 +748,22 @@ export default function App() {
   };
 
   const handleDeleteCourse = (id: number) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const target = courses.find((c) => c.id === id);
     setCourses((prev) => prev.filter((c) => c.id !== id));
-    if (user && target) {
+    if (target) {
       void deleteCourseDoc(user.uid, target.docId || `course-${target.id}`);
     }
   };
 
   const handleToggleCourseTask = (courseId: number, taskId: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id !== courseId) return c;
@@ -826,6 +780,10 @@ export default function App() {
   };
 
   const handleAddCourseTask = (courseId: number, text: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const newTask: SmallTask = {
       id: `c${courseId}-custom-${Date.now()}`,
       text,
@@ -844,6 +802,10 @@ export default function App() {
   };
 
   const handleDeleteCourseTask = (courseId: number, taskId: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id !== courseId) return c;
@@ -863,6 +825,10 @@ export default function App() {
     type: StudyResource['type'],
     note: string
   ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const newRes: StudyResource = {
       id: `c${courseId}-res-${Date.now()}`,
       title,
@@ -882,6 +848,10 @@ export default function App() {
   };
 
   const handleDeleteCourseResource = (courseId: number, resourceId: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id !== courseId) return c;
@@ -905,6 +875,10 @@ export default function App() {
     lectureTitle?: string;
     categoryLabel?: string;
   }) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const newNote: BookNote = {
       id: `bn-${Date.now()}`,
       noteType: payload.noteType,
@@ -922,7 +896,7 @@ export default function App() {
     setBookNotes((prev) => [newNote, ...prev]);
     setActiveBookNoteId(newNote.id);
     setActiveTab('journal');
-    if (user) void saveBookNoteDoc(user.uid, newNote);
+    void saveBookNoteDoc(user.uid, newNote);
 
     const typeDesc =
       payload.noteType === 'course_lecture'
@@ -950,6 +924,11 @@ export default function App() {
       return;
     }
 
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+
     handleAddStructuredNote({
       noteType: 'book',
       bookTitle,
@@ -959,6 +938,20 @@ export default function App() {
   };
 
   const handleOpenCourseNote = (course: PersonalCourse) => {
+    const existing = bookNotes.find(
+      (bn) => bn.noteType === 'course_lecture' && bn.courseId === course.id
+    );
+    if (existing) {
+      setActiveBookNoteId(existing.id);
+      setActiveTab('journal');
+      return;
+    }
+
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+
     handleAddStructuredNote({
       noteType: 'course_lecture',
       bookTitle: `ملاحظات ${course.title}`,
@@ -976,17 +969,25 @@ export default function App() {
   };
 
   const handleUpdateBookNote = (id: string, updates: Partial<BookNote>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setBookNotes((prev) =>
       prev.map((bn) => {
         if (bn.id !== id) return bn;
         const next = { ...bn, ...updates, updatedAt: formatArabicDate() };
-        if (user) void saveBookNoteDoc(user.uid, next);
+        void saveBookNoteDoc(user.uid, next);
         return next;
       })
     );
   };
 
   const handleDeleteBookNote = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setBookNotes((prev) => {
       const next = prev.filter((bn) => bn.id !== id);
       if (activeBookNoteId === id) {
@@ -994,7 +995,7 @@ export default function App() {
       }
       return next;
     });
-    if (user) void deleteBookNoteDoc(user.uid, id);
+    void deleteBookNoteDoc(user.uid, id);
   };
 
   // --- Personalized Custom Categories CRUD ---
@@ -1003,6 +1004,10 @@ export default function App() {
     description: string,
     color: CustomCategory['color']
   ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     const newCat: CustomCategory = {
       id: sanitizeId(`cat_${Date.now()}`),
       title,
@@ -1011,7 +1016,7 @@ export default function App() {
       createdAtLabel: formatArabicDate(),
     };
     setCustomCategories((prev) => [newCat, ...prev]);
-    if (user) void saveCustomCategoryDoc(user.uid, newCat);
+    void saveCustomCategoryDoc(user.uid, newCat);
     recordHistory({
       actionType: 'note',
       title: `أضفت تصنيفًا شخصيًا جديدًا: ${title}`,
@@ -1021,31 +1026,39 @@ export default function App() {
   };
 
   const handleDeleteCustomCategory = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setCustomCategories((prev) => prev.filter((c) => c.id !== id));
-    if (user) void deleteCustomCategoryDoc(user.uid, id);
+    void deleteCustomCategoryDoc(user.uid, id);
   };
 
   const handleDeleteHistoryEntry = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
     setHistory((prev) => prev.filter((h) => h.id !== id));
-    if (user) void deleteHistoryEntryDoc(user.uid, id);
+    void deleteHistoryEntryDoc(user.uid, id);
   };
 
   const handleResetPlan = () => {
-    setQuarters(INITIAL_QUARTERS);
-    setMonths(INITIAL_MONTHS);
-    setDomains(DOMAINS);
-    setCourses(INITIAL_COURSES);
-    setBookNotes(INITIAL_BOOK_NOTES);
-    setCustomCategories(INITIAL_CUSTOM_CATEGORIES);
-    setActiveBookNoteId(INITIAL_BOOK_NOTES[0]?.id ?? null);
-    setDomainFilter('all');
-    setSelectedMonthId(1);
-    localStorage.removeItem(STORAGE_QUARTERS_KEY);
-    localStorage.removeItem(STORAGE_MONTHS_KEY);
-    localStorage.removeItem(STORAGE_DOMAINS_KEY);
-    localStorage.removeItem(STORAGE_COURSES_KEY);
-    localStorage.removeItem(STORAGE_BOOK_NOTES_KEY);
-    localStorage.removeItem(STORAGE_CATEGORIES_KEY);
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    resetToDefaultView();
+    // Sync defaults back to user's private workspace
+    for (const q of INITIAL_QUARTERS) void saveQuarterDoc(user.uid, q);
+    for (const m of INITIAL_MONTHS) void saveMonthDoc(user.uid, m);
+    DOMAINS.forEach((d, idx) => void saveDomainDoc(user.uid, d, idx));
+    for (const c of INITIAL_COURSES) void saveCourseDoc(user.uid, c);
+    for (const bn of INITIAL_BOOK_NOTES) void saveBookNoteDoc(user.uid, bn);
+    for (const cat of INITIAL_CUSTOM_CATEGORIES) {
+      void saveCustomCategoryDoc(user.uid, cat);
+    }
+    void saveUserPreferencesDoc(user.uid, DEFAULT_USER_PREFERENCES);
   };
 
   return (
@@ -1058,7 +1071,37 @@ export default function App() {
         syncingCloud={syncingCloud}
         onGoogleSignIn={handleGoogleSignIn}
         onSignOut={handleSignOut}
+        monthsCount={months.length}
+        domainsCount={domains.length}
+        coursesCount={courses.length}
+        notesCount={bookNotes.length}
       />
+
+      {/* Read-Only Guest Mode Banner */}
+      {authReady && !user && (
+        <div className="max-w-[1280px] w-full mx-auto px-4 sm:px-8 pt-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 bg-white border border-slate-200 rounded-xl text-xs text-slate-700">
+            <div className="flex items-start sm:items-center gap-2.5">
+              <Lock
+                className="w-4 h-4 text-[#1E3A5F] shrink-0 mt-0.5 sm:mt-0"
+                aria-hidden="true"
+              />
+              <span className="leading-relaxed">
+                {authPromptNotice ||
+                  'وضع التصفح (للقراءة فقط): يمكنك استعراض الخطة كاملة. لتخصيص خطتك أو إضافة محاور وكورسات وملاحظات في حسابك الشخصي فقط دون التأثير على الآخرين، سجّل الدخول بحساب Google.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <LogIn className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>دخول بحساب Google</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {authError && (
         <div className="max-w-[1280px] w-full mx-auto px-4 sm:px-8 pt-4">
@@ -1104,6 +1147,7 @@ export default function App() {
         {activeTab === 'overview' && (
           <OverviewView
             user={user}
+            canEdit={canEdit}
             months={months}
             domains={domains}
             courses={courses}
@@ -1123,6 +1167,9 @@ export default function App() {
 
         {activeTab === 'plan' && (
           <TwelveMonthPlanView
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            voiceDialect={preferences.voiceDialect}
             quarters={quarters}
             months={months}
             domains={domains}
@@ -1152,6 +1199,7 @@ export default function App() {
 
         {activeTab === 'domains' && (
           <DomainsView
+            canEdit={canEdit}
             domains={domains}
             months={months}
             onFilterMonthsByDomain={handleFilterByDomain}
@@ -1163,6 +1211,7 @@ export default function App() {
 
         {activeTab === 'courses' && (
           <CoursesView
+            canEdit={canEdit}
             courses={courses}
             onAddCourse={handleAddCourse}
             onUpdateCourse={handleUpdateCourse}
@@ -1179,6 +1228,10 @@ export default function App() {
 
         {activeTab === 'journal' && (
           <NotesJournalView
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            preferences={preferences}
+            onUpdatePreferences={handleUpdatePreferences}
             months={months}
             courses={courses}
             customCategories={customCategories}
@@ -1215,14 +1268,18 @@ export default function App() {
             >
               تنزيل نسخة Excel
             </button>
-            <span aria-hidden="true">·</span>
-            <button
-              type="button"
-              onClick={handleResetPlan}
-              className="text-slate-500 hover:text-slate-800 hover:underline cursor-pointer"
-            >
-              استعادة الخطة الافتراضية
-            </button>
+            {canEdit && (
+              <>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  onClick={handleResetPlan}
+                  className="text-slate-500 hover:text-slate-800 hover:underline cursor-pointer"
+                >
+                  استعادة الخطة الافتراضية
+                </button>
+              </>
+            )}
           </div>
         </div>
       </footer>

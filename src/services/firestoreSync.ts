@@ -16,11 +16,13 @@ import {
 import {
   BookNote,
   CustomCategory,
+  DEFAULT_USER_PREFERENCES,
   DomainInfo,
   MonthPlan,
   PersonalCourse,
   QuarterInfo,
   StudyHistoryEntry,
+  UserPreferences,
 } from '../data/curriculumData';
 import { OperationType, db, handleFirestoreError } from '../firebase';
 
@@ -181,6 +183,55 @@ function buildHistoryPayload(uid: string, entry: StudyHistoryEntry) {
   };
 }
 
+function buildUserPreferencesPayload(uid: string, prefs: UserPreferences) {
+  const fontSize =
+    prefs.noteFontSize === 'sm' || prefs.noteFontSize === 'lg'
+      ? prefs.noteFontSize
+      : 'base';
+  const highlightColor =
+    prefs.noteHighlightColor === 'emerald' ||
+    prefs.noteHighlightColor === 'sky' ||
+    prefs.noteHighlightColor === 'rose'
+      ? prefs.noteHighlightColor
+      : 'amber';
+  const paperTone =
+    prefs.notePaperTone === 'warm' || prefs.notePaperTone === 'slate'
+      ? prefs.notePaperTone
+      : 'clean';
+  const dialect =
+    prefs.voiceDialect === 'egyptian_arabic' ||
+    prefs.voiceDialect === 'bilingual'
+      ? prefs.voiceDialect
+      : 'standard_arabic';
+  const insertMode =
+    prefs.voiceInsertMode === 'append_bullet' ||
+    prefs.voiceInsertMode === 'append_quote'
+      ? prefs.voiceInsertMode
+      : 'append_paragraph';
+  const readAloudVoice =
+    prefs.readAloudVoice === 'Puck' ||
+    prefs.readAloudVoice === 'Charon' ||
+    prefs.readAloudVoice === 'Fenrir' ||
+    prefs.readAloudVoice === 'Zephyr'
+      ? prefs.readAloudVoice
+      : 'Kore';
+  const readAloudSpeed = prefs.readAloudSpeed === 'calm' ? 'calm' : 'normal';
+
+  return {
+    id: 'settings',
+    ownerId: uid,
+    noteFontSize: fontSize,
+    noteHighlightColor: highlightColor,
+    notePaperTone: paperTone,
+    autoAddTimestampOnVoice: Boolean(prefs.autoAddTimestampOnVoice),
+    voiceDialect: dialect,
+    voiceInsertMode: insertMode,
+    readAloudVoice,
+    readAloudSpeed,
+    updatedAt: serverTimestamp(),
+  };
+}
+
 export async function ensureUserDocumentAndSeed(
   user: User,
   seedData: {
@@ -191,6 +242,7 @@ export async function ensureUserDocumentAndSeed(
     bookNotes: BookNote[];
     customCategories: CustomCategory[];
     history: StudyHistoryEntry[];
+    preferences?: UserPreferences;
   }
 ): Promise<void> {
   const userPath = `users/${user.uid}`;
@@ -255,6 +307,14 @@ export async function ensureUserDocumentAndSeed(
         const p = buildHistoryPayload(user.uid, h);
         batch.set(doc(db, 'users', user.uid, 'history', p.id), p);
       }
+      const prefPayload = buildUserPreferencesPayload(
+        user.uid,
+        seedData.preferences ?? DEFAULT_USER_PREFERENCES
+      );
+      batch.set(
+        doc(db, 'users', user.uid, 'preferences', 'settings'),
+        prefPayload
+      );
       await batch.commit();
     } else {
       // Seed personalized custom categories if missing for returning users
@@ -272,6 +332,18 @@ export async function ensureUserDocumentAndSeed(
         }
         await batch.commit();
       }
+      // Seed default user preferences if missing for returning users
+      const prefDocRef = doc(db, 'users', user.uid, 'preferences', 'settings');
+      const existingPrefSnap = await getDoc(prefDocRef);
+      if (!existingPrefSnap.exists()) {
+        await setDoc(
+          prefDocRef,
+          buildUserPreferencesPayload(
+            user.uid,
+            seedData.preferences ?? DEFAULT_USER_PREFERENCES
+          )
+        );
+      }
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, monthsPath);
@@ -288,6 +360,7 @@ export function subscribeUserWorkspace(
     onBookNotes: (items: BookNote[]) => void;
     onCustomCategories: (items: CustomCategory[]) => void;
     onHistory: (items: StudyHistoryEntry[]) => void;
+    onPreferences?: (prefs: UserPreferences) => void;
   }
 ): () => void {
   const unsubQuarters = onSnapshot(
@@ -420,6 +493,22 @@ export function subscribeUserWorkspace(
     (err) => handleFirestoreError(err, OperationType.LIST, `users/${uid}/history`)
   );
 
+  const unsubPrefs = onSnapshot(
+    query(collection(db, 'users', uid, 'preferences'), where('ownerId', '==', uid)),
+    (snap) => {
+      const settingsDoc =
+        snap.docs.find((d) => d.id === 'settings') ?? snap.docs[0];
+      if (!settingsDoc || !callbacks.onPreferences) return;
+      const raw = settingsDoc.data() as Partial<UserPreferences>;
+      callbacks.onPreferences({
+        ...DEFAULT_USER_PREFERENCES,
+        ...raw,
+      });
+    },
+    (err) =>
+      handleFirestoreError(err, OperationType.LIST, `users/${uid}/preferences`)
+  );
+
   return () => {
     unsubQuarters();
     unsubMonths();
@@ -428,6 +517,7 @@ export function subscribeUserWorkspace(
     unsubBookNotes();
     unsubCategories();
     unsubHistory();
+    unsubPrefs();
   };
 }
 
@@ -584,5 +674,18 @@ export async function deleteHistoryEntryDoc(
     await deleteDoc(doc(db, 'users', uid, 'history', id));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function saveUserPreferencesDoc(
+  uid: string,
+  prefs: UserPreferences
+): Promise<void> {
+  const p = buildUserPreferencesPayload(uid, prefs);
+  const path = `users/${uid}/preferences/settings`;
+  try {
+    await setDoc(doc(db, 'users', uid, 'preferences', 'settings'), p);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 }

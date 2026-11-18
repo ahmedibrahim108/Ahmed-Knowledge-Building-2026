@@ -231,6 +231,32 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidUserPreferences(data, userId, prefId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'noteFontSize', 'noteHighlightColor', 'notePaperTone',
+          'autoAddTimestampOnVoice', 'voiceDialect', 'voiceInsertMode',
+          'readAloudVoice', 'readAloudSpeed', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'noteFontSize', 'noteHighlightColor', 'notePaperTone',
+          'autoAddTimestampOnVoice', 'voiceDialect', 'voiceInsertMode',
+          'readAloudVoice', 'readAloudSpeed', 'updatedAt'
+        ])
+        && data.id == prefId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.noteFontSize in ['sm', 'base', 'lg']
+        && data.noteHighlightColor in ['amber', 'emerald', 'sky', 'rose']
+        && data.notePaperTone in ['clean', 'warm', 'slate']
+        && data.autoAddTimestampOnVoice is bool
+        && data.voiceDialect in ['standard_arabic', 'egyptian_arabic', 'bilingual']
+        && data.voiceInsertMode in ['append_paragraph', 'append_bullet', 'append_quote']
+        && data.readAloudVoice in ['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr']
+        && data.readAloudSpeed in ['normal', 'calm']
+        && data.updatedAt is timestamp;
+    }
+
     // --- User Profile Document (PII Isolated to Owner) ---
     match /users/{userId} {
       allow get: if isValidId(userId) && isOwner(userId);
@@ -400,6 +426,29 @@ service cloud.firestore {
             'targetNoteId', 'targetMonthId', 'timestampLabel', 'createdAtMs', 'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(entryId) && isOwner(userId) && isVerifiedUser();
+      }
+
+      // --- User Notes & Voice Customization Preferences ---
+      match /preferences/{prefId} {
+        allow get: if isValidId(userId) && isValidId(prefId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(prefId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidUserPreferences(incoming(), userId, prefId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(prefId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidUserPreferences(incoming(), userId, prefId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'noteFontSize', 'noteHighlightColor', 'notePaperTone',
+            'autoAddTimestampOnVoice', 'voiceDialect', 'voiceInsertMode',
+            'readAloudVoice', 'readAloudSpeed', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(prefId) && isOwner(userId) && isVerifiedUser();
       }
     }
   }

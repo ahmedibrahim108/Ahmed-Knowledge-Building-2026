@@ -9,6 +9,7 @@ import {
   PersonalCourse,
   WEEKLY_RHYTHM,
 } from '../data/curriculumData';
+import { richHtmlToMarkdown, richHtmlToPlainText } from './richText';
 
 const STATUS_AR: Record<MonthStatus, string> = {
   not_started: 'لم يبدأ',
@@ -226,8 +227,8 @@ export function exportPlanToExcel(
           'التصنيف المخصص': bn.categoryLabel || '—',
           'المؤلف / المحاضر': bn.author || '—',
           'الموضع / الصفحة': bn.progressMarker || '—',
-          'النوتس والأفكار المستخلصة': bn.content || '—',
-          'اقتباسات أو أسئلة مناقشة': bn.quotes || '—',
+          'النوتس والأفكار المستخلصة': richHtmlToPlainText(bn.content) || '—',
+          'اقتباسات أو أسئلة مناقشة': richHtmlToPlainText(bn.quotes) || '—',
           'آخر تحديث': bn.updatedAt,
         }))
       : [
@@ -286,12 +287,13 @@ export function exportSingleBookNoteAsMarkdown(note: BookNote): void {
     '',
     '## النوتس والأفكار المستخلصة',
     '',
-    note.content?.trim() || '_لم تُكتب ملاحظات بعد._',
+    richHtmlToMarkdown(note.content) || '_لم تُكتب ملاحظات بعد._',
     '',
   ];
 
-  if (note.quotes?.trim()) {
-    lines.push('## اقتباسات وأسئلة للمناقشة', '', note.quotes.trim(), '');
+  const quotesMd = richHtmlToMarkdown(note.quotes);
+  if (quotesMd) {
+    lines.push('## اقتباسات وأسئلة للمناقشة', '', quotesMd, '');
   }
 
   lines.push('---', '_تم التصدير من منصة ميزان المعرفة_');
@@ -327,8 +329,8 @@ export function exportSingleBookNoteAsExcel(note: BookNote): void {
       'التصنيف': note.categoryLabel || '—',
       'المؤلف / المحاضر': note.author || '—',
       'الفصل / رقم الصفحة': note.progressMarker || '—',
-      'النوتس والأفكار المستخلصة': note.content || '—',
-      'اقتباسات أو أسئلة مناقشة': note.quotes || '—',
+      'النوتس والأفكار المستخلصة': richHtmlToPlainText(note.content) || '—',
+      'اقتباسات أو أسئلة مناقشة': richHtmlToPlainText(note.quotes) || '—',
       'آخر تحديث': note.updatedAt,
     },
   ];

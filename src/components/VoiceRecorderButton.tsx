@@ -1,14 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Mic, Square } from 'lucide-react';
+import { VoiceDialectMode } from '../data/curriculumData';
 
 interface VoiceRecorderButtonProps {
   onTranscript: (text: string) => void;
   label?: string;
+  disabled?: boolean;
+  onRequireAuth?: () => void;
+  dialect?: VoiceDialectMode;
 }
 
 export default function VoiceRecorderButton({
   onTranscript,
   label = 'إملاء صوتي',
+  disabled = false,
+  onRequireAuth,
+  dialect = 'standard_arabic',
 }: VoiceRecorderButtonProps) {
   const [status, setStatus] = useState<'idle' | 'recording' | 'transcribing'>(
     'idle'
@@ -59,6 +66,10 @@ export default function VoiceRecorderButton({
   };
 
   const handleStart = async () => {
+    if (disabled) {
+      onRequireAuth?.();
+      return;
+    }
     setErrorMsg(null);
     if (!navigator.mediaDevices?.getUserMedia) {
       setErrorMsg('المتصفح الحالي لا يدعم تسجيل الصوت.');
@@ -112,6 +123,7 @@ export default function VoiceRecorderButton({
             body: JSON.stringify({
               audioBase64,
               mimeType: actualType,
+              dialect,
             }),
           });
           const rawText = await res.text();
@@ -154,8 +166,10 @@ export default function VoiceRecorderButton({
       {status === 'idle' && (
         <button
           type="button"
+          disabled={disabled}
           onClick={handleStart}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          title={disabled ? 'سجّل الدخول بحساب Google لتفعيل التسجيل الصوتي' : label}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Mic className="w-3.5 h-3.5" aria-hidden="true" />
           <span>{label}</span>

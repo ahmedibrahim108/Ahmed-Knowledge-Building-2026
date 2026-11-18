@@ -33,6 +33,7 @@ import { ActiveTab } from './Header';
 
 interface OverviewViewProps {
   user: User | null;
+  canEdit: boolean;
   months: MonthPlan[];
   domains: DomainInfo[];
   courses: PersonalCourse[];
@@ -53,15 +54,16 @@ interface OverviewViewProps {
   onDeleteHistoryEntry: (id: string) => void;
 }
 
-const CAT_ACCENTS: Record<CustomCategory['color'], string> = {
-  navy: 'border-r-4 border-r-[#1E3A5F]',
-  emerald: 'border-r-4 border-r-emerald-600',
-  amber: 'border-r-4 border-r-amber-600',
-  slate: 'border-r-4 border-r-slate-500',
+const CAT_SWATCHES: Record<CustomCategory['color'], string> = {
+  navy: 'bg-[#1E3A5F]',
+  emerald: 'bg-emerald-600',
+  amber: 'bg-amber-600',
+  slate: 'bg-slate-500',
 };
 
 export default function OverviewView({
   user,
+  canEdit,
   months,
   domains,
   courses,
@@ -142,7 +144,7 @@ export default function OverviewView({
                 <span>مساران متوازيان</span>
                 <span aria-hidden="true">·</span>
                 <span className="tabular-nums">
-                  {months.length} وحدة دراسية · {domains.length} محاور ·{' '}
+                  {months.length} شهرًا/وحدة · {domains.length} محاور ·{' '}
                   {courses.length} كورسات
                 </span>
               </div>
@@ -152,7 +154,7 @@ export default function OverviewView({
               </h1>
 
               <p className="text-base text-slate-600 leading-relaxed max-w-2xl">
-                مساحة دراسة مرنة بدون سباقٍ قسري؛ تجمع بين التأسيس الفكري والاستكشاف المنفتح، وتُنظّم ملاحظات كتبك ومحاضرات كورساتك وسجلّك الدراسي في مكان واحد.
+                مساحة دراسة مرنة بدون سباقٍ قسري؛ تجمع بين التأسيس الفكري والاستكشاف المنفتح، وتُنظّم دفاتر تلخيص كتبك ومحاضرات كورساتك وسجلّك الدراسي في حسابك الخاص.
               </p>
             </div>
 
@@ -172,7 +174,7 @@ export default function OverviewView({
                 className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-slate-800 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors cursor-pointer"
               >
                 <NotebookPen className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-                <span>تدوين ملاحظة منظّمة</span>
+                <span>مكتبة دفاتر التلخيص</span>
               </button>
 
               {!user && (
@@ -294,15 +296,21 @@ export default function OverviewView({
             </div>
             <button
               type="button"
+              disabled={!canEdit}
+              title={
+                !canEdit
+                  ? 'سجّل الدخول بحساب Google لإضافة تصنيف جديد'
+                  : 'إضافة تصنيف جديد'
+              }
               onClick={() => setShowAddCategory((v) => !v)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
             >
               <FolderPlus className="w-3.5 h-3.5" aria-hidden="true" />
               <span>{showAddCategory ? 'إلغاء' : '+ تصنيف جديد'}</span>
             </button>
           </div>
 
-          {showAddCategory && (
+          {showAddCategory && canEdit && (
             <form
               onSubmit={handleCreateCategory}
               className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-3"
@@ -358,25 +366,29 @@ export default function OverviewView({
               return (
                 <div
                   key={cat.id}
-                  className={`p-4 bg-slate-50/70 border border-slate-200 rounded-lg flex flex-col justify-between gap-2 ${
-                    CAT_ACCENTS[cat.color]
-                  }`}
+                  className="p-4 bg-slate-50/70 border border-slate-200 rounded-lg flex flex-col justify-between gap-2"
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-2">
+                      <span
+                        aria-hidden="true"
+                        className={`w-2.5 h-2.5 rounded-xs shrink-0 ${CAT_SWATCHES[cat.color]}`}
+                      />
                       <Tag className="w-3.5 h-3.5 text-[#1E3A5F] shrink-0" aria-hidden="true" />
                       <h3 className="text-sm font-semibold text-slate-900">
                         {cat.title}
                       </h3>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => onDeleteCustomCategory(cat.id)}
-                      aria-label={`حذف ${cat.title}`}
-                      className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    </button>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteCustomCategory(cat.id)}
+                        aria-label={`حذف ${cat.title}`}
+                        className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    )}
                   </div>
                   <p className="text-xs text-slate-600 leading-relaxed">
                     {cat.description}
@@ -522,14 +534,16 @@ export default function OverviewView({
                         </span>
                       </div>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => onDeleteHistoryEntry(entry.id)}
-                      aria-label="حذف السجل"
-                      className="p-1 text-slate-300 hover:text-red-600 cursor-pointer shrink-0"
-                    >
-                      <Trash2 className="w-3 h-3" aria-hidden="true" />
-                    </button>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteHistoryEntry(entry.id)}
+                        aria-label="حذف السجل"
+                        className="p-1 text-slate-300 hover:text-red-600 cursor-pointer shrink-0"
+                      >
+                        <Trash2 className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                    )}
                   </div>
                 );
               })}

@@ -28,10 +28,14 @@ import {
   ResourceFormat,
   SmallTask,
   StudyResource,
+  VoiceDialectMode,
 } from '../data/curriculumData';
 import VoiceRecorderButton from './VoiceRecorderButton';
 
 interface TwelveMonthPlanViewProps {
+  canEdit: boolean;
+  onRequireAuth: () => void;
+  voiceDialect: VoiceDialectMode;
   quarters: QuarterInfo[];
   months: MonthPlan[];
   domains: DomainInfo[];
@@ -108,6 +112,9 @@ const TRACK_LABELS: Record<SmallTask['track'], string> = {
 };
 
 export default function TwelveMonthPlanView({
+  canEdit,
+  onRequireAuth,
+  voiceDialect,
   quarters,
   months,
   domains,
@@ -336,8 +343,10 @@ export default function TwelveMonthPlanView({
 
             <button
               type="button"
+              disabled={!canEdit}
+              title={!canEdit ? 'سجّل الدخول بحساب Google لتعديل المراحل' : undefined}
               onClick={() => setShowQuarterManager((v) => !v)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
             >
               <Settings2 className="w-3.5 h-3.5" aria-hidden="true" />
               <span>
@@ -395,7 +404,7 @@ export default function TwelveMonthPlanView({
         </div>
 
         {/* Inline Quarter Manager (Edit الربع الأول / الثاني / إضافة ربع جديد) */}
-        {showQuarterManager && (
+        {showQuarterManager && canEdit && (
           <div className="pt-4 border-t border-slate-200 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold text-slate-900">
@@ -477,7 +486,7 @@ export default function TwelveMonthPlanView({
       </div>
 
       {/* Add New Month Inline Drawer */}
-      {showAddMonth && (
+      {showAddMonth && canEdit && (
         <form
           onSubmit={handleSubmitNewMonth}
           className="bg-white border border-slate-200 rounded-xl p-6 space-y-4"
@@ -601,20 +610,26 @@ export default function TwelveMonthPlanView({
           <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
-                وحدات خطة الدراسة العامة
+                خطة الـ {months.length} شهرًا (قابلة للتوسّع)
               </h2>
               <span className="text-xs text-slate-500 tabular-nums">
-                {filteredMonths.length} من {months.length} وحدة
+                عرض {filteredMonths.length} من {months.length} شهر
               </span>
             </div>
 
             <button
               type="button"
+              disabled={!canEdit}
+              title={
+                !canEdit
+                  ? 'سجّل الدخول بحساب Google لإضافة شهر جديد'
+                  : `إضافة الشهر ${months.length + 1}`
+              }
               onClick={() => setShowAddMonth((v) => !v)}
-              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
             >
               <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>إضافة وحدة</span>
+              <span>إضافة الشهر {months.length + 1}</span>
             </button>
           </div>
 
@@ -761,14 +776,17 @@ export default function TwelveMonthPlanView({
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
+                  disabled={!canEdit}
+                  title={!canEdit ? 'سجّل الدخول لتعديل الشهر' : undefined}
                   onClick={() => setIsEditingMonth((v) => !v)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
                 >
                   <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>{isEditingMonth ? 'إنهاء التعديل' : 'تعديل الشهر'}</span>
                 </button>
 
-                {months.length > 1 &&
+                {canEdit &&
+                  months.length > 1 &&
                   (confirmDeleteMonthId === activeMonth.id ? (
                     <div className="inline-flex items-center gap-1">
                       <button
@@ -816,8 +834,9 @@ export default function TwelveMonthPlanView({
                       <button
                         key={st}
                         type="button"
+                        disabled={!canEdit}
                         onClick={() => onUpdateMonthStatus(activeMonth.id, st)}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
                           isCurrent
                             ? 'bg-white text-slate-900 shadow-xs'
                             : 'text-slate-600 hover:text-slate-900'
@@ -1143,9 +1162,10 @@ export default function TwelveMonthPlanView({
                   >
                     <button
                       type="button"
+                      disabled={!canEdit}
                       onClick={() => onToggleMonthTask(activeMonth.id, task.id)}
                       aria-pressed={task.done}
-                      className="flex items-start gap-3 text-right flex-1 cursor-pointer"
+                      className="flex items-start gap-3 text-right flex-1 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75"
                     >
                       {task.done ? (
                         <CheckSquare
@@ -1174,51 +1194,55 @@ export default function TwelveMonthPlanView({
                       </div>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => onDeleteMonthTask(activeMonth.id, task.id)}
-                      aria-label="حذف المهمة"
-                      className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer shrink-0"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    </button>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteMonthTask(activeMonth.id, task.id)}
+                        aria-label="حذف المهمة"
+                        className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
 
               {/* Add custom small task */}
-              <form
-                onSubmit={handleSubmitTask}
-                className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1"
-              >
-                <input
-                  type="text"
-                  value={newTaskText}
-                  onChange={(e) => setNewTaskText(e.target.value)}
-                  placeholder="أضف مهمة صغيرة (مثلاً: قراءة الفصل الثالث من فؤاد زكريا)..."
-                  aria-label="إضافة مهمة صغيرة جديدة"
-                  className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
-                />
-                <select
-                  aria-label="مسار المهمة"
-                  value={newTaskTrack}
-                  onChange={(e) =>
-                    setNewTaskTrack(e.target.value as SmallTask['track'])
-                  }
-                  className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:border-[#1E3A5F]"
+              {canEdit && (
+                <form
+                  onSubmit={handleSubmitTask}
+                  className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1"
                 >
-                  <option value="foundational">مسار تأسيسي</option>
-                  <option value="exploratory">مسار استكشافي</option>
-                  <option value="action">تطبيق عملي</option>
-                </select>
-                <button
-                  type="submit"
-                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>إضافة مهمة</span>
-                </button>
-              </form>
+                  <input
+                    type="text"
+                    value={newTaskText}
+                    onChange={(e) => setNewTaskText(e.target.value)}
+                    placeholder="أضف مهمة صغيرة (مثلاً: قراءة الفصل الثالث من فؤاد زكريا)..."
+                    aria-label="إضافة مهمة صغيرة جديدة"
+                    className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+                  />
+                  <select
+                    aria-label="مسار المهمة"
+                    value={newTaskTrack}
+                    onChange={(e) =>
+                      setNewTaskTrack(e.target.value as SmallTask['track'])
+                    }
+                    className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:border-[#1E3A5F]"
+                  >
+                    <option value="foundational">مسار تأسيسي</option>
+                    <option value="exploratory">مسار استكشافي</option>
+                    <option value="action">تطبيق عملي</option>
+                  </select>
+                  <button
+                    type="submit"
+                    className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>إضافة مهمة</span>
+                  </button>
+                </form>
+              )}
             </div>
 
             {/* Suggested Study Resources for this Month */}
@@ -1227,16 +1251,18 @@ export default function TwelveMonthPlanView({
                 <h3 className="text-sm font-semibold text-slate-900">
                   المصادر والمحاضرات المقترحة لهذا الشهر
                 </h3>
-                <button
-                  type="button"
-                  onClick={() => setShowAddResource((v) => !v)}
-                  className="text-xs font-medium text-[#1E3A5F] hover:underline cursor-pointer"
-                >
-                  {showAddResource ? 'إلغاء' : '+ إضافة مصدر'}
-                </button>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAddResource((v) => !v)}
+                    className="text-xs font-medium text-[#1E3A5F] hover:underline cursor-pointer"
+                  >
+                    {showAddResource ? 'إلغاء' : '+ إضافة مصدر'}
+                  </button>
+                )}
               </div>
 
-              {showAddResource && (
+              {showAddResource && canEdit && (
                 <form
                   onSubmit={handleSubmitResource}
                   className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2"
@@ -1309,16 +1335,18 @@ export default function TwelveMonthPlanView({
                         <span>بحث عن المصدر</span>
                         <ExternalLink className="w-3 h-3" aria-hidden="true" />
                       </a>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onDeleteMonthResource(activeMonth.id, res.id)
-                        }
-                        aria-label="حذف المصدر"
-                        className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                      </button>
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onDeleteMonthResource(activeMonth.id, res.id)
+                          }
+                          aria-label="حذف المصدر"
+                          className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1358,9 +1386,10 @@ export default function TwelveMonthPlanView({
                     <button
                       key={key}
                       type="button"
+                      disabled={!canEdit}
                       onClick={() => onToggleActivity(activeMonth.id, key)}
                       aria-pressed={checked}
-                      className={`p-3 rounded-lg border text-right transition-colors cursor-pointer flex flex-col gap-2 ${
+                      className={`p-3 rounded-lg border text-right transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-75 flex flex-col gap-2 ${
                         checked
                           ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
                           : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
@@ -1395,6 +1424,9 @@ export default function TwelveMonthPlanView({
                   </p>
                   <VoiceRecorderButton
                     label="ناقش الفكرة بالصوت"
+                    disabled={!canEdit}
+                    onRequireAuth={onRequireAuth}
+                    dialect={voiceDialect}
                     onTranscript={(transcript) => {
                       const prev = activeMonth.notes.trim();
                       const formatted = `«نقاش صوتي»: ${transcript}`;
@@ -1469,18 +1501,30 @@ export default function TwelveMonthPlanView({
                 </label>
                 <VoiceRecorderButton
                   label="سجّل ملاحظتك بالصوت"
+                  disabled={!canEdit}
+                  onRequireAuth={onRequireAuth}
+                  dialect={voiceDialect}
                   onTranscript={handleAppendVoiceToMonthNotes}
                 />
               </div>
               <textarea
                 id={`month-notes-${activeMonth.id}`}
                 rows={4}
+                readOnly={!canEdit}
                 value={activeMonth.notes}
-                onChange={(e) =>
-                  onUpdateMonthNotes(activeMonth.id, e.target.value)
+                onChange={(e) => {
+                  if (!canEdit) {
+                    onRequireAuth();
+                    return;
+                  }
+                  onUpdateMonthNotes(activeMonth.id, e.target.value);
+                }}
+                placeholder={
+                  canEdit
+                    ? 'اكتب هنا أو اضغط «سجّل ملاحظتك بالصوت» لإملاء خلاصة الشهر بلغتك...'
+                    : 'سجّل الدخول بحساب Google لإضافة خلاصة الشهر...'
                 }
-                placeholder="اكتب هنا أو اضغط «سجّل ملاحظتك بالصوت» لإملاء خلاصة الشهر بلغتك..."
-                className="w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#1E3A5F] focus:bg-white transition-colors leading-relaxed"
+                className="w-full p-3.5 text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#1E3A5F] focus:bg-white transition-colors leading-relaxed read-only:cursor-not-allowed"
               />
             </div>
           </div>

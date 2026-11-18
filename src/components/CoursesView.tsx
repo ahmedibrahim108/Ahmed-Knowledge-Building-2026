@@ -13,6 +13,7 @@ import {
 import { PersonalCourse, StudyResource } from '../data/curriculumData';
 
 interface CoursesViewProps {
+  canEdit: boolean;
   courses: PersonalCourse[];
   onAddCourse: (course: {
     title: string;
@@ -39,6 +40,7 @@ interface CoursesViewProps {
 }
 
 export default function CoursesView({
+  canEdit,
   courses,
   onAddCourse,
   onUpdateCourse,
@@ -128,13 +130,13 @@ export default function CoursesView({
       <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div className="space-y-2 max-w-3xl">
           <p className="text-xs text-slate-500">
-            التطوير الشخصي والمهاري · {courses.length} كورس مفعّل حاليًا
+            التطوير الشخصي والمهاري · {courses.length} كورسات مفعّلة حاليًا
           </p>
           <h1 className="font-editorial text-3xl font-bold text-slate-900">
-            الكورسات ومصادرها وملاحظات المحاضرات
+            الكورسات الـ {courses.length} ومصادرها وملاحظات المحاضرات
           </h1>
           <p className="text-sm text-slate-600 leading-relaxed">
-            يمكنك إضافة أي عدد من الكورسات الجديدة وتخصيص مصادرها ومهامها الصغيرة، كما يمكنك فتح دفتر ملاحظات مخصّص لكل محاضرة داخل أي كورس.
+            يمكنك إضافة أي عدد من الكورسات الجديدة وتخصيص مصادرها ومهامها الصغيرة، كما يُنشأ لكل كورس دفتر تلخيص مستقل داخل مكتبة دفاتر التلخيص.
           </p>
         </div>
 
@@ -144,16 +146,24 @@ export default function CoursesView({
           </span>
           <button
             type="button"
+            disabled={!canEdit}
+            title={
+              !canEdit
+                ? 'سجّل الدخول بحساب Google لإضافة كورس جديد'
+                : `إضافة الكورس ${courses.length + 1}`
+            }
             onClick={() => setShowAddCourse((v) => !v)}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
           >
             <Plus className="w-4 h-4" aria-hidden="true" />
-            <span>{showAddCourse ? 'إلغاء' : 'إضافة كورس جديد'}</span>
+            <span>
+              {showAddCourse ? 'إلغاء' : `إضافة الكورس ${courses.length + 1}`}
+            </span>
           </button>
         </div>
       </div>
 
-      {showAddCourse && (
+      {showAddCourse && canEdit && (
         <form
           onSubmit={handleCreateCourse}
           className="bg-white border border-slate-200 rounded-xl p-6 space-y-4"
@@ -262,49 +272,51 @@ export default function CoursesView({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setEditingId(isEditing ? null : course.id)
-                      }
-                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-md hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>{isEditing ? 'حفظ' : 'تخصيص'}</span>
-                    </button>
-
-                    {!isConfirmingDelete ? (
+                  {canEdit && (
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         type="button"
-                        onClick={() => setConfirmDeleteId(course.id)}
-                        aria-label={`حذف ${course.title}`}
-                        className="p-1.5 text-slate-400 hover:text-red-600 rounded-md hover:bg-red-50 cursor-pointer"
+                        onClick={() =>
+                          setEditingId(isEditing ? null : course.id)
+                        }
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-md hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>{isEditing ? 'حفظ' : 'تخصيص'}</span>
                       </button>
-                    ) : (
-                      <div className="inline-flex items-center gap-1">
+
+                      {!isConfirmingDelete ? (
                         <button
                           type="button"
-                          onClick={() => {
-                            onDeleteCourse(course.id);
-                            setConfirmDeleteId(null);
-                          }}
-                          className="px-2 py-1 text-[11px] font-medium text-white bg-red-600 rounded-md hover:bg-red-700 cursor-pointer"
+                          onClick={() => setConfirmDeleteId(course.id)}
+                          aria-label={`حذف ${course.title}`}
+                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-md hover:bg-red-50 cursor-pointer"
                         >
-                          تأكيد الحذف
+                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteId(null)}
-                          className="px-2 py-1 text-[11px] text-slate-600 bg-slate-100 rounded-md cursor-pointer"
-                        >
-                          إلغاء
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                      ) : (
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onDeleteCourse(course.id);
+                              setConfirmDeleteId(null);
+                            }}
+                            className="px-2 py-1 text-[11px] font-medium text-white bg-red-600 rounded-md hover:bg-red-700 cursor-pointer"
+                          >
+                            تأكيد الحذف
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2 py-1 text-[11px] text-slate-600 bg-slate-100 rounded-md cursor-pointer"
+                          >
+                            إلغاء
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {isEditing ? (
@@ -391,20 +403,22 @@ export default function CoursesView({
                           />
                           <span>المصادر المكملة للكورس</span>
                         </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setAddingResourceCourseId(
-                              isAddingRes ? null : course.id
-                            )
-                          }
-                          className="text-xs font-medium text-[#1E3A5F] hover:underline cursor-pointer"
-                        >
-                          {isAddingRes ? 'إلغاء' : '+ إضافة مصدر'}
-                        </button>
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setAddingResourceCourseId(
+                                isAddingRes ? null : course.id
+                              )
+                            }
+                            className="text-xs font-medium text-[#1E3A5F] hover:underline cursor-pointer"
+                          >
+                            {isAddingRes ? 'إلغاء' : '+ إضافة مصدر'}
+                          </button>
+                        )}
                       </div>
 
-                      {isAddingRes && (
+                      {isAddingRes && canEdit && (
                         <form
                           onSubmit={(e) => handleResourceSubmit(e, course.id)}
                           className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2"
@@ -486,16 +500,18 @@ export default function CoursesView({
                                 >
                                   <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
                                 </a>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    onDeleteCourseResource(course.id, res.id)
-                                  }
-                                  aria-label="حذف المصدر"
-                                  className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                                </button>
+                                {canEdit && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onDeleteCourseResource(course.id, res.id)
+                                    }
+                                    aria-label="حذف المصدر"
+                                    className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                                  </button>
+                                )}
                               </div>
                             </div>
                           ))
@@ -522,11 +538,12 @@ export default function CoursesView({
                           >
                             <button
                               type="button"
+                              disabled={!canEdit}
                               onClick={() =>
                                 onToggleCourseTask(course.id, task.id)
                               }
                               aria-pressed={task.done}
-                              className="flex items-start gap-2.5 text-right flex-1 cursor-pointer"
+                              className="flex items-start gap-2.5 text-right flex-1 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75"
                             >
                               {task.done ? (
                                 <CheckSquare
@@ -550,45 +567,49 @@ export default function CoursesView({
                               </span>
                             </button>
 
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onDeleteCourseTask(course.id, task.id)
-                              }
-                              aria-label="حذف المهمة"
-                              className="p-0.5 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                            </button>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onDeleteCourseTask(course.id, task.id)
+                                }
+                                aria-label="حذف المهمة"
+                                className="p-0.5 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                              </button>
+                            )}
                           </div>
                         ))}
                       </div>
 
-                      <form
-                        onSubmit={(e) => handleTaskSubmit(e, course.id)}
-                        className="flex items-center gap-2"
-                      >
-                        <input
-                          type="text"
-                          value={newTaskInputs[course.id] ?? ''}
-                          onChange={(e) =>
-                            setNewTaskInputs((prev) => ({
-                              ...prev,
-                              [course.id]: e.target.value,
-                            }))
-                          }
-                          placeholder="أضف مهمة تطبيقية صغيرة للكورس..."
-                          aria-label={`إضافة مهمة للكورس ${course.id}`}
-                          className="flex-1 px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
-                        />
-                        <button
-                          type="submit"
-                          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] whitespace-nowrap shrink-0 cursor-pointer"
+                      {canEdit && (
+                        <form
+                          onSubmit={(e) => handleTaskSubmit(e, course.id)}
+                          className="flex items-center gap-2"
                         >
-                          <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>إضافة</span>
-                        </button>
-                      </form>
+                          <input
+                            type="text"
+                            value={newTaskInputs[course.id] ?? ''}
+                            onChange={(e) =>
+                              setNewTaskInputs((prev) => ({
+                                ...prev,
+                                [course.id]: e.target.value,
+                              }))
+                            }
+                            placeholder="أضف مهمة تطبيقية صغيرة للكورس..."
+                            aria-label={`إضافة مهمة للكورس ${course.id}`}
+                            className="flex-1 px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+                          />
+                          <button
+                            type="submit"
+                            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>إضافة</span>
+                          </button>
+                        </form>
+                      )}
                     </div>
                   </div>
                 )}
@@ -609,22 +630,27 @@ export default function CoursesView({
                       </button>
                     </span>
                   ))}
-                  <span aria-hidden="true" className="text-slate-300">|</span>
-                  <button
-                    type="button"
-                    onClick={() => onOpenCourseNote(course)}
-                    className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-                  >
-                    + نوتس لمحاضرة
-                  </button>
+                  {canEdit && (
+                    <>
+                      <span aria-hidden="true" className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => onOpenCourseNote(course)}
+                        className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                      >
+                        + فتح دفتر تلخيص الكورس
+                      </button>
+                    </>
+                  )}
                 </div>
 
                 <button
                   type="button"
+                  disabled={!canEdit}
                   onClick={() =>
                     onUpdateCourse(course.id, { completed: !course.completed })
                   }
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
                     course.completed
                       ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
                       : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'

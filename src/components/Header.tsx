@@ -25,15 +25,11 @@ interface HeaderProps {
   syncingCloud: boolean;
   onGoogleSignIn: () => void;
   onSignOut: () => void;
+  monthsCount: number;
+  domainsCount: number;
+  coursesCount: number;
+  notesCount: number;
 }
-
-const NAV_ITEMS: Array<{ id: ActiveTab; label: string }> = [
-  { id: 'overview', label: 'لوحة المتابعة' },
-  { id: 'plan', label: 'خطة الدراسة' },
-  { id: 'domains', label: 'المحاور المعرفية' },
-  { id: 'courses', label: 'الكورسات والمراجع' },
-  { id: 'journal', label: 'دفتر الملاحظات' },
-];
 
 export default function Header({
   activeTab,
@@ -43,7 +39,18 @@ export default function Header({
   syncingCloud,
   onGoogleSignIn,
   onSignOut,
+  monthsCount,
+  domainsCount,
+  coursesCount,
+  notesCount,
 }: HeaderProps) {
+  const navItems: Array<{ id: ActiveTab; label: string }> = [
+    { id: 'overview', label: 'لوحة المتابعة' },
+    { id: 'plan', label: `الخطة (${monthsCount})` },
+    { id: 'domains', label: `المحاور (${domainsCount})` },
+    { id: 'courses', label: `الكورسات (${coursesCount})` },
+    { id: 'journal', label: `دفتر التلخيص (${notesCount})` },
+  ];
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -80,7 +87,7 @@ export default function Header({
           aria-label="التنقل الرئيسي"
           className="hidden md:flex items-center gap-6 h-full"
         >
-          {NAV_ITEMS.map((item) => {
+          {navItems.map((item) => {
             const isActive = activeTab === item.id;
             return (
               <button
@@ -216,7 +223,7 @@ export default function Header({
         aria-label="تنقل الجوال"
         className="md:hidden border-t border-slate-100 px-4 py-2 flex items-center gap-4 overflow-x-auto"
       >
-        {NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           const isActive = activeTab === item.id;
           return (
             <button

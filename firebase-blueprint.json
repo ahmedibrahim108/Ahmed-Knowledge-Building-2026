@@ -448,6 +448,71 @@
         "createdAtMs",
         "updatedAt"
       ]
+    },
+    "UserPreferencesItem": {
+      "title": "UserPreferencesItem",
+      "description": "User customization settings for rich notes formatting and voice transcription/playback.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "noteFontSize": {
+          "type": "string",
+          "enum": ["sm", "base", "lg"]
+        },
+        "noteHighlightColor": {
+          "type": "string",
+          "enum": ["amber", "emerald", "sky", "rose"]
+        },
+        "notePaperTone": {
+          "type": "string",
+          "enum": ["clean", "warm", "slate"]
+        },
+        "autoAddTimestampOnVoice": {
+          "type": "boolean"
+        },
+        "voiceDialect": {
+          "type": "string",
+          "enum": ["standard_arabic", "egyptian_arabic", "bilingual"]
+        },
+        "voiceInsertMode": {
+          "type": "string",
+          "enum": ["append_paragraph", "append_bullet", "append_quote"]
+        },
+        "readAloudVoice": {
+          "type": "string",
+          "enum": ["Kore", "Puck", "Charon", "Fenrir", "Zephyr"]
+        },
+        "readAloudSpeed": {
+          "type": "string",
+          "enum": ["normal", "calm"]
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "noteFontSize",
+        "noteHighlightColor",
+        "notePaperTone",
+        "autoAddTimestampOnVoice",
+        "voiceDialect",
+        "voiceInsertMode",
+        "readAloudVoice",
+        "readAloudSpeed",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -482,6 +547,10 @@
     "/users/{userId}/history/{entryId}": {
       "schema": { "$ref": "#/entities/StudyHistoryItem" },
       "description": "User's personalized study activity log."
+    },
+    "/users/{userId}/preferences/{prefId}": {
+      "schema": { "$ref": "#/entities/UserPreferencesItem" },
+      "description": "User's personal customization for notes editor and voice controls."
     }
   }
 }
