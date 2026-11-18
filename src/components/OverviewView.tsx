@@ -40,6 +40,7 @@ import {
   WEEKLY_RHYTHM,
 } from '../data/curriculumData';
 import { ActiveTab } from './Header';
+import ProgressCharts from './ProgressCharts';
 import PWAInstallButton from './PWAInstallButton';
 import VoiceRecorderButton from './VoiceRecorderButton';
 
@@ -250,6 +251,25 @@ export default function OverviewView({
     setRefContent('');
   };
 
+  const todayArabicDate = useMemo(() => {
+    try {
+      return new Date().toLocaleDateString('ar-EG', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+      });
+    } catch {
+      return new Date().toISOString().slice(0, 10);
+    }
+  }, []);
+
+  const DAILY_PROMPTS: Array<{ label: string; mood: ReflectionMood }> = [
+    { label: 'أهم فكرة تعلّمتها اليوم', mood: 'فكرة' },
+    { label: 'موقف أو معنى يستحق التأمل اليوم', mood: 'تأمل' },
+    { label: 'شيء أشعر بالامتنان له اليوم', mood: 'امتنان' },
+    { label: 'تركيز وهدف الغد بإذن الله', mood: 'هدف' },
+  ];
+
   return (
     <div className="space-y-8">
       {/* Personalized Greeting & Workspace Hero Split */}
@@ -441,14 +461,17 @@ export default function OverviewView({
       </section>
 
       {/* Comprehensive Progress Tracker Section */}
-      <section className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
+      <section
+        id="progress-tracker"
+        className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6"
+      >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
           <div className="space-y-1">
             <p className="text-xs text-slate-500">
-              متابعة فورية لتقدّمك في الوحدات، المراحل، الركائز الأربع، والكورسات
+              رسوم بيانية تفاعلية لمعدل إنجاز المهام، الوحدات، الركائز الأربع، والكورسات
             </p>
             <h2 className="font-editorial text-2xl font-bold text-slate-900">
-              تتبّع التقدّم الدراسي الشامل (Progress Tracker)
+              تتبع التقدم (Progress Tracker)
             </h2>
           </div>
 
@@ -470,6 +493,20 @@ export default function OverviewView({
             </button>
           </div>
         </div>
+
+        {/* Interactive Charts: Radial Completion Donut + Task Completion Bar Chart */}
+        <ProgressCharts
+          months={months}
+          quarters={quarters}
+          courses={courses}
+          overallProgressPct={overallProgressPct}
+          completedSmallTasks={completedSmallTasks}
+          totalSmallTasks={totalSmallTasks}
+          completedActivities={completedActivities}
+          totalActivities={totalActivities}
+          completedCourses={completedCourses}
+          onJumpToMonth={onJumpToMonth}
+        />
 
         {/* Overall Progress Bar + 4 Pillars Breakdown */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -679,16 +716,21 @@ export default function OverviewView({
         </div>
       </section>
 
-      {/* Personal Reflections Section (خواطري ومساحتي الخاصة) */}
-      <section className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
+      {/* Daily Personal Reflections Section (خواطر يومية) */}
+      <section
+        id="daily-reflections"
+        className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6"
+      >
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-200">
           <div className="space-y-1">
-            <div className="flex items-center gap-2 text-xs text-slate-500">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
               <Feather className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-              <span>مساحة شخصية هادئة مرتبطة بحسابك فقط</span>
+              <span>مساحة يومية هادئة مرتبطة بحسابك فقط</span>
+              <span aria-hidden="true">·</span>
+              <span className="font-medium text-[#1E3A5F]">{todayArabicDate}</span>
             </div>
             <h2 className="font-editorial text-2xl font-bold text-slate-900">
-              خواطري وتأملاتي الخاصة ({reflections.length})
+              خواطر يومية وتأملات خاصة ({reflections.length})
             </h2>
           </div>
 
@@ -720,15 +762,20 @@ export default function OverviewView({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Reflection Composer */}
+          {/* Daily Reflection Composer */}
           <form
             onSubmit={handleCreateReflection}
             className="lg:col-span-5 p-5 bg-slate-50 border border-slate-200 rounded-xl space-y-4"
           >
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-slate-900">
-                أضف خاطرة لنفسك
-              </h3>
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  اكتب خاطرة اليوم
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  دوّن ما في بالك كتابةً أو بالصوت المباشر
+                </p>
+              </div>
               <VoiceRecorderButton
                 label="خاطرة بالصوت"
                 dialect={voiceDialect}
@@ -741,6 +788,29 @@ export default function OverviewView({
                 }
               />
             </div>
+
+            {canEdit && (
+              <div className="space-y-1.5">
+                <span className="block text-[11px] font-medium text-slate-500">
+                  بداية سريعة لخاطرة اليوم:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {DAILY_PROMPTS.map((prompt) => (
+                    <button
+                      key={prompt.label}
+                      type="button"
+                      onClick={() => {
+                        setRefTitle(prompt.label);
+                        setRefMood(prompt.mood);
+                      }}
+                      className="px-2.5 py-1 text-[11px] bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-md transition-colors cursor-pointer"
+                    >
+                      + {prompt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {!canEdit && (
               <div className="flex items-center justify-between gap-2 px-3 py-2 bg-white border border-slate-200 rounded-lg text-[11px] text-slate-600">
