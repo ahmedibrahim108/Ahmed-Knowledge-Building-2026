@@ -35,6 +35,7 @@ interface CoursesViewProps {
   ) => void;
   onDeleteCourseResource: (courseId: number, resourceId: string) => void;
   onJumpToMonth: (monthId: number) => void;
+  onOpenCourseNote: (course: PersonalCourse) => void;
 }
 
 export default function CoursesView({
@@ -48,6 +49,7 @@ export default function CoursesView({
   onAddCourseResource,
   onDeleteCourseResource,
   onJumpToMonth,
+  onOpenCourseNote,
 }: CoursesViewProps) {
   const [showAddCourse, setShowAddCourse] = useState(false);
   const [newCourseTitle, setNewCourseTitle] = useState('');
@@ -126,13 +128,13 @@ export default function CoursesView({
       <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div className="space-y-2 max-w-3xl">
           <p className="text-xs text-slate-500">
-            التطوير الشخصي · مصادر مكملة ومهام تطبيقية صغيرة ({courses.length} كورسات)
+            التطوير الشخصي والمهاري · {courses.length} كورس مفعّل حاليًا
           </p>
           <h1 className="font-editorial text-3xl font-bold text-slate-900">
-            الكورسات ومصادرها وخطوات التنفيذ
+            الكورسات ومصادرها وملاحظات المحاضرات
           </h1>
           <p className="text-sm text-slate-600 leading-relaxed">
-            أضفنا لكل كورس مصادر مكملة ومهام صغيرة قابلة للمتابعة، ويمكنك إضافة كورس جديد أو تعديل الكورسات الحالية أو حذفها مع مزامنة فورية.
+            يمكنك إضافة أي عدد من الكورسات الجديدة وتخصيص مصادرها ومهامها الصغيرة، كما يمكنك فتح دفتر ملاحظات مخصّص لكل محاضرة داخل أي كورس.
           </p>
         </div>
 
@@ -593,8 +595,8 @@ export default function CoursesView({
               </div>
 
               <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2 text-xs text-slate-600">
-                  <span>الأشهر المرتبطة:</span>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                  <span>الوحدات:</span>
                   {course.linkedMonths.map((monthNum, i) => (
                     <span key={monthNum} className="inline-flex items-center gap-2">
                       {i > 0 && <span aria-hidden="true">·</span>}
@@ -603,10 +605,18 @@ export default function CoursesView({
                         onClick={() => onJumpToMonth(monthNum)}
                         className="font-semibold text-[#1E3A5F] hover:underline tabular-nums cursor-pointer"
                       >
-                        الشهر {monthNum}
+                        الوحدة {monthNum}
                       </button>
                     </span>
                   ))}
+                  <span aria-hidden="true" className="text-slate-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => onOpenCourseNote(course)}
+                    className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                  >
+                    + نوتس لمحاضرة
+                  </button>
                 </div>
 
                 <button

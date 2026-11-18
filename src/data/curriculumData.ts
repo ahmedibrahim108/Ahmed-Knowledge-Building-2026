@@ -92,14 +92,41 @@ export interface PersonalCourse {
   tasks: SmallTask[];
 }
 
+export type NoteCategoryType = 'book' | 'course_lecture' | 'general';
+
 export interface BookNote {
   id: string;
+  noteType?: NoteCategoryType;
   bookTitle: string;
   author: string;
+  courseId?: number;
+  courseTitle?: string;
+  lectureTitle?: string;
+  categoryLabel?: string;
   progressMarker: string;
   content: string;
   quotes: string;
   updatedAt: string;
+}
+
+export interface CustomCategory {
+  id: string;
+  title: string;
+  description: string;
+  color: 'navy' | 'emerald' | 'amber' | 'slate';
+  createdAtLabel: string;
+}
+
+export interface StudyHistoryEntry {
+  id: string;
+  actionType: 'note' | 'voice' | 'task' | 'course' | 'domain' | 'month';
+  title: string;
+  detail: string;
+  targetTab: 'overview' | 'plan' | 'domains' | 'courses' | 'journal';
+  targetNoteId?: string;
+  targetMonthId?: number;
+  timestampLabel: string;
+  createdAtMs: number;
 }
 
 export interface WeeklyRhythmSlot {
@@ -1153,11 +1180,40 @@ export const INITIAL_MONTHS: MonthPlan[] = [
   },
 ];
 
+export const INITIAL_CUSTOM_CATEGORIES: CustomCategory[] = [
+  {
+    id: 'cat-core-reading',
+    title: 'قراءات تأسيسية',
+    description: 'أمهات الكتب والمصادر المنهجية التي أعود إليها باستمرار.',
+    color: 'navy',
+    createdAtLabel: 'تصنيف افتراضي',
+  },
+  {
+    id: 'cat-courses-lectures',
+    title: 'محاضرات وتطبيق عملي',
+    description: 'تلخيصات المحاضرات ومشاريع الكورسات اليومية.',
+    color: 'emerald',
+    createdAtLabel: 'تصنيف افتراضي',
+  },
+  {
+    id: 'cat-review-later',
+    title: 'أفكار للمناقشة والمراجعة',
+    description: 'أسئلة نقاشية وتأملات تستحق المتابعة والحوار.',
+    color: 'amber',
+    createdAtLabel: 'تصنيف افتراضي',
+  },
+];
+
 export const INITIAL_BOOK_NOTES: BookNote[] = [
   {
     id: 'bn-sample-1',
+    noteType: 'book',
     bookTitle: 'البوصلة القرآنية / التفكير العلمي (بداية الشهر 1)',
     author: 'أحمد بن يوسف السيد / فؤاد زكريا',
+    courseId: 0,
+    courseTitle: '',
+    lectureTitle: '',
+    categoryLabel: 'قراءات تأسيسية',
     progressMarker: 'الأسبوع الأول — المقدمات التأسيسية',
     content:
       'القاعدة الأساسية التي استوقفتني: كثرة القراءة بدون منهج تشبه تجميع أحجار بدون مخطط هندسي. البناء يبدأ بتحديد الأولويات ثم اختيار المصادر الموثوقة وتلخيصها بلغتنا الخاصة.',

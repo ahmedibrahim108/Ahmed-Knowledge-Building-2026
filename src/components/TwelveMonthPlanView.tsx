@@ -296,7 +296,7 @@ export default function TwelveMonthPlanView({
           <div className="flex flex-wrap items-center gap-2">
             <div
               role="tablist"
-              aria-label="تصفية حسب الفصول الأربعة"
+              aria-label="تصفية حسب مراحل الخطة"
               className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg"
             >
               <button
@@ -310,7 +310,7 @@ export default function TwelveMonthPlanView({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                جميع الأشهر ({months.length})
+                جميع الوحدات ({months.length})
               </button>
               {quarters.map((q) => {
                 const active = quarterFilter === q.number;
@@ -342,8 +342,8 @@ export default function TwelveMonthPlanView({
               <Settings2 className="w-3.5 h-3.5" aria-hidden="true" />
               <span>
                 {showQuarterManager
-                  ? 'إغلاق تعديل الأرباع'
-                  : 'إضافة / تعديل الأرباع'}
+                  ? 'إغلاق تعديل المراحل'
+                  : 'إضافة / تعديل المراحل'}
               </span>
             </button>
           </div>
@@ -359,7 +359,7 @@ export default function TwelveMonthPlanView({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="ابحث عن مفكر أو كتاب..."
-                aria-label="ابحث في خطة 12 شهرًا"
+                aria-label="ابحث في خطة الدراسة العامة"
                 className="w-full pr-9 pl-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
               />
             </div>
@@ -601,10 +601,10 @@ export default function TwelveMonthPlanView({
           <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
-                الجدول الزمني للرحلة
+                وحدات خطة الدراسة العامة
               </h2>
               <span className="text-xs text-slate-500 tabular-nums">
-                {filteredMonths.length} من {months.length} شهرًا
+                {filteredMonths.length} من {months.length} وحدة
               </span>
             </div>
 
@@ -614,7 +614,7 @@ export default function TwelveMonthPlanView({
               className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>إضافة شهر</span>
+              <span>إضافة وحدة</span>
             </button>
           </div>
 
@@ -1388,10 +1388,23 @@ export default function TwelveMonthPlanView({
 
             {/* Discussion, Application & Linked Course */}
             <div className="divide-y divide-slate-200 border-t border-b border-slate-200 py-2 text-sm">
-              <div className="py-3 space-y-1">
-                <p className="text-xs font-semibold text-slate-500">
-                  سؤال المناقشة والفهم المقارن
-                </p>
+              <div className="py-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-slate-500">
+                    سؤال المناقشة والفهم المقارن
+                  </p>
+                  <VoiceRecorderButton
+                    label="ناقش الفكرة بالصوت"
+                    onTranscript={(transcript) => {
+                      const prev = activeMonth.notes.trim();
+                      const formatted = `«نقاش صوتي»: ${transcript}`;
+                      onUpdateMonthNotes(
+                        activeMonth.id,
+                        prev ? `${prev}\n${formatted}` : formatted
+                      );
+                    }}
+                  />
+                </div>
                 {isEditingMonth ? (
                   <textarea
                     rows={2}

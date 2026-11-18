@@ -169,17 +169,65 @@ service cloud.firestore {
 
     function isValidBookNote(data, userId, noteId) {
       return data.keys().hasAll(['id', 'ownerId', 'bookTitle', 'author', 'progressMarker', 'content', 'quotes', 'updatedAtLabel', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'ownerId', 'bookTitle', 'author', 'progressMarker', 'content', 'quotes', 'updatedAtLabel', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'noteType', 'bookTitle', 'author',
+          'courseId', 'courseTitle', 'lectureTitle', 'categoryLabel',
+          'progressMarker', 'content', 'quotes', 'updatedAtLabel', 'updatedAt'
+        ])
         && data.id == noteId
         && isValidId(data.id)
         && data.ownerId == userId
         && data.ownerId == request.auth.uid
+        && (!('noteType' in data) || data.noteType in ['book', 'course_lecture', 'general'])
         && isValidStr(data.bookTitle, 1, 300)
         && isValidStr(data.author, 0, 200)
+        && (!('courseId' in data) || (data.courseId is int && data.courseId >= 0 && data.courseId <= 1000))
+        && (!('courseTitle' in data) || isValidStr(data.courseTitle, 0, 250))
+        && (!('lectureTitle' in data) || isValidStr(data.lectureTitle, 0, 250))
+        && (!('categoryLabel' in data) || isValidStr(data.categoryLabel, 0, 120))
         && isValidStr(data.progressMarker, 0, 200)
         && isValidStr(data.content, 0, 40000)
         && isValidStr(data.quotes, 0, 10000)
         && isValidStr(data.updatedAtLabel, 0, 100)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCustomCategory(data, userId, categoryId) {
+      return data.keys().hasAll(['id', 'ownerId', 'title', 'description', 'color', 'createdAtLabel', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerId', 'title', 'description', 'color', 'createdAtLabel', 'updatedAt'])
+        && data.id == categoryId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && isValidStr(data.title, 1, 120)
+        && isValidStr(data.description, 0, 300)
+        && data.color in ['navy', 'emerald', 'amber', 'slate']
+        && isValidStr(data.createdAtLabel, 0, 100)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidHistoryEntry(data, userId, entryId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'actionType', 'title', 'detail',
+          'targetTab', 'timestampLabel', 'createdAtMs', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'actionType', 'title', 'detail',
+          'targetTab', 'targetNoteId', 'targetMonthId',
+          'timestampLabel', 'createdAtMs', 'updatedAt'
+        ])
+        && data.id == entryId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.actionType in ['note', 'voice', 'task', 'course', 'domain', 'month']
+        && isValidStr(data.title, 1, 200)
+        && isValidStr(data.detail, 0, 400)
+        && data.targetTab in ['overview', 'plan', 'domains', 'courses', 'journal']
+        && (!('targetNoteId' in data) || isValidStr(data.targetNoteId, 0, 128))
+        && (!('targetMonthId' in data) || (data.targetMonthId is int && data.targetMonthId >= 0 && data.targetMonthId <= 1000))
+        && isValidStr(data.timestampLabel, 0, 100)
+        && data.createdAtMs is int && data.createdAtMs >= 0
         && data.updatedAt is timestamp;
     }
 
@@ -288,7 +336,7 @@ service cloud.firestore {
         allow delete: if isValidId(userId) && isValidId(courseId) && isOwner(userId) && isVerifiedUser();
       }
 
-      // --- Book Notes ---
+      // --- Book & Lecture Notes ---
       match /bookNotes/{noteId} {
         allow get: if isValidId(userId) && isValidId(noteId) && isOwner(userId) && isVerifiedUser();
         allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
@@ -304,9 +352,54 @@ service cloud.firestore {
           && incoming().ownerId == existing().ownerId
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly([
-            'bookTitle', 'author', 'progressMarker', 'content', 'quotes', 'updatedAtLabel', 'updatedAt'
+            'noteType', 'bookTitle', 'author', 'courseId', 'courseTitle',
+            'lectureTitle', 'categoryLabel', 'progressMarker', 'content',
+            'quotes', 'updatedAtLabel', 'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(noteId) && isOwner(userId) && isVerifiedUser();
+      }
+
+      // --- Personalized Categories ---
+      match /customCategories/{categoryId} {
+        allow get: if isValidId(userId) && isValidId(categoryId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(categoryId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidCustomCategory(incoming(), userId, categoryId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(categoryId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidCustomCategory(incoming(), userId, categoryId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'description', 'color', 'createdAtLabel', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(categoryId) && isOwner(userId) && isVerifiedUser();
+      }
+
+      // --- Study Activity History ---
+      match /history/{entryId} {
+        allow get: if isValidId(userId) && isValidId(entryId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(entryId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidHistoryEntry(incoming(), userId, entryId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(entryId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidHistoryEntry(incoming(), userId, entryId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'actionType', 'title', 'detail', 'targetTab',
+            'targetNoteId', 'targetMonthId', 'timestampLabel', 'createdAtMs', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(entryId) && isOwner(userId) && isVerifiedUser();
       }
     }
   }

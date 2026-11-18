@@ -1,39 +1,87 @@
 import { useState } from 'react';
+import { User } from 'firebase/auth';
 import {
   ArrowLeft,
   BookOpen,
   CheckCircle2,
   Clock,
-  FileSpreadsheet,
+  FolderPlus,
+  GraduationCap,
   Headphones,
+  History,
   Layers,
+  LogIn,
   MessageSquare,
+  NotebookPen,
   PenLine,
+  Plus,
+  Tag,
+  Trash2,
 } from 'lucide-react';
 import {
+  BookNote,
+  CustomCategory,
+  DomainId,
+  DomainInfo,
   HERO_IMAGE_PATH,
   MonthPlan,
   PersonalCourse,
+  StudyHistoryEntry,
   WEEKLY_RHYTHM,
 } from '../data/curriculumData';
 import { ActiveTab } from './Header';
 
 interface OverviewViewProps {
+  user: User | null;
   months: MonthPlan[];
+  domains: DomainInfo[];
   courses: PersonalCourse[];
+  bookNotes: BookNote[];
+  customCategories: CustomCategory[];
+  history: StudyHistoryEntry[];
+  onGoogleSignIn: () => void;
   onNavigateTab: (tab: ActiveTab) => void;
   onJumpToMonth: (monthId: number) => void;
-  onExportExcel: () => void;
+  onFilterByDomain: (domainId: DomainId) => void;
+  onOpenNoteById: (noteId: string) => void;
+  onAddCustomCategory: (
+    title: string,
+    description: string,
+    color: CustomCategory['color']
+  ) => void;
+  onDeleteCustomCategory: (id: string) => void;
+  onDeleteHistoryEntry: (id: string) => void;
 }
 
+const CAT_ACCENTS: Record<CustomCategory['color'], string> = {
+  navy: 'border-r-4 border-r-[#1E3A5F]',
+  emerald: 'border-r-4 border-r-emerald-600',
+  amber: 'border-r-4 border-r-amber-600',
+  slate: 'border-r-4 border-r-slate-500',
+};
+
 export default function OverviewView({
+  user,
   months,
+  domains,
   courses,
+  bookNotes,
+  customCategories,
+  history,
+  onGoogleSignIn,
   onNavigateTab,
   onJumpToMonth,
-  onExportExcel,
+  onFilterByDomain,
+  onOpenNoteById,
+  onAddCustomCategory,
+  onDeleteCustomCategory,
+  onDeleteHistoryEntry,
 }: OverviewViewProps) {
   const [imgFailed, setImgFailed] = useState(false);
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [catTitle, setCatTitle] = useState('');
+  const [catDesc, setCatDesc] = useState('');
+  const [catColor, setCatColor] = useState<CustomCategory['color']>('navy');
 
   const completedMonths = months.filter((m) => m.status === 'completed').length;
   const activeMonth =
@@ -45,29 +93,66 @@ export default function OverviewView({
     0
   );
   const completedCourses = courses.filter((c) => c.completed).length;
-  const notesWritten = months.filter((m) => m.notes.trim().length > 0).length;
+
+  const bookTypeNotesCount = bookNotes.filter(
+    (n) => (n.noteType ?? 'book') === 'book'
+  ).length;
+  const lectureNotesCount = bookNotes.filter(
+    (n) => n.noteType === 'course_lecture'
+  ).length;
+  const generalNotesCount = bookNotes.filter(
+    (n) => n.noteType === 'general'
+  ).length;
+
+  const totalSmallTasks =
+    months.reduce((acc, m) => acc + m.tasks.length, 0) +
+    courses.reduce((acc, c) => acc + c.tasks.length, 0);
+  const completedSmallTasks =
+    months.reduce((acc, m) => acc + m.tasks.filter((t) => t.done).length, 0) +
+    courses.reduce((acc, c) => acc + c.tasks.filter((t) => t.done).length, 0);
+
+  const handleCreateCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    const title = catTitle.trim();
+    if (!title) return;
+    onAddCustomCategory(
+      title,
+      catDesc.trim() || 'تصنيف شخصي لتجميع الملاحظات والأفكار المرتبطة.',
+      catColor
+    );
+    setCatTitle('');
+    setCatDesc('');
+    setShowAddCategory(false);
+  };
 
   return (
-    <div className="space-y-10">
-      {/* Hero Editorial Split (2-column items-stretch) */}
+    <div className="space-y-8">
+      {/* Personalized Greeting & Workspace Hero Split */}
       <section className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         <div className="grid grid-cols-1 lg:grid-cols-12 items-stretch">
           <div className="lg:col-span-7 p-6 sm:p-10 flex flex-col justify-between gap-6">
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                <span>المستوى المتوازن</span>
+                <span>
+                  {user
+                    ? `أهلاً بك، ${user.displayName || 'باحث المعرفة'}`
+                    : 'خطة الدراسة العامة المتوازنة'}
+                </span>
                 <span aria-hidden="true">·</span>
                 <span>مساران متوازيان</span>
                 <span aria-hidden="true">·</span>
-                <span className="tabular-nums">12 شهرًا</span>
+                <span className="tabular-nums">
+                  {months.length} وحدة دراسية · {domains.length} محاور ·{' '}
+                  {courses.length} كورسات
+                </span>
               </div>
 
               <h1 className="font-editorial text-3xl sm:text-4xl font-bold text-slate-900 leading-snug">
-                بناء عقلٍ متنوّع المعرفة يفهم الأفكار والإنسان والواقع ويناقشها
+                لوحة المعرفة الشخصية: بناء عقلٍ متوازن يفهم الأفكار والإنسان والواقع
               </h1>
 
               <p className="text-base text-slate-600 leading-relaxed max-w-2xl">
-                ليست هذه الخطة سباقًا لإنهاء أكبر عدد من الكتب، بل رحلة هادئة لمدة عام كامل تجمع بين التعمّق في الفكر الإسلامي وبناء المنهج، والانفتاح المنضبط على الفلسفة وعلم النفس والتاريخ والأدب وفهم المجتمع وتطوير الذات.
+                مساحة دراسة مرنة بدون سباقٍ قسري؛ تجمع بين التأسيس الفكري والاستكشاف المنفتح، وتُنظّم ملاحظات كتبك ومحاضرات كورساتك وسجلّك الدراسي في مكان واحد.
               </p>
             </div>
 
@@ -77,18 +162,29 @@ export default function OverviewView({
                 onClick={() => onNavigateTab('plan')}
                 className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors cursor-pointer"
               >
-                <span>استعراض خطة 12 شهرًا</span>
+                <span>استعراض خطة الدراسة</span>
                 <ArrowLeft className="w-4 h-4" aria-hidden="true" />
               </button>
 
               <button
                 type="button"
-                onClick={onExportExcel}
-                className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors cursor-pointer"
+                onClick={() => onNavigateTab('journal')}
+                className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-slate-800 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors cursor-pointer"
               >
-                <FileSpreadsheet className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-                <span>تحميل ملف Excel المحدّث (.xlsx)</span>
+                <NotebookPen className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <span>تدوين ملاحظة منظّمة</span>
               </button>
+
+              {!user && (
+                <button
+                  type="button"
+                  onClick={onGoogleSignIn}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-[#1E3A5F] border border-[#1E3A5F]/25 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+                >
+                  <LogIn className="w-4 h-4" aria-hidden="true" />
+                  <span>حفظ ومزامنة بحساب Google</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -116,143 +212,358 @@ export default function OverviewView({
         </div>
       </section>
 
-      {/* Full-width 4-Column KPI Strip below Hero Split */}
+      {/* 4-Column KPI Strip */}
       <section aria-label="ملخص التقدم" className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl p-5">
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>الأشهر المنجزة</span>
+            <span>الوحدات المنجزة</span>
             <CheckCircle2 className="w-4 h-4 text-emerald-700" aria-hidden="true" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
-            {completedMonths} <span className="text-sm font-normal text-slate-500">/ {months.length} شهرًا</span>
+            {completedMonths}{' '}
+            <span className="text-sm font-normal text-slate-500">
+              / {months.length} وحدة
+            </span>
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            {activeMonth ? `الشهر الحالي: الشهر ${activeMonth.id}` : 'أضف شهرك الأول من الخطة'}
+            {activeMonth
+              ? `التركيز الحالي: الوحدة ${activeMonth.id}`
+              : 'أضف وحدتك الأولى من الخطة'}
           </p>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-xl p-5">
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>أنشطة القراءة والتطبيق</span>
+            <span>المهام الصغيرة المنجزة</span>
             <Clock className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
-            {completedActivities} <span className="text-sm font-normal text-slate-500">/ {totalActivities} ركيزة</span>
+            {completedSmallTasks}{' '}
+            <span className="text-sm font-normal text-slate-500">
+              / {totalSmallTasks} مهمة
+            </span>
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            4 ركائز لكل شهر (قراءة، سماع، تلخيص، نقاش)
+            ركائز الدراسة المكتملة: {completedActivities} / {totalActivities}
           </p>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-xl p-5">
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>الكورسات المربوطة</span>
+            <span>الكورسات والمراجع</span>
             <Layers className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
-            {completedCourses} <span className="text-sm font-normal text-slate-500">/ {courses.length} كورسات</span>
+            {completedCourses}{' '}
+            <span className="text-sm font-normal text-slate-500">
+              / {courses.length} كورس
+            </span>
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            مربوطة بمراجع مكملة وتطبيق عملي
+            قابلة للإضافة والتعديل والتوسّع
           </p>
         </div>
 
         <div className="bg-white border border-slate-200 rounded-xl p-5">
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>دفاتر التلخيص المكتوبة</span>
+            <span>الملاحظات المنظّمة</span>
             <PenLine className="w-4 h-4 text-slate-600" aria-hidden="true" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
-            {notesWritten} <span className="text-sm font-normal text-slate-500">/ {months.length} دفترًا</span>
+            {bookNotes.length}{' '}
+            <span className="text-sm font-normal text-slate-500">ملاحظة</span>
           </p>
-          <p className="mt-1 text-xs text-slate-500">
-            تُحفظ تلقائيًا وتُصدَّر في ملف Excel
+          <p className="mt-1 text-xs text-slate-500 tabular-nums">
+            {bookTypeNotesCount} كتاب · {lectureNotesCount} محاضرة · {generalNotesCount} عام
           </p>
         </div>
       </section>
 
-      {/* Parallel Tracks + Active Month Focus */}
+      {/* Personalized Dashboard: Categories + Recent Study History */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Two Parallel Tracks */}
-        <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
-          <div>
-            <h2 className="font-editorial text-2xl font-bold text-slate-900">
-              منهجية المسارين المتوازيين
-            </h2>
-            <p className="text-sm text-slate-600 mt-1">
-              كل شهر في الخطة يجمع بين مسارين يكمل أحدهما الآخر دون تشتيت أو انغلاق.
-            </p>
-          </div>
-
-          <div className="divide-y divide-slate-200">
-            <div className="pb-5 space-y-2">
-              <div className="flex items-center gap-2 text-xs font-semibold text-[#1E3A5F]">
-                <span>01. المسار التأسيسي</span>
-                <span aria-hidden="true">·</span>
-                <span className="font-normal text-slate-500">بناء العمود الفقري للمعرفة</span>
-              </div>
-              <p className="text-sm text-slate-700 leading-relaxed">
-                كتب وسلاسل محاضرات مرتّبة تتدرّج بك في أصول الفكر الإسلامي وبناء المنهج ومفاتيح التحليل الفكري (أحمد بن يوسف السيد، إبراهيم السكران، عبدالله العجيري، سلطان العميري) مع أصول العمران والفهم الحضاري.
+        {/* Personalized Categories & Domain Distribution */}
+        <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 sm:p-7 space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-editorial text-2xl font-bold text-slate-900">
+                التصنيفات المخصّصة لحسابك
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">
+                نظّم ملاحظاتك واهتماماتك في تصنيفات خاصة تُحفظ تلقائيًا في حسابك.
               </p>
             </div>
+            <button
+              type="button"
+              onClick={() => setShowAddCategory((v) => !v)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors cursor-pointer"
+            >
+              <FolderPlus className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>{showAddCategory ? 'إلغاء' : '+ تصنيف جديد'}</span>
+            </button>
+          </div>
 
-            <div className="pt-5 space-y-2">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-800">
-                <span>02. المسار الاستكشافي</span>
-                <span aria-hidden="true">·</span>
-                <span className="font-normal text-slate-500">توسيع الأفق ومنع الانحصار</span>
+          {showAddCategory && (
+            <form
+              onSubmit={handleCreateCategory}
+              className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-3"
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <input
+                  type="text"
+                  required
+                  value={catTitle}
+                  onChange={(e) => setCatTitle(e.target.value)}
+                  placeholder="اسم التصنيف (مثلاً: تلخيصات سريعة)..."
+                  className="sm:col-span-2 px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+                />
+                <select
+                  aria-label="لون التمييز"
+                  value={catColor}
+                  onChange={(e) =>
+                    setCatColor(e.target.value as CustomCategory['color'])
+                  }
+                  className="px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                >
+                  <option value="navy">أزرق داكن</option>
+                  <option value="emerald">أخضر زمردي</option>
+                  <option value="amber">عنبر دافئ</option>
+                  <option value="slate">رمادي هادئ</option>
+                </select>
               </div>
-              <p className="text-sm text-slate-700 leading-relaxed">
-                قراءات موازية في التفكير الفلسفي (فؤاد زكريا، زكي نجيب محمود، عبد الوهاب المسيري)، وعلم النفس (فيكتور فرانكل، إريك فروم، دانيال كانيمان)، والجغرافيا والتاريخ (جمال حمدان، مالك بن نبي، ابن خلدون)، والأدب والسير (مصطفى صادق الرافعي، غازي القصيبي، وتجارب إنسانية).
-              </p>
+              <input
+                type="text"
+                value={catDesc}
+                onChange={(e) => setCatDesc(e.target.value)}
+                placeholder="وصف مختصر لما ستضعه في هذا التصنيف..."
+                className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+              />
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>حفظ التصنيف</span>
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Custom Categories List */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {customCategories.map((cat) => {
+              const linkedNotesCount = bookNotes.filter(
+                (bn) => bn.categoryLabel === cat.title
+              ).length;
+              return (
+                <div
+                  key={cat.id}
+                  className={`p-4 bg-slate-50/70 border border-slate-200 rounded-lg flex flex-col justify-between gap-2 ${
+                    CAT_ACCENTS[cat.color]
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <Tag className="w-3.5 h-3.5 text-[#1E3A5F] shrink-0" aria-hidden="true" />
+                      <h3 className="text-sm font-semibold text-slate-900">
+                        {cat.title}
+                      </h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onDeleteCustomCategory(cat.id)}
+                      aria-label={`حذف ${cat.title}`}
+                      className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    {cat.description}
+                  </p>
+                  <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500">
+                    <span className="tabular-nums">
+                      {linkedNotesCount} {linkedNotesCount === 1 ? 'ملاحظة مرتبطة' : 'ملاحظات مرتبطة'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onNavigateTab('journal')}
+                      className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                    >
+                      فتح الدفتر
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Domain Distribution Breakdown */}
+          <div className="pt-4 border-t border-slate-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">
+                توزيع المحاور المعرفية ({domains.length} محاور)
+              </h3>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('domains')}
+                className="text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+              >
+                إدارة المحاور ←
+              </button>
+            </div>
+            <div className="space-y-2.5">
+              {domains.map((dom) => {
+                const count = months.filter(
+                  (m) =>
+                    m.foundational.domainId === dom.id ||
+                    m.exploratory.domainId === dom.id
+                ).length;
+                const pct =
+                  months.length > 0
+                    ? Math.min(100, Math.round((count / months.length) * 100))
+                    : 0;
+                return (
+                  <button
+                    key={dom.id}
+                    type="button"
+                    onClick={() => onFilterByDomain(dom.id)}
+                    className="w-full text-right group cursor-pointer space-y-1"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-medium text-slate-800 group-hover:text-[#1E3A5F]">
+                        {dom.title}
+                      </span>
+                      <span className="text-slate-500 tabular-nums">
+                        {count} وحدات · {dom.thinkers.length} مفكرين
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-[#1E3A5F] rounded-full transition-all"
+                        style={{ width: `${Math.max(pct, count > 0 ? 12 : 4)}%` }}
+                      />
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
 
-        {/* Current Month Spotlight */}
-        <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-5">
+        {/* User Study History Timeline */}
+        <div className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6 sm:p-7 space-y-5">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500 tabular-nums">
-              محطة التركيز الحالية · الشهر {activeMonth.id}
+            <div className="flex items-center gap-2">
+              <History className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+              <h2 className="font-editorial text-xl font-bold text-slate-900">
+                سجل نشاطك الدراسي (History)
+              </h2>
+            </div>
+            <span className="text-xs text-slate-500 tabular-nums">
+              آخر {Math.min(history.length, 10)} أنشطة
             </span>
-            <button
-              type="button"
-              onClick={() => onJumpToMonth(activeMonth.id)}
-              className="text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-            >
-              فتح تفاصيل الشهر
-            </button>
           </div>
 
-          <h2 className="font-editorial text-xl font-bold text-slate-900">
-            {activeMonth.theme}
-          </h2>
-
-          <div className="space-y-4 text-sm">
-            <div className="p-4 bg-slate-50 rounded-lg border border-slate-200/80 space-y-1">
-              <p className="text-xs text-slate-500">
-                المسار التأسيسي · {activeMonth.foundational.author}
+          {history.length === 0 ? (
+            <div className="p-6 bg-slate-50 border border-slate-200 rounded-lg text-center space-y-2">
+              <p className="text-xs font-medium text-slate-700">
+                لم يُسجّل نشاط دراسي بعد
               </p>
-              <p className="font-semibold text-slate-900">
-                {activeMonth.foundational.title}
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                سيظهر هنا تلقائيًا كل كتاب تلخّصه، أو محاضرة تضيفها، أو مهمة تنجزها، أو تسجيل صوتي تحفظه.
               </p>
-              <p className="text-xs text-slate-600">{activeMonth.foundational.pace}</p>
             </div>
+          ) : (
+            <div className="divide-y divide-slate-200 border border-slate-200 rounded-lg max-h-[430px] overflow-y-auto">
+              {history.slice(0, 12).map((entry) => {
+                const EntryIcon =
+                  entry.actionType === 'course'
+                    ? GraduationCap
+                    : entry.actionType === 'note' || entry.actionType === 'voice'
+                    ? NotebookPen
+                    : entry.actionType === 'task'
+                    ? CheckCircle2
+                    : BookOpen;
 
-            <div className="p-4 bg-slate-50 rounded-lg border border-slate-200/80 space-y-1">
-              <p className="text-xs text-slate-500">
-                المسار الاستكشافي · {activeMonth.exploratory.author}
-              </p>
-              <p className="font-semibold text-slate-900">
-                {activeMonth.exploratory.title}
-              </p>
-              <p className="text-xs text-slate-600">{activeMonth.exploratory.pace}</p>
+                return (
+                  <div
+                    key={entry.id}
+                    className="p-3.5 bg-white hover:bg-slate-50 transition-colors flex items-start justify-between gap-3"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (entry.targetNoteId) {
+                          onOpenNoteById(entry.targetNoteId);
+                        } else if (entry.targetMonthId) {
+                          onJumpToMonth(entry.targetMonthId);
+                        } else {
+                          onNavigateTab(entry.targetTab);
+                        }
+                      }}
+                      className="flex items-start gap-3 text-right flex-1 cursor-pointer"
+                    >
+                      <EntryIcon
+                        className="w-4 h-4 text-[#1E3A5F] mt-0.5 shrink-0"
+                        aria-hidden="true"
+                      />
+                      <div className="space-y-0.5">
+                        <p className="text-xs font-semibold text-slate-900">
+                          {entry.title}
+                        </p>
+                        {entry.detail && (
+                          <p className="text-[11px] text-slate-600 line-clamp-2">
+                            {entry.detail}
+                          </p>
+                        )}
+                        <span className="block text-[10px] text-slate-400">
+                          {entry.timestampLabel}
+                        </span>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDeleteHistoryEntry(entry.id)}
+                      aria-label="حذف السجل"
+                      className="p-1 text-slate-300 hover:text-red-600 cursor-pointer shrink-0"
+                    >
+                      <Trash2 className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
-          </div>
+          )}
 
-          <p className="text-xs text-slate-600 leading-relaxed pt-1 border-t border-slate-100">
-            سؤال المناقشة: {activeMonth.discussionPrompt}
-          </p>
+          {/* Active Study Unit Spotlight */}
+          {activeMonth && (
+            <div className="pt-4 border-t border-slate-200 space-y-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-500">
+                  محطة التركيز الحالية · الوحدة {activeMonth.id}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onJumpToMonth(activeMonth.id)}
+                  className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                >
+                  فتح الوحدة ←
+                </button>
+              </div>
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-1.5">
+                <p className="text-sm font-bold text-slate-900">
+                  {activeMonth.theme}
+                </p>
+                <p className="text-xs text-slate-600">
+                  التأسيسي: {activeMonth.foundational.title}
+                </p>
+                <p className="text-xs text-slate-600">
+                  الاستكشافي: {activeMonth.exploratory.title}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
@@ -264,7 +575,7 @@ export default function OverviewView({
               الإيقاع الأسبوعي: القراءة والاستماع والتلخيص والمناقشة والتطبيق
             </h2>
             <p className="text-sm text-slate-600 mt-1">
-              ساعات أسبوعية مرنة ومريحة (~7 ساعات في الأسبوع) تمنع الإرهاق وتحفظ استمرارية العام كله.
+              ساعات أسبوعية مرنة ومريحة (~7 ساعات في الأسبوع) تمنع الإرهاق وتحفظ استمراريتك.
             </p>
           </div>
           <span className="text-xs text-slate-500 tabular-nums shrink-0">

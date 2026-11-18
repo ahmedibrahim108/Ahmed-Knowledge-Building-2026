@@ -116,19 +116,19 @@ export default function DomainsView({
       <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div className="space-y-2 max-w-3xl">
           <p className="text-xs text-slate-500">
-            التوزيع المعرفي المعتمد · {domains.length} محاور متكاملة
+            التوزيع المعرفي المرن · {domains.length} محاور مفعّلة حاليًا
           </p>
           <h1 className="font-editorial text-3xl font-bold text-slate-900">
-            المحاور الفكرية والمفكرون المعتمدون
+            المحاور المعرفية والمفكرون
           </h1>
           <p className="text-sm text-slate-600 leading-relaxed">
-            تم اعتماد التعديلات المطلوبة: إسناد محور المجتمع والتاريخ إلى{' '}
+            أضف أي محور معرفي جديد تريد التوسع فيه، وعدّل أو رتّب المفكرين وأعمالهم بحرية كاملة مع{' '}
             <strong className="text-slate-900 font-semibold">جمال حمدان</strong>{' '}
-            مع مالك بن نبي وابن خلدون، وإسناد محور الأدب والسير إلى{' '}
+            ومالك بن نبي وابن خلدون، و{' '}
             <strong className="text-slate-900 font-semibold">
               مصطفى صادق الرافعي
             </strong>{' '}
-            مع غازي القصيبي، مع إمكانية إضافة أو تعديل أو حذف أي محور أو مفكر.
+            وغازي القصيبي وغيرهم.
           </p>
         </div>
 

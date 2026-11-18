@@ -15,10 +15,12 @@ import {
 } from 'firebase/firestore';
 import {
   BookNote,
+  CustomCategory,
   DomainInfo,
   MonthPlan,
   PersonalCourse,
   QuarterInfo,
+  StudyHistoryEntry,
 } from '../data/curriculumData';
 import { OperationType, db, handleFirestoreError } from '../firebase';
 
@@ -37,7 +39,7 @@ function buildQuarterPayload(uid: string, q: QuarterInfo) {
     id,
     ownerId: uid,
     number: Math.max(1, Math.min(20, Math.round(q.number))),
-    title: clip(q.title || `الربع ${q.number}`, 200),
+    title: clip(q.title || `المرحلة ${q.number}`, 200),
     subtitle: clip(q.subtitle || '', 300),
     updatedAt: serverTimestamp(),
   };
@@ -50,8 +52,8 @@ function buildMonthPayload(uid: string, m: MonthPlan) {
     docId,
     ownerId: uid,
     quarter: Math.max(1, Math.min(20, Math.round(m.quarter))),
-    quarterTitle: clip(m.quarterTitle || `الربع ${m.quarter}`, 200),
-    theme: clip(m.theme || `الشهر ${m.id}`, 250),
+    quarterTitle: clip(m.quarterTitle || `المرحلة ${m.quarter}`, 200),
+    theme: clip(m.theme || `الوحدة ${m.id}`, 250),
     foundational: {
       title: clip(m.foundational.title || 'مصدر تأسيسي', 300),
       author: clip(m.foundational.author || '', 200),
@@ -120,15 +122,61 @@ function buildCoursePayload(uid: string, c: PersonalCourse) {
 
 function buildBookNotePayload(uid: string, bn: BookNote) {
   const id = sanitizeId(bn.id);
+  const noteType =
+    bn.noteType === 'course_lecture' || bn.noteType === 'general'
+      ? bn.noteType
+      : 'book';
   return {
     id,
     ownerId: uid,
-    bookTitle: clip(bn.bookTitle || 'كتاب بدون عنوان', 300),
+    noteType,
+    bookTitle: clip(bn.bookTitle || 'ملاحظة بدون عنوان', 300),
     author: clip(bn.author || '', 200),
+    courseId: Math.max(0, Math.min(1000, Math.round(bn.courseId ?? 0))),
+    courseTitle: clip(bn.courseTitle || '', 250),
+    lectureTitle: clip(bn.lectureTitle || '', 250),
+    categoryLabel: clip(bn.categoryLabel || '', 120),
     progressMarker: clip(bn.progressMarker || '', 200),
     content: clip(bn.content || '', 40000),
     quotes: clip(bn.quotes || '', 10000),
     updatedAtLabel: clip(bn.updatedAt || '', 100),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function buildCustomCategoryPayload(uid: string, cat: CustomCategory) {
+  const id = sanitizeId(cat.id);
+  const color =
+    cat.color === 'emerald' || cat.color === 'amber' || cat.color === 'slate'
+      ? cat.color
+      : 'navy';
+  return {
+    id,
+    ownerId: uid,
+    title: clip(cat.title || 'تصنيف مخصص', 120),
+    description: clip(cat.description || '', 300),
+    color,
+    createdAtLabel: clip(cat.createdAtLabel || '', 100),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function buildHistoryPayload(uid: string, entry: StudyHistoryEntry) {
+  const id = sanitizeId(entry.id);
+  return {
+    id,
+    ownerId: uid,
+    actionType: entry.actionType,
+    title: clip(entry.title || 'نشاط دراسي', 200),
+    detail: clip(entry.detail || '', 400),
+    targetTab: entry.targetTab,
+    targetNoteId: clip(entry.targetNoteId || '', 128),
+    targetMonthId: Math.max(
+      0,
+      Math.min(1000, Math.round(entry.targetMonthId ?? 0))
+    ),
+    timestampLabel: clip(entry.timestampLabel || '', 100),
+    createdAtMs: Math.max(0, Math.round(entry.createdAtMs || Date.now())),
     updatedAt: serverTimestamp(),
   };
 }
@@ -141,6 +189,8 @@ export async function ensureUserDocumentAndSeed(
     domains: DomainInfo[];
     courses: PersonalCourse[];
     bookNotes: BookNote[];
+    customCategories: CustomCategory[];
+    history: StudyHistoryEntry[];
   }
 ): Promise<void> {
   const userPath = `users/${user.uid}`;
@@ -169,7 +219,7 @@ export async function ensureUserDocumentAndSeed(
     handleFirestoreError(error, OperationType.WRITE, userPath);
   }
 
-  // Seed subcollections ONLY if user's months collection is currently empty
+  // Seed core workspace ONLY if user's months collection is currently empty
   const monthsPath = `users/${user.uid}/months`;
   try {
     const existingMonthsSnap = await getDocs(
@@ -197,7 +247,31 @@ export async function ensureUserDocumentAndSeed(
         const p = buildBookNotePayload(user.uid, bn);
         batch.set(doc(db, 'users', user.uid, 'bookNotes', p.id), p);
       }
+      for (const cat of seedData.customCategories) {
+        const p = buildCustomCategoryPayload(user.uid, cat);
+        batch.set(doc(db, 'users', user.uid, 'customCategories', p.id), p);
+      }
+      for (const h of seedData.history.slice(0, 25)) {
+        const p = buildHistoryPayload(user.uid, h);
+        batch.set(doc(db, 'users', user.uid, 'history', p.id), p);
+      }
       await batch.commit();
+    } else {
+      // Seed personalized custom categories if missing for returning users
+      const existingCatsSnap = await getDocs(
+        query(
+          collection(db, 'users', user.uid, 'customCategories'),
+          where('ownerId', '==', user.uid)
+        )
+      );
+      if (existingCatsSnap.empty && seedData.customCategories.length > 0) {
+        const batch = writeBatch(db);
+        for (const cat of seedData.customCategories) {
+          const p = buildCustomCategoryPayload(user.uid, cat);
+          batch.set(doc(db, 'users', user.uid, 'customCategories', p.id), p);
+        }
+        await batch.commit();
+      }
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, monthsPath);
@@ -212,6 +286,8 @@ export function subscribeUserWorkspace(
     onDomains: (items: DomainInfo[]) => void;
     onCourses: (items: PersonalCourse[]) => void;
     onBookNotes: (items: BookNote[]) => void;
+    onCustomCategories: (items: CustomCategory[]) => void;
+    onHistory: (items: StudyHistoryEntry[]) => void;
   }
 ): () => void {
   const unsubQuarters = onSnapshot(
@@ -263,10 +339,20 @@ export function subscribeUserWorkspace(
     (snap) => {
       const list = snap.docs.map((d) => {
         const raw = d.data() as Record<string, unknown>;
+        const rawType = raw.noteType;
+        const noteType =
+          rawType === 'course_lecture' || rawType === 'general'
+            ? rawType
+            : 'book';
         return {
           id: String(raw.id ?? d.id),
+          noteType,
           bookTitle: String(raw.bookTitle ?? ''),
           author: String(raw.author ?? ''),
+          courseId: Number(raw.courseId ?? 0),
+          courseTitle: String(raw.courseTitle ?? ''),
+          lectureTitle: String(raw.lectureTitle ?? ''),
+          categoryLabel: String(raw.categoryLabel ?? ''),
           progressMarker: String(raw.progressMarker ?? ''),
           content: String(raw.content ?? ''),
           quotes: String(raw.quotes ?? ''),
@@ -278,12 +364,70 @@ export function subscribeUserWorkspace(
     (err) => handleFirestoreError(err, OperationType.LIST, `users/${uid}/bookNotes`)
   );
 
+  const unsubCategories = onSnapshot(
+    query(
+      collection(db, 'users', uid, 'customCategories'),
+      where('ownerId', '==', uid)
+    ),
+    (snap) => {
+      const list = snap.docs.map((d) => {
+        const raw = d.data() as Record<string, unknown>;
+        const color =
+          raw.color === 'emerald' ||
+          raw.color === 'amber' ||
+          raw.color === 'slate'
+            ? raw.color
+            : 'navy';
+        return {
+          id: String(raw.id ?? d.id),
+          title: String(raw.title ?? ''),
+          description: String(raw.description ?? ''),
+          color,
+          createdAtLabel: String(raw.createdAtLabel ?? ''),
+        } satisfies CustomCategory;
+      });
+      callbacks.onCustomCategories(list);
+    },
+    (err) =>
+      handleFirestoreError(err, OperationType.LIST, `users/${uid}/customCategories`)
+  );
+
+  const unsubHistory = onSnapshot(
+    query(collection(db, 'users', uid, 'history'), where('ownerId', '==', uid)),
+    (snap) => {
+      const list = snap.docs
+        .map((d) => {
+          const raw = d.data() as Record<string, unknown>;
+          return {
+            id: String(raw.id ?? d.id),
+            actionType: (raw.actionType as StudyHistoryEntry['actionType']) ?? 'note',
+            title: String(raw.title ?? ''),
+            detail: String(raw.detail ?? ''),
+            targetTab: (raw.targetTab as StudyHistoryEntry['targetTab']) ?? 'overview',
+            targetNoteId: raw.targetNoteId ? String(raw.targetNoteId) : undefined,
+            targetMonthId:
+              typeof raw.targetMonthId === 'number' && raw.targetMonthId > 0
+                ? raw.targetMonthId
+                : undefined,
+            timestampLabel: String(raw.timestampLabel ?? ''),
+            createdAtMs: Number(raw.createdAtMs ?? 0),
+          } satisfies StudyHistoryEntry;
+        })
+        .sort((a, b) => b.createdAtMs - a.createdAtMs)
+        .slice(0, 40);
+      callbacks.onHistory(list);
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, `users/${uid}/history`)
+  );
+
   return () => {
     unsubQuarters();
     unsubMonths();
     unsubDomains();
     unsubCourses();
     unsubBookNotes();
+    unsubCategories();
+    unsubHistory();
   };
 }
 
@@ -386,6 +530,58 @@ export async function deleteBookNoteDoc(uid: string, noteId: string): Promise<vo
   const path = `users/${uid}/bookNotes/${id}`;
   try {
     await deleteDoc(doc(db, 'users', uid, 'bookNotes', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function saveCustomCategoryDoc(
+  uid: string,
+  cat: CustomCategory
+): Promise<void> {
+  const p = buildCustomCategoryPayload(uid, cat);
+  const path = `users/${uid}/customCategories/${p.id}`;
+  try {
+    await setDoc(doc(db, 'users', uid, 'customCategories', p.id), p);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteCustomCategoryDoc(
+  uid: string,
+  categoryId: string
+): Promise<void> {
+  const id = sanitizeId(categoryId);
+  const path = `users/${uid}/customCategories/${id}`;
+  try {
+    await deleteDoc(doc(db, 'users', uid, 'customCategories', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function saveHistoryEntryDoc(
+  uid: string,
+  entry: StudyHistoryEntry
+): Promise<void> {
+  const p = buildHistoryPayload(uid, entry);
+  const path = `users/${uid}/history/${p.id}`;
+  try {
+    await setDoc(doc(db, 'users', uid, 'history', p.id), p);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteHistoryEntryDoc(
+  uid: string,
+  entryId: string
+): Promise<void> {
+  const id = sanitizeId(entryId);
+  const path = `users/${uid}/history/${id}`;
+  try {
+    await deleteDoc(doc(db, 'users', uid, 'history', id));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }

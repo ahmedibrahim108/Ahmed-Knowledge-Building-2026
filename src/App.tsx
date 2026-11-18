@@ -5,7 +5,7 @@
 
 import { User, onAuthStateChanged } from 'firebase/auth';
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Cloud, LogIn, LogOut } from 'lucide-react';
+import { CheckCircle2 } from 'lucide-react';
 import CoursesView from './components/CoursesView';
 import DomainsView from './components/DomainsView';
 import Header, { ActiveTab } from './components/Header';
@@ -14,33 +14,41 @@ import OverviewView from './components/OverviewView';
 import TwelveMonthPlanView from './components/TwelveMonthPlanView';
 import {
   BookNote,
+  CustomCategory,
   DOMAINS,
   DomainId,
   DomainInfo,
   INITIAL_BOOK_NOTES,
   INITIAL_COURSES,
+  INITIAL_CUSTOM_CATEGORIES,
   INITIAL_MONTHS,
   INITIAL_QUARTERS,
   MonthActivities,
   MonthPlan,
   MonthStatus,
+  NoteCategoryType,
   PersonalCourse,
   QuarterInfo,
   SmallTask,
+  StudyHistoryEntry,
   StudyResource,
 } from './data/curriculumData';
 import { auth, signInWithGoogle, signOutUser } from './firebase';
 import {
   deleteBookNoteDoc,
   deleteCourseDoc,
+  deleteCustomCategoryDoc,
   deleteDomainDoc,
+  deleteHistoryEntryDoc,
   deleteMonthDoc,
   deleteQuarterDoc,
   ensureUserDocumentAndSeed,
   sanitizeId,
   saveBookNoteDoc,
   saveCourseDoc,
+  saveCustomCategoryDoc,
   saveDomainDoc,
+  saveHistoryEntryDoc,
   saveMonthDoc,
   saveQuarterDoc,
   subscribeUserWorkspace,
@@ -52,6 +60,8 @@ const STORAGE_MONTHS_KEY = 'balanced_plan_months_v2';
 const STORAGE_DOMAINS_KEY = 'balanced_plan_domains_v1';
 const STORAGE_COURSES_KEY = 'balanced_plan_courses_v2';
 const STORAGE_BOOK_NOTES_KEY = 'balanced_plan_book_notes_v1';
+const STORAGE_CATEGORIES_KEY = 'balanced_plan_categories_v1';
+const STORAGE_HISTORY_KEY = 'balanced_plan_history_v1';
 
 function loadQuarters(): QuarterInfo[] {
   try {
@@ -146,6 +156,30 @@ function loadBookNotes(): BookNote[] {
   }
 }
 
+function loadCustomCategories(): CustomCategory[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_CATEGORIES_KEY);
+    if (!raw) return INITIAL_CUSTOM_CATEGORIES;
+    const parsed = JSON.parse(raw) as CustomCategory[];
+    return Array.isArray(parsed) && parsed.length > 0
+      ? parsed
+      : INITIAL_CUSTOM_CATEGORIES;
+  } catch {
+    return INITIAL_CUSTOM_CATEGORIES;
+  }
+}
+
+function loadHistory(): StudyHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as StudyHistoryEntry[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function formatArabicDate(): string {
   try {
     return new Date().toLocaleDateString('ar-EG', {
@@ -158,6 +192,19 @@ function formatArabicDate(): string {
   }
 }
 
+function formatArabicDateTime(): string {
+  try {
+    return new Date().toLocaleString('ar-EG', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return new Date().toISOString().slice(0, 16);
+  }
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [quarters, setQuarters] = useState<QuarterInfo[]>(loadQuarters);
@@ -165,6 +212,9 @@ export default function App() {
   const [domains, setDomains] = useState<DomainInfo[]>(loadDomains);
   const [courses, setCourses] = useState<PersonalCourse[]>(loadCourses);
   const [bookNotes, setBookNotes] = useState<BookNote[]>(loadBookNotes);
+  const [customCategories, setCustomCategories] =
+    useState<CustomCategory[]>(loadCustomCategories);
+  const [history, setHistory] = useState<StudyHistoryEntry[]>(loadHistory);
   const [activeBookNoteId, setActiveBookNoteId] = useState<string | null>(
     () => loadBookNotes()[0]?.id ?? null
   );
@@ -178,8 +228,24 @@ export default function App() {
   const [syncingCloud, setSyncingCloud] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const localStateRef = useRef({ quarters, months, domains, courses, bookNotes });
-  localStateRef.current = { quarters, months, domains, courses, bookNotes };
+  const localStateRef = useRef({
+    quarters,
+    months,
+    domains,
+    courses,
+    bookNotes,
+    customCategories,
+    history,
+  });
+  localStateRef.current = {
+    quarters,
+    months,
+    domains,
+    courses,
+    bookNotes,
+    customCategories,
+    history,
+  };
 
   // LocalStorage persistence
   useEffect(() => {
@@ -222,6 +288,25 @@ export default function App() {
     }
   }, [bookNotes]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORAGE_CATEGORIES_KEY,
+        JSON.stringify(customCategories)
+      );
+    } catch {
+      // ignore
+    }
+  }, [customCategories]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_HISTORY_KEY, JSON.stringify(history));
+    } catch {
+      // ignore
+    }
+  }, [history]);
+
   // Listen to Firebase Auth state & attach Firestore listeners ONLY when authenticated
   useEffect(() => {
     let unsubWorkspace: (() => void) | null = null;
@@ -255,6 +340,12 @@ export default function App() {
             },
             onBookNotes: (items) => {
               setBookNotes(items);
+            },
+            onCustomCategories: (items) => {
+              if (items.length > 0) setCustomCategories(items);
+            },
+            onHistory: (items) => {
+              setHistory(items);
             },
           });
         } catch (err) {
@@ -296,11 +387,24 @@ export default function App() {
   const handleExportExcel = () => {
     exportPlanToExcel(months, courses, bookNotes, domains);
     setExportNotice(
-      'تم إنشاء وتنزيل ملف Excel (خطة_بناء_العقل_المتوازن_12_شهرا.xlsx)'
+      'تم إنشاء وتنزيل ملف Excel (خطة_ميزان_المعرفة_الدراسية.xlsx)'
     );
     window.setTimeout(() => {
       setExportNotice(null);
     }, 4000);
+  };
+
+  const recordHistory = (
+    payload: Omit<StudyHistoryEntry, 'id' | 'timestampLabel' | 'createdAtMs'>
+  ) => {
+    const entry: StudyHistoryEntry = {
+      ...payload,
+      id: `hist-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      timestampLabel: formatArabicDateTime(),
+      createdAtMs: Date.now(),
+    };
+    setHistory((prev) => [entry, ...prev].slice(0, 40));
+    if (user) void saveHistoryEntryDoc(user.uid, entry);
   };
 
   const handleJumpToMonth = (monthId: number) => {
@@ -614,6 +718,12 @@ export default function App() {
     };
     setDomains((prev) => [...prev, newDomain]);
     if (user) void saveDomainDoc(user.uid, newDomain, newDomain.order ?? 0);
+    recordHistory({
+      actionType: 'domain',
+      title: `أضفت محورًا معرفيًا: ${newDomain.title}`,
+      detail: newDomain.subtitle,
+      targetTab: 'domains',
+    });
   };
 
   const handleUpdateDomain = (id: DomainId, updates: Partial<DomainInfo>) => {
@@ -661,6 +771,12 @@ export default function App() {
     };
     setCourses((prev) => [...prev, newCourse]);
     syncCourse(newCourse);
+    recordHistory({
+      actionType: 'course',
+      title: `أضفت كورس جديد: ${newCourse.title}`,
+      detail: newCourse.category,
+      targetTab: 'courses',
+    });
   };
 
   const handleUpdateCourse = (
@@ -672,6 +788,14 @@ export default function App() {
         if (c.id !== id) return c;
         const next = { ...c, ...updates };
         syncCourse(next);
+        if (updates.completed === true && !c.completed) {
+          recordHistory({
+            actionType: 'course',
+            title: `أكملت تطبيق كورس: ${c.title}`,
+            detail: c.category,
+            targetTab: 'courses',
+          });
+        }
         return next;
       })
     );
@@ -771,7 +895,51 @@ export default function App() {
     );
   };
 
-  // --- Book Notes CRUD ---
+  // --- Structured Book / Course / Lecture Notes CRUD ---
+  const handleAddStructuredNote = (payload: {
+    noteType: NoteCategoryType;
+    bookTitle: string;
+    author: string;
+    courseId?: number;
+    courseTitle?: string;
+    lectureTitle?: string;
+    categoryLabel?: string;
+  }) => {
+    const newNote: BookNote = {
+      id: `bn-${Date.now()}`,
+      noteType: payload.noteType,
+      bookTitle: payload.bookTitle,
+      author: payload.author,
+      courseId: payload.courseId ?? 0,
+      courseTitle: payload.courseTitle ?? '',
+      lectureTitle: payload.lectureTitle ?? '',
+      categoryLabel: payload.categoryLabel ?? '',
+      progressMarker: '',
+      content: '',
+      quotes: '',
+      updatedAt: formatArabicDate(),
+    };
+    setBookNotes((prev) => [newNote, ...prev]);
+    setActiveBookNoteId(newNote.id);
+    setActiveTab('journal');
+    if (user) void saveBookNoteDoc(user.uid, newNote);
+
+    const typeDesc =
+      payload.noteType === 'course_lecture'
+        ? `ملاحظة محاضرة في ${payload.courseTitle || 'كورس'}`
+        : payload.noteType === 'general'
+        ? 'ملاحظة عامة'
+        : 'دفتر ملاحظات كتاب';
+
+    recordHistory({
+      actionType: 'note',
+      title: `أنشأت ${typeDesc}: ${newNote.bookTitle}`,
+      detail: newNote.lectureTitle || newNote.author,
+      targetTab: 'journal',
+      targetNoteId: newNote.id,
+    });
+  };
+
   const handleAddOrOpenBookNote = (bookTitle: string, author: string) => {
     const existing = bookNotes.find(
       (bn) => bn.bookTitle.trim() === bookTitle.trim()
@@ -782,19 +950,29 @@ export default function App() {
       return;
     }
 
-    const newNote: BookNote = {
-      id: `bn-${Date.now()}`,
+    handleAddStructuredNote({
+      noteType: 'book',
       bookTitle,
       author,
-      progressMarker: '',
-      content: '',
-      quotes: '',
-      updatedAt: formatArabicDate(),
-    };
-    setBookNotes((prev) => [newNote, ...prev]);
-    setActiveBookNoteId(newNote.id);
+      categoryLabel: customCategories[0]?.title ?? 'قراءات تأسيسية',
+    });
+  };
+
+  const handleOpenCourseNote = (course: PersonalCourse) => {
+    handleAddStructuredNote({
+      noteType: 'course_lecture',
+      bookTitle: `ملاحظات ${course.title}`,
+      author: course.bookAuthor || 'محاضر الكورس',
+      courseId: course.id,
+      courseTitle: course.title,
+      lectureTitle: 'المحاضرة 1',
+      categoryLabel: 'محاضرات وتطبيق عملي',
+    });
+  };
+
+  const handleOpenNoteById = (noteId: string) => {
+    setActiveBookNoteId(noteId);
     setActiveTab('journal');
-    if (user) void saveBookNoteDoc(user.uid, newNote);
   };
 
   const handleUpdateBookNote = (id: string, updates: Partial<BookNote>) => {
@@ -819,12 +997,46 @@ export default function App() {
     if (user) void deleteBookNoteDoc(user.uid, id);
   };
 
+  // --- Personalized Custom Categories CRUD ---
+  const handleAddCustomCategory = (
+    title: string,
+    description: string,
+    color: CustomCategory['color']
+  ) => {
+    const newCat: CustomCategory = {
+      id: sanitizeId(`cat_${Date.now()}`),
+      title,
+      description,
+      color,
+      createdAtLabel: formatArabicDate(),
+    };
+    setCustomCategories((prev) => [newCat, ...prev]);
+    if (user) void saveCustomCategoryDoc(user.uid, newCat);
+    recordHistory({
+      actionType: 'note',
+      title: `أضفت تصنيفًا شخصيًا جديدًا: ${title}`,
+      detail: description,
+      targetTab: 'overview',
+    });
+  };
+
+  const handleDeleteCustomCategory = (id: string) => {
+    setCustomCategories((prev) => prev.filter((c) => c.id !== id));
+    if (user) void deleteCustomCategoryDoc(user.uid, id);
+  };
+
+  const handleDeleteHistoryEntry = (id: string) => {
+    setHistory((prev) => prev.filter((h) => h.id !== id));
+    if (user) void deleteHistoryEntryDoc(user.uid, id);
+  };
+
   const handleResetPlan = () => {
     setQuarters(INITIAL_QUARTERS);
     setMonths(INITIAL_MONTHS);
     setDomains(DOMAINS);
     setCourses(INITIAL_COURSES);
     setBookNotes(INITIAL_BOOK_NOTES);
+    setCustomCategories(INITIAL_CUSTOM_CATEGORIES);
     setActiveBookNoteId(INITIAL_BOOK_NOTES[0]?.id ?? null);
     setDomainFilter('all');
     setSelectedMonthId(1);
@@ -833,6 +1045,7 @@ export default function App() {
     localStorage.removeItem(STORAGE_DOMAINS_KEY);
     localStorage.removeItem(STORAGE_COURSES_KEY);
     localStorage.removeItem(STORAGE_BOOK_NOTES_KEY);
+    localStorage.removeItem(STORAGE_CATEGORIES_KEY);
   };
 
   return (
@@ -840,70 +1053,12 @@ export default function App() {
       <Header
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        onExportExcel={handleExportExcel}
+        user={user}
+        authReady={authReady}
+        syncingCloud={syncingCloud}
+        onGoogleSignIn={handleGoogleSignIn}
+        onSignOut={handleSignOut}
       />
-
-      {/* Non-sticky Google Auth & Firebase Sync Bar */}
-      <div className="bg-white border-b border-slate-200">
-        <div className="max-w-[1280px] mx-auto px-4 sm:px-8 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
-          {!authReady ? (
-            <span className="text-slate-500">جاري التحقق من حالة الحساب...</span>
-          ) : user ? (
-            <>
-              <div className="flex flex-wrap items-center gap-2.5 text-slate-700">
-                {user.photoURL ? (
-                  <img
-                    src={user.photoURL}
-                    alt={user.displayName || 'صورة الحساب'}
-                    referrerPolicy="no-referrer"
-                    className="w-6 h-6 rounded-full object-cover border border-slate-200"
-                  />
-                ) : (
-                  <Cloud className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-                )}
-                <span className="font-semibold text-slate-900">
-                  {user.displayName || user.email}
-                </span>
-                <span aria-hidden="true" className="text-slate-300">
-                  ·
-                </span>
-                <span className="text-emerald-700 font-medium">
-                  {syncingCloud
-                    ? 'جاري مزامنة بياناتك مع Firebase...'
-                    : 'متصل بقاعدة بيانات Firebase (مزامنة تلقائية)'}
-                </span>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleSignOut}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>تسجيل الخروج</span>
-              </button>
-            </>
-          ) : (
-            <>
-              <div className="flex items-center gap-2 text-slate-600">
-                <Cloud className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
-                <span>
-                  أنت تعمل الآن في الوضع المحلي. سجّل الدخول بحساب Google لحفظ خطتك وملاحظاتك الصوتية والمكتوبة على Firebase.
-                </span>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleGoogleSignIn}
-                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <LogIn className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>تسجيل الدخول بحساب Google</span>
-              </button>
-            </>
-          )}
-        </div>
-      </div>
 
       {authError && (
         <div className="max-w-[1280px] w-full mx-auto px-4 sm:px-8 pt-4">
@@ -948,11 +1103,21 @@ export default function App() {
       <main className="flex-1 max-w-[1280px] w-full mx-auto px-4 sm:px-8 py-8">
         {activeTab === 'overview' && (
           <OverviewView
+            user={user}
             months={months}
+            domains={domains}
             courses={courses}
+            bookNotes={bookNotes}
+            customCategories={customCategories}
+            history={history}
+            onGoogleSignIn={handleGoogleSignIn}
             onNavigateTab={setActiveTab}
             onJumpToMonth={handleJumpToMonth}
-            onExportExcel={handleExportExcel}
+            onFilterByDomain={handleFilterByDomain}
+            onOpenNoteById={handleOpenNoteById}
+            onAddCustomCategory={handleAddCustomCategory}
+            onDeleteCustomCategory={handleDeleteCustomCategory}
+            onDeleteHistoryEntry={handleDeleteHistoryEntry}
           />
         )}
 
@@ -1008,19 +1173,30 @@ export default function App() {
             onAddCourseResource={handleAddCourseResource}
             onDeleteCourseResource={handleDeleteCourseResource}
             onJumpToMonth={handleJumpToMonth}
+            onOpenCourseNote={handleOpenCourseNote}
           />
         )}
 
         {activeTab === 'journal' && (
           <NotesJournalView
             months={months}
+            courses={courses}
+            customCategories={customCategories}
             bookNotes={bookNotes}
             activeBookNoteId={activeBookNoteId}
             onSelectBookNote={setActiveBookNoteId}
-            onAddBookNote={handleAddOrOpenBookNote}
+            onAddStructuredNote={handleAddStructuredNote}
             onUpdateBookNote={handleUpdateBookNote}
             onDeleteBookNote={handleDeleteBookNote}
             onUpdateMonthNotes={handleUpdateMonthNotes}
+            onLogVoiceNote={(title) =>
+              recordHistory({
+                actionType: 'voice',
+                title: `سجّلت ملاحظة صوتية في: ${title}`,
+                detail: 'تفريغ صوتي مباشر باللغة العربية',
+                targetTab: 'journal',
+              })
+            }
             onExportExcel={handleExportExcel}
           />
         )}
@@ -1029,7 +1205,7 @@ export default function App() {
       <footer className="border-t border-slate-200 bg-white mt-auto">
         <div className="max-w-[1280px] mx-auto px-4 sm:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
           <p>
-            ميزان المعرفة · خطة 12 شهرًا المتوازنة (قراءة · استماع · تلخيص · مناقشة وتطبيق)
+            ميزان المعرفة · خطة الدراسة العامة المتوازنة (قراءة · استماع · تلخيص · مناقشة وتطبيق)
           </p>
           <div className="flex items-center gap-4">
             <button
@@ -1037,7 +1213,7 @@ export default function App() {
               onClick={handleExportExcel}
               className="text-slate-700 font-medium hover:text-[#1E3A5F] hover:underline cursor-pointer"
             >
-              تنزيل ملف Excel
+              تنزيل نسخة Excel
             </button>
             <span aria-hidden="true">·</span>
             <button

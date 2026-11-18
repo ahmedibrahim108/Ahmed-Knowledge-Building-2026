@@ -17,12 +17,32 @@ function createGeminiClient(): GoogleGenAI | null {
   if (!apiKey) return null;
   return new GoogleGenAI({
     apiKey,
+    apiVersion: 'v1beta',
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
       },
     },
   });
+}
+
+function normalizeAudioMimeType(raw?: string): string {
+  if (!raw || typeof raw !== 'string') return 'audio/webm';
+  const base = raw.split(';')[0].trim().toLowerCase();
+  if (
+    base === 'audio/webm' ||
+    base === 'audio/mp4' ||
+    base === 'audio/m4a' ||
+    base === 'audio/ogg' ||
+    base === 'audio/wav' ||
+    base === 'audio/mpeg' ||
+    base === 'audio/mp3' ||
+    base === 'audio/aac' ||
+    base === 'audio/flac'
+  ) {
+    return base === 'audio/m4a' ? 'audio/mp4' : base;
+  }
+  return base.startsWith('audio/') ? base : 'audio/webm';
 }
 
 app.post('/api/transcribe', async (req, res) => {
@@ -45,10 +65,7 @@ app.post('/api/transcribe', async (req, res) => {
       return;
     }
 
-    const mimeType =
-      typeof body.mimeType === 'string' && body.mimeType.startsWith('audio/')
-        ? body.mimeType.split(';')[0]
-        : 'audio/webm';
+    const mimeType = normalizeAudioMimeType(body.mimeType);
 
     const audioPart = {
       inlineData: {
@@ -57,17 +74,28 @@ app.post('/api/transcribe', async (req, res) => {
       },
     };
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.5-transcribe',
-      contents: {
-        parts: [
-          audioPart,
-          {
-            text: 'فرّغ هذا التسجيل الصوتي بدقة إلى نص عربي واضح ومضبوط الإملاء مع علامات الترقيم المناسبة، وأعد النص المفرّغ فقط بدون أي مقدمات أو تعليقات.',
-          },
-        ],
-      },
-    });
+    const promptPart = {
+      text: 'فرّغ هذا التسجيل الصوتي بدقة إلى نص عربي واضح ومضبوط الإملاء مع علامات الترقيم المناسبة. إذا كان الكلام بالإنجليزية ففرّغه كما هو. أعد النص المفرّغ فقط بدون أي مقدمات أو تعليقات.',
+    };
+
+    let response;
+    try {
+      response = await ai.models.generateContent({
+        model: 'gemini-3.5-transcribe',
+        contents: { parts: [audioPart, promptPart] },
+      });
+    } catch (primaryErr) {
+      const msg =
+        primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+      if (msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('not found')) {
+        response = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: { parts: [audioPart, promptPart] },
+        });
+      } else {
+        throw primaryErr;
+      }
+    }
 
     const text = (response.text ?? '').trim();
     if (!text) {

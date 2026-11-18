@@ -93,13 +93,13 @@ export default function VoiceRecorderButton({
         stream.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
 
-        const actualType = recorder.mimeType || 'audio/webm';
+        const actualType = recorder.mimeType || mimeType || 'audio/webm';
         const blob = new Blob(chunksRef.current, { type: actualType });
         chunksRef.current = [];
 
         if (blob.size < 256) {
           setStatus('idle');
-          setErrorMsg('التسجيل قصير جدًا، حاول التحدث بوضوح.');
+          setErrorMsg('التسجيل قصير جدًا، حاول التحدث بوضوح لمدة ثانية على الأقل.');
           return;
         }
 
@@ -114,7 +114,13 @@ export default function VoiceRecorderButton({
               mimeType: actualType,
             }),
           });
-          const data = (await res.json()) as { text?: string; error?: string };
+          const rawText = await res.text();
+          let data: { text?: string; error?: string } = {};
+          try {
+            data = JSON.parse(rawText) as { text?: string; error?: string };
+          } catch {
+            data = { error: rawText || 'تعذر الاتصال بخدمة التفريغ الصوتي.' };
+          }
           if (!res.ok || !data.text) {
             throw new Error(data.error || 'تعذر تحويل الصوت إلى نص.');
           }
@@ -129,7 +135,7 @@ export default function VoiceRecorderButton({
       };
 
       mediaRecorderRef.current = recorder;
-      recorder.start();
+      recorder.start(250);
       setStatus('recording');
     } catch {
       setErrorMsg('يرجى السماح بالوصول إلى الميكروفون من إعدادات المتصفح.');

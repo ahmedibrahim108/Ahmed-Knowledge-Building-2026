@@ -131,12 +131,12 @@ export function exportPlanToExcel(
   ];
   XLSX.utils.book_append_sheet(workbook, wsDomains, '2_المحاور_والمفكرون');
 
-  // Sheet 3: الكورسات الستة للتطوير الشخصي
+  // Sheet 3: الكورسات والمراجع
   const courseRows = courses.map((c) => ({
     'رقم الكورس': c.id,
     'اسم الكورس': c.title,
     'المجال المهاري': c.category,
-    'الأشهر المرتبطة': c.linkedMonths.map((m) => `الشهر ${m}`).join('، '),
+    'الأشهر / الوحدات المرتبطة': c.linkedMonths.map((m) => `وحدة ${m}`).join('، '),
     'المرجع الكتابي المكمل': c.complementaryBook,
     'المفكر المرجعي': c.bookAuthor,
     'المصادر الموصى بها': c.resources.map((r) => r.title).join(' | '),
@@ -158,7 +158,7 @@ export function exportPlanToExcel(
     { wch: 18 },
     { wch: 14 },
   ];
-  XLSX.utils.book_append_sheet(workbook, wsCourses, '3_الكورسات_الستة');
+  XLSX.utils.book_append_sheet(workbook, wsCourses, '3_الكورسات_والمراجع');
 
   // Sheet 4: الإيقاع الأسبوعي المتوازن
   const rhythmRows = WEEKLY_RHYTHM.map((slot) => ({
@@ -209,23 +209,37 @@ export function exportPlanToExcel(
   wsTasks['!cols'] = [{ wch: 34 }, { wch: 18 }, { wch: 56 }, { wch: 14 }];
   XLSX.utils.book_append_sheet(workbook, wsTasks, '5_المهام_الصغيرة');
 
-  // Sheet 6: نوتس الكتب والقراءات
+  // Sheet 6: نوتس الكتب والكورسات والمحاضرات
+  const NOTE_TYPE_AR = {
+    book: 'كتاب',
+    course_lecture: 'كورس / محاضرة',
+    general: 'ملاحظة عامة',
+  };
+
   const bookNoteRows =
     bookNotes.length > 0
       ? bookNotes.map((bn) => ({
-          'اسم الكتاب / المادة': bn.bookTitle,
+          'النوع': NOTE_TYPE_AR[bn.noteType ?? 'book'],
+          'عنوان الملاحظة / الكتاب': bn.bookTitle,
+          'الكورس المرتبط': bn.courseTitle || '—',
+          'المحاضرة': bn.lectureTitle || '—',
+          'التصنيف المخصص': bn.categoryLabel || '—',
           'المؤلف / المحاضر': bn.author || '—',
-          'موضع القراءة / الفصل': bn.progressMarker || '—',
+          'الموضع / الصفحة': bn.progressMarker || '—',
           'النوتس والأفكار المستخلصة': bn.content || '—',
           'اقتباسات أو أسئلة مناقشة': bn.quotes || '—',
           'آخر تحديث': bn.updatedAt,
         }))
       : [
           {
-            'اسم الكتاب / المادة': 'لم تُضف ملاحظات كتب بعد',
+            'النوع': '—',
+            'عنوان الملاحظة / الكتاب': 'لم تُضف ملاحظات بعد',
+            'الكورس المرتبط': '—',
+            'المحاضرة': '—',
+            'التصنيف المخصص': '—',
             'المؤلف / المحاضر': '—',
-            'موضع القراءة / الفصل': '—',
-            'النوتس والأفكار المستخلصة': 'يمكنك إضافة ملاحظات أي كتاب من تبويب دفتر التلخيص.',
+            'الموضع / الصفحة': '—',
+            'النوتس والأفكار المستخلصة': 'يمكنك إضافة ملاحظات الكتب والكورسات من تبويب دفتر الملاحظات.',
             'اقتباسات أو أسئلة مناقشة': '—',
             'آخر تحديث': '—',
           },
@@ -233,24 +247,39 @@ export function exportPlanToExcel(
   const wsBookNotes = XLSX.utils.json_to_sheet(bookNoteRows);
   wsBookNotes['!views'] = [{ rightToLeft: true }];
   wsBookNotes['!cols'] = [
-    { wch: 34 },
-    { wch: 24 },
-    { wch: 24 },
+    { wch: 16 },
+    { wch: 32 },
+    { wch: 28 },
+    { wch: 26 },
+    { wch: 20 },
+    { wch: 22 },
+    { wch: 22 },
     { wch: 56 },
     { wch: 44 },
     { wch: 22 },
   ];
-  XLSX.utils.book_append_sheet(workbook, wsBookNotes, '6_نوتس_الكتب');
+  XLSX.utils.book_append_sheet(workbook, wsBookNotes, '6_الملاحظات_المنظمة');
 
-  XLSX.writeFile(workbook, 'خطة_بناء_العقل_المتوازن_12_شهرا.xlsx');
+  XLSX.writeFile(workbook, 'خطة_ميزان_المعرفة_الدراسية.xlsx');
 }
 
 export function exportSingleBookNoteAsMarkdown(note: BookNote): void {
+  const typeLabel =
+    note.noteType === 'course_lecture'
+      ? 'كورس / محاضرة'
+      : note.noteType === 'general'
+      ? 'ملاحظة عامة'
+      : 'كتاب';
+
   const lines = [
     `# ${note.bookTitle}`,
     '',
+    `- **النوع:** ${typeLabel}`,
+    ...(note.courseTitle ? [`- **الكورس:** ${note.courseTitle}`] : []),
+    ...(note.lectureTitle ? [`- **المحاضرة:** ${note.lectureTitle}`] : []),
+    ...(note.categoryLabel ? [`- **التصنيف:** ${note.categoryLabel}`] : []),
     `- **المؤلف / المحاضر:** ${note.author || 'غير محدد'}`,
-    `- **موضع القراءة:** ${note.progressMarker || 'غير محدد'}`,
+    `- **الموضع:** ${note.progressMarker || 'غير محدد'}`,
     `- **تاريخ التحديث:** ${note.updatedAt}`,
     '',
     '---',
@@ -265,7 +294,7 @@ export function exportSingleBookNoteAsMarkdown(note: BookNote): void {
     lines.push('## اقتباسات وأسئلة للمناقشة', '', note.quotes.trim(), '');
   }
 
-  lines.push('---', '_تم التصدير من منصة ميزان المعرفة — خطة 12 شهرًا_');
+  lines.push('---', '_تم التصدير من منصة ميزان المعرفة_');
 
   const blob = new Blob(['\uFEFF' + lines.join('\n')], {
     type: 'text/markdown;charset=utf-8',
@@ -286,7 +315,16 @@ export function exportSingleBookNoteAsExcel(note: BookNote): void {
 
   const rows = [
     {
-      'الكتاب / المادة المقروءة': note.bookTitle,
+      'النوع':
+        note.noteType === 'course_lecture'
+          ? 'كورس / محاضرة'
+          : note.noteType === 'general'
+          ? 'ملاحظة عامة'
+          : 'كتاب',
+      'العنوان / الكتاب': note.bookTitle,
+      'الكورس المرتبط': note.courseTitle || '—',
+      'المحاضرة': note.lectureTitle || '—',
+      'التصنيف': note.categoryLabel || '—',
       'المؤلف / المحاضر': note.author || '—',
       'الفصل / رقم الصفحة': note.progressMarker || '—',
       'النوتس والأفكار المستخلصة': note.content || '—',
@@ -298,13 +336,17 @@ export function exportSingleBookNoteAsExcel(note: BookNote): void {
   const ws = XLSX.utils.json_to_sheet(rows);
   ws['!views'] = [{ rightToLeft: true }];
   ws['!cols'] = [
-    { wch: 32 },
+    { wch: 16 },
+    { wch: 30 },
+    { wch: 28 },
     { wch: 24 },
-    { wch: 24 },
+    { wch: 20 },
+    { wch: 22 },
+    { wch: 22 },
     { wch: 60 },
     { wch: 46 },
     { wch: 22 },
   ];
-  XLSX.utils.book_append_sheet(workbook, ws, 'نوتس_الكتاب');
+  XLSX.utils.book_append_sheet(workbook, ws, 'نوتس_منظم');
   XLSX.writeFile(workbook, `نوتس_${sanitizeFilename(note.bookTitle)}.xlsx`);
 }

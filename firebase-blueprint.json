@@ -268,7 +268,7 @@
     },
     "BookNoteItem": {
       "title": "BookNoteItem",
-      "description": "Per-book or per-reading notes authored by the user.",
+      "description": "Structured notes categorized by book, course/lecture, or custom topic.",
       "type": "object",
       "properties": {
         "id": {
@@ -281,6 +281,10 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "noteType": {
+          "type": "string",
+          "enum": ["book", "course_lecture", "general"]
+        },
         "bookTitle": {
           "type": "string",
           "maxLength": 300
@@ -288,6 +292,21 @@
         "author": {
           "type": "string",
           "maxLength": 200
+        },
+        "courseId": {
+          "type": "integer"
+        },
+        "courseTitle": {
+          "type": "string",
+          "maxLength": 250
+        },
+        "lectureTitle": {
+          "type": "string",
+          "maxLength": 250
+        },
+        "categoryLabel": {
+          "type": "string",
+          "maxLength": 120
         },
         "progressMarker": {
           "type": "string",
@@ -321,6 +340,114 @@
         "updatedAtLabel",
         "updatedAt"
       ]
+    },
+    "CustomCategoryItem": {
+      "title": "CustomCategoryItem",
+      "description": "User-defined personalized category for organizing study notes and dashboard insights.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "color": {
+          "type": "string",
+          "enum": ["navy", "emerald", "amber", "slate"]
+        },
+        "createdAtLabel": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "title",
+        "description",
+        "color",
+        "createdAtLabel",
+        "updatedAt"
+      ]
+    },
+    "StudyHistoryItem": {
+      "title": "StudyHistoryItem",
+      "description": "User study activity history entry synced to dashboard.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "actionType": {
+          "type": "string",
+          "enum": ["note", "voice", "task", "course", "domain", "month"]
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "targetTab": {
+          "type": "string",
+          "enum": ["overview", "plan", "domains", "courses", "journal"]
+        },
+        "targetNoteId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "targetMonthId": {
+          "type": "integer"
+        },
+        "timestampLabel": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "createdAtMs": {
+          "type": "integer"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "actionType",
+        "title",
+        "detail",
+        "targetTab",
+        "timestampLabel",
+        "createdAtMs",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -334,7 +461,7 @@
     },
     "/users/{userId}/months/{monthId}": {
       "schema": { "$ref": "#/entities/MonthItem" },
-      "description": "User's editable monthly plan items."
+      "description": "User's editable study plan units."
     },
     "/users/{userId}/domains/{domainId}": {
       "schema": { "$ref": "#/entities/DomainItem" },
@@ -346,7 +473,15 @@
     },
     "/users/{userId}/bookNotes/{noteId}": {
       "schema": { "$ref": "#/entities/BookNoteItem" },
-      "description": "User's per-book notes and quotes."
+      "description": "User's categorized notes for books, course lectures, and topics."
+    },
+    "/users/{userId}/customCategories/{categoryId}": {
+      "schema": { "$ref": "#/entities/CustomCategoryItem" },
+      "description": "User's personalized study categories."
+    },
+    "/users/{userId}/history/{entryId}": {
+      "schema": { "$ref": "#/entities/StudyHistoryItem" },
+      "description": "User's personalized study activity log."
     }
   }
 }
