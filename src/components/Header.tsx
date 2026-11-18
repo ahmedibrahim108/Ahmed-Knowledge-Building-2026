@@ -9,6 +9,7 @@ import {
   NotebookPen,
 } from 'lucide-react';
 import BrandMark from './BrandMark';
+import PWAInstallButton from './PWAInstallButton';
 
 export type ActiveTab =
   | 'overview'
@@ -114,8 +115,9 @@ export default function Header({
           })}
         </nav>
 
-        {/* Zone 3: User Account / Google Auth Control (replaces Excel button) */}
-        <div className="flex items-center shrink-0 relative" ref={menuRef}>
+        {/* Zone 3: PWA Install + User Account / Google Auth Control */}
+        <div className="flex items-center gap-2 shrink-0 relative" ref={menuRef}>
+          <PWAInstallButton compact />
           {!authReady ? (
             <span className="text-xs text-slate-400 px-3 py-2">
               جاري التحقق...

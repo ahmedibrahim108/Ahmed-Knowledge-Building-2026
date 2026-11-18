@@ -40,6 +40,7 @@ import {
   WEEKLY_RHYTHM,
 } from '../data/curriculumData';
 import { ActiveTab } from './Header';
+import PWAInstallButton from './PWAInstallButton';
 import VoiceRecorderButton from './VoiceRecorderButton';
 
 interface OverviewViewProps {
@@ -327,6 +328,8 @@ export default function OverviewView({
                 <CalendarDays className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
                 <span>التقويم</span>
               </button>
+
+              <PWAInstallButton />
 
               {!user && (
                 <button

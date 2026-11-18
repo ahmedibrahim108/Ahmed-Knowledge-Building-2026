@@ -11,6 +11,7 @@ import CoursesView from './components/CoursesView';
 import DomainsView from './components/DomainsView';
 import Header, { ActiveTab } from './components/Header';
 import NotesJournalView from './components/NotesJournalView';
+import OfflineIndicator from './components/OfflineIndicator';
 import OverviewView from './components/OverviewView';
 import TwelveMonthPlanView from './components/TwelveMonthPlanView';
 import {
@@ -1523,6 +1524,8 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      <OfflineIndicator />
     </div>
   );
 }
