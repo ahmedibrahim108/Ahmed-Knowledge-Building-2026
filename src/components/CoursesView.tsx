@@ -1,16 +1,25 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   BookMarked,
   CheckCircle2,
   CheckSquare,
   Circle,
+  Download,
   Edit3,
   ExternalLink,
+  FileText,
+  FileUp,
+  PenLine,
   Plus,
   Square,
   Trash2,
 } from 'lucide-react';
 import { PersonalCourse, StudyResource } from '../data/curriculumData';
+import {
+  downloadLocalAttachment,
+  parseDocumentFile,
+  saveLocalAttachment,
+} from '../utils/documentImportExport';
 
 interface CoursesViewProps {
   canEdit: boolean;
@@ -32,11 +41,21 @@ interface CoursesViewProps {
     courseId: number,
     title: string,
     type: StudyResource['type'],
-    note: string
+    note: string,
+    extras?: {
+      id?: string;
+      externalUrl?: string;
+      attachmentName?: string;
+      extractedPreview?: string;
+    }
   ) => void;
   onDeleteCourseResource: (courseId: number, resourceId: string) => void;
   onJumpToMonth: (monthId: number) => void;
-  onOpenCourseNote: (course: PersonalCourse) => void;
+  onOpenCourseNote: (
+    course: PersonalCourse,
+    lectureTitle?: string,
+    initialContent?: string
+  ) => void;
 }
 
 export default function CoursesView({
@@ -73,6 +92,12 @@ export default function CoursesView({
   const [newResType, setNewResType] =
     useState<StudyResource['type']>('كتاب');
   const [newResNote, setNewResNote] = useState('');
+  const [newResUrl, setNewResUrl] = useState('');
+  const [newResAttachmentName, setNewResAttachmentName] = useState('');
+  const [newResPreview, setNewResPreview] = useState('');
+  const [pendingResId, setPendingResId] = useState('');
+  const [expandedResId, setExpandedResId] = useState<string | null>(null);
+  const courseResFileRef = useRef<HTMLInputElement | null>(null);
 
   const completedCount = courses.filter((c) => c.completed).length;
 
@@ -110,6 +135,29 @@ export default function CoursesView({
     setNewTaskInputs((prev) => ({ ...prev, [courseId]: '' }));
   };
 
+  const handlePickCourseResourceFile = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    courseId: number
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    const generatedId = `c${courseId}-res-${Date.now()}`;
+    setPendingResId(generatedId);
+    await saveLocalAttachment(generatedId, file);
+    const parsed = await parseDocumentFile(file);
+    if (!newResTitle.trim()) {
+      setNewResTitle(parsed.title);
+    }
+    setNewResType('ملف / مستند');
+    setNewResAttachmentName(file.name);
+    setNewResPreview(parsed.plainText.slice(0, 7500));
+    if (!newResNote.trim()) {
+      setNewResNote(`ملف مرفق (${file.name})`);
+    }
+  };
+
   const handleResourceSubmit = (e: React.FormEvent, courseId: number) => {
     e.preventDefault();
     const title = newResTitle.trim();
@@ -118,10 +166,20 @@ export default function CoursesView({
       courseId,
       title,
       newResType,
-      newResNote.trim() || 'مصدر مضاف يدويًا لاستكمال الكورس.'
+      newResNote.trim() || 'مصدر مضاف يدويًا لاستكمال الكورس.',
+      {
+        id: pendingResId || undefined,
+        externalUrl: newResUrl.trim() || undefined,
+        attachmentName: newResAttachmentName || undefined,
+        extractedPreview: newResPreview || undefined,
+      }
     );
     setNewResTitle('');
     setNewResNote('');
+    setNewResUrl('');
+    setNewResAttachmentName('');
+    setNewResPreview('');
+    setPendingResId('');
     setAddingResourceCourseId(null);
   };
 
@@ -421,14 +479,14 @@ export default function CoursesView({
                       {isAddingRes && canEdit && (
                         <form
                           onSubmit={(e) => handleResourceSubmit(e, course.id)}
-                          className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2"
+                          className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2.5"
                         >
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             <input
                               type="text"
                               value={newResTitle}
                               onChange={(e) => setNewResTitle(e.target.value)}
-                              placeholder="اسم الكتاب أو المحاضرة..."
+                              placeholder="اسم الكتاب أو المحاضرة أو الملف..."
                               className="sm:col-span-2 px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md focus:outline-none focus:border-[#1E3A5F]"
                             />
                             <select
@@ -444,8 +502,44 @@ export default function CoursesView({
                               <option value="سلسلة محاضرات">سلسلة محاضرات</option>
                               <option value="مقال / مدخل">مقال / مدخل</option>
                               <option value="أداة تطبيق">أداة تطبيق</option>
+                              <option value="ملف / مستند">ملف / مستند (Word / PDF)</option>
+                              <option value="رابط خارجي">رابط خارجي</option>
                             </select>
                           </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <input
+                              type="url"
+                              value={newResUrl}
+                              onChange={(e) => setNewResUrl(e.target.value)}
+                              placeholder="رابط خارجي اختياري (https://...)"
+                              className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md focus:outline-none focus:border-[#1E3A5F]"
+                            />
+                            <div className="flex items-center">
+                              <input
+                                ref={courseResFileRef}
+                                type="file"
+                                accept=".docx,.doc,.txt,.md,.markdown,.pdf"
+                                className="hidden"
+                                onChange={(e) =>
+                                  void handlePickCourseResourceFile(e, course.id)
+                                }
+                              />
+                              <button
+                                type="button"
+                                onClick={() => courseResFileRef.current?.click()}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-100 rounded-md cursor-pointer whitespace-nowrap shrink-0"
+                              >
+                                <FileUp className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>
+                                  {newResAttachmentName
+                                    ? `تم إرفاق: ${newResAttachmentName}`
+                                    : 'رفع محاضرة / ملف Word / PDF'}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+
                           <input
                             type="text"
                             value={newResNote}
@@ -465,56 +559,147 @@ export default function CoursesView({
                       <div className="divide-y divide-slate-200 border border-slate-200 rounded-lg bg-slate-50/50">
                         {course.resources.length === 0 ? (
                           <p className="px-3.5 py-3 text-xs text-slate-500">
-                            لا توجد مصادر مضافة بعد — اضغط «+ إضافة مصدر» لإضافة مرجع.
+                            لا توجد مصادر مضافة بعد — اضغط «+ إضافة مصدر» لإضافة مرجع أو ملف محاضرة.
                           </p>
                         ) : (
-                          course.resources.map((res) => (
-                            <div
-                              key={res.id}
-                              className="px-3.5 py-2.5 flex items-start justify-between gap-2"
-                            >
-                              <div className="space-y-0.5">
-                                <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                                  <span className="font-medium text-slate-900">
-                                    {res.title}
-                                  </span>
-                                  <span aria-hidden="true" className="text-slate-300">
-                                    ·
-                                  </span>
-                                  <span className="text-slate-500">{res.type}</span>
-                                </div>
-                                <p className="text-[11px] text-slate-600 leading-relaxed">
-                                  {res.note}
-                                </p>
-                              </div>
+                          course.resources.map((res) => {
+                            const isPreviewOpen = expandedResId === res.id;
+                            return (
+                              <div key={res.id}>
+                                <div className="px-3.5 py-2.5 flex items-start justify-between gap-2">
+                                  <div className="space-y-0.5">
+                                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                                      <span className="font-medium text-slate-900">
+                                        {res.title}
+                                      </span>
+                                      <span
+                                        aria-hidden="true"
+                                        className="text-slate-300"
+                                      >
+                                        ·
+                                      </span>
+                                      <span className="text-slate-500">
+                                        {res.type}
+                                      </span>
+                                      {res.attachmentName && (
+                                        <span className="text-[11px] text-emerald-700 font-medium">
+                                          ({res.attachmentName})
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-[11px] text-slate-600 leading-relaxed">
+                                      {res.note}
+                                    </p>
+                                  </div>
 
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <a
-                                  href={`https://www.google.com/search?q=${encodeURIComponent(
-                                    res.searchQuery
-                                  )}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  aria-label={`بحث عن ${res.title}`}
-                                  className="p-1 text-[#1E3A5F] hover:text-[#162C49]"
-                                >
-                                  <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-                                </a>
-                                {canEdit && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      onDeleteCourseResource(course.id, res.id)
-                                    }
-                                    aria-label="حذف المصدر"
-                                    className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                                  </button>
+                                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                                    {res.extractedPreview && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setExpandedResId(
+                                              isPreviewOpen ? null : res.id
+                                            )
+                                          }
+                                          title="معاينة نص الملف"
+                                          className="p-1 text-slate-600 hover:text-[#1E3A5F] cursor-pointer"
+                                        >
+                                          <FileText
+                                            className="w-3.5 h-3.5"
+                                            aria-hidden="true"
+                                          />
+                                        </button>
+                                        {canEdit && (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              onOpenCourseNote(
+                                                course,
+                                                res.title,
+                                                res.extractedPreview
+                                              )
+                                            }
+                                            title="فتح كمحاضرة في دفتر التلخيص"
+                                            className="p-1 text-[#1E3A5F] hover:text-[#162C49] cursor-pointer"
+                                          >
+                                            <PenLine
+                                              className="w-3.5 h-3.5"
+                                              aria-hidden="true"
+                                            />
+                                          </button>
+                                        )}
+                                      </>
+                                    )}
+
+                                    {res.attachmentName && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void downloadLocalAttachment(
+                                            res.id,
+                                            res.attachmentName || res.title
+                                          )
+                                        }
+                                        title="تحميل الملف المرفق"
+                                        className="p-1 text-slate-600 hover:text-[#1E3A5F] cursor-pointer"
+                                      >
+                                        <Download
+                                          className="w-3.5 h-3.5"
+                                          aria-hidden="true"
+                                        />
+                                      </button>
+                                    )}
+
+                                    <a
+                                      href={
+                                        res.externalUrl ||
+                                        `https://www.google.com/search?q=${encodeURIComponent(
+                                          res.searchQuery
+                                        )}`
+                                      }
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      aria-label={
+                                        res.externalUrl
+                                          ? `فتح ${res.title}`
+                                          : `بحث عن ${res.title}`
+                                      }
+                                      className="p-1 text-[#1E3A5F] hover:text-[#162C49]"
+                                    >
+                                      <ExternalLink
+                                        className="w-3.5 h-3.5"
+                                        aria-hidden="true"
+                                      />
+                                    </a>
+                                    {canEdit && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          onDeleteCourseResource(course.id, res.id)
+                                        }
+                                        aria-label="حذف المصدر"
+                                        className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                                      >
+                                        <Trash2
+                                          className="w-3.5 h-3.5"
+                                          aria-hidden="true"
+                                        />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {isPreviewOpen && res.extractedPreview && (
+                                  <div className="px-3.5 pb-3">
+                                    <div className="p-2.5 bg-white border border-slate-200 rounded text-[11px] text-slate-700 whitespace-pre-wrap max-h-40 overflow-y-auto leading-relaxed">
+                                      {res.extractedPreview}
+                                    </div>
+                                  </div>
                                 )}
                               </div>
-                            </div>
-                          ))
+                            );
+                          })
                         )}
                       </div>
                     </div>

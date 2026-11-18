@@ -223,7 +223,7 @@ service cloud.firestore {
         && data.actionType in ['note', 'voice', 'task', 'course', 'domain', 'month']
         && isValidStr(data.title, 1, 200)
         && isValidStr(data.detail, 0, 400)
-        && data.targetTab in ['overview', 'plan', 'domains', 'courses', 'journal']
+        && data.targetTab in ['overview', 'plan', 'domains', 'courses', 'journal', 'calendar']
         && (!('targetNoteId' in data) || isValidStr(data.targetNoteId, 0, 128))
         && (!('targetMonthId' in data) || (data.targetMonthId is int && data.targetMonthId >= 0 && data.targetMonthId <= 1000))
         && isValidStr(data.timestampLabel, 0, 100)
@@ -276,6 +276,32 @@ service cloud.firestore {
         && data.pinned is bool
         && isValidStr(data.createdAtLabel, 0, 100)
         && data.createdAtMs is int && data.createdAtMs >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCalendarEvent(data, userId, eventId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'dateKey', 'timeSlot', 'title',
+          'notes', 'category', 'color', 'done', 'linkedTaskText', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'dateKey', 'timeSlot', 'title',
+          'notes', 'category', 'color', 'done', 'linkedTaskText', 'updatedAt'
+        ])
+        && data.id == eventId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.dateKey is string
+        && data.dateKey.size() == 10
+        && data.dateKey.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && isValidStr(data.timeSlot, 0, 20)
+        && isValidStr(data.title, 1, 200)
+        && isValidStr(data.notes, 0, 2000)
+        && data.category in ['شخصي', 'دراسة', 'موعد', 'مراجعة', 'قراءة']
+        && data.color in ['navy', 'emerald', 'amber', 'rose']
+        && data.done is bool
+        && isValidStr(data.linkedTaskText, 0, 300)
         && data.updatedAt is timestamp;
     }
 
@@ -492,6 +518,28 @@ service cloud.firestore {
             'title', 'content', 'moodTag', 'pinned', 'createdAtLabel', 'createdAtMs', 'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(reflectionId) && isOwner(userId) && isVerifiedUser();
+      }
+
+      // --- Personal Weekly/Monthly Calendar Events ---
+      match /calendarEvents/{eventId} {
+        allow get: if isValidId(userId) && isValidId(eventId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(eventId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidCalendarEvent(incoming(), userId, eventId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(eventId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidCalendarEvent(incoming(), userId, eventId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'dateKey', 'timeSlot', 'title', 'notes', 'category',
+            'color', 'done', 'linkedTaskText', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(eventId) && isOwner(userId) && isVerifiedUser();
       }
     }
   }

@@ -15,6 +15,9 @@ import {
 } from 'firebase/firestore';
 import {
   BookNote,
+  CalendarCategory,
+  CalendarColor,
+  CalendarEvent,
   CustomCategory,
   DEFAULT_USER_PREFERENCES,
   DomainInfo,
@@ -24,6 +27,7 @@ import {
   QuarterInfo,
   ReflectionMood,
   StudyHistoryEntry,
+  StudyResource,
   UserPreferences,
 } from '../data/curriculumData';
 import { OperationType, db, handleFirestoreError } from '../firebase';
@@ -47,6 +51,22 @@ function buildQuarterPayload(uid: string, q: QuarterInfo) {
     subtitle: clip(q.subtitle || '', 300),
     updatedAt: serverTimestamp(),
   };
+}
+
+function sanitizeResourceList(items: StudyResource[]): StudyResource[] {
+  return (items || []).slice(0, 30).map((r) => ({
+    id: clip(r.id || `res-${Date.now()}`, 128),
+    title: clip(r.title || 'مصدر دراسي', 300),
+    type: r.type || 'كتاب',
+    note: clip(r.note || '', 600),
+    searchQuery: clip(r.searchQuery || r.title || '', 300),
+    ...(r.externalUrl ? { externalUrl: clip(r.externalUrl, 800) } : {}),
+    ...(r.attachmentName ? { attachmentName: clip(r.attachmentName, 200) } : {}),
+    ...(r.extractedPreview
+      ? { extractedPreview: clip(r.extractedPreview, 8000) }
+      : {}),
+    custom: Boolean(r.custom),
+  }));
 }
 
 function buildMonthPayload(uid: string, m: MonthPlan) {
@@ -86,7 +106,7 @@ function buildMonthPayload(uid: string, m: MonthPlan) {
     status: m.status,
     notes: clip(m.notes || '', 20000),
     tasks: (m.tasks || []).slice(0, 50),
-    resources: (m.resources || []).slice(0, 30),
+    resources: sanitizeResourceList(m.resources || []),
     updatedAt: serverTimestamp(),
   };
 }
@@ -118,7 +138,7 @@ function buildCoursePayload(uid: string, c: PersonalCourse) {
     bookAuthor: clip(c.bookAuthor || '', 250),
     applicationMilestone: clip(c.applicationMilestone || '', 1000),
     completed: Boolean(c.completed),
-    resources: (c.resources || []).slice(0, 30),
+    resources: sanitizeResourceList(c.resources || []),
     tasks: (c.tasks || []).slice(0, 50),
     updatedAt: serverTimestamp(),
   };
@@ -200,6 +220,41 @@ function buildReflectionPayload(uid: string, r: PersonalReflection) {
     pinned: Boolean(r.pinned),
     createdAtLabel: clip(r.createdAtLabel || '', 100),
     createdAtMs: Math.max(0, Math.round(r.createdAtMs || Date.now())),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function buildCalendarEventPayload(uid: string, ev: CalendarEvent) {
+  const id = sanitizeId(ev.id);
+  const allowedCategories: CalendarCategory[] = [
+    'شخصي',
+    'دراسة',
+    'موعد',
+    'مراجعة',
+    'قراءة',
+  ];
+  const category: CalendarCategory = allowedCategories.includes(ev.category)
+    ? ev.category
+    : 'شخصي';
+  const allowedColors: CalendarColor[] = ['navy', 'emerald', 'amber', 'rose'];
+  const color: CalendarColor = allowedColors.includes(ev.color)
+    ? ev.color
+    : 'navy';
+  const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(ev.dateKey || '')
+    ? ev.dateKey
+    : new Date().toISOString().slice(0, 10);
+
+  return {
+    id,
+    ownerId: uid,
+    dateKey,
+    timeSlot: clip(ev.timeSlot || '', 20),
+    title: clip(ev.title || 'موعد', 200),
+    notes: clip(ev.notes || '', 2000),
+    category,
+    color,
+    done: Boolean(ev.done),
+    linkedTaskText: clip(ev.linkedTaskText || '', 300),
     updatedAt: serverTimestamp(),
   };
 }
@@ -383,6 +438,7 @@ export function subscribeUserWorkspace(
     onHistory: (items: StudyHistoryEntry[]) => void;
     onPreferences?: (prefs: UserPreferences) => void;
     onReflections?: (items: PersonalReflection[]) => void;
+    onCalendarEvents?: (items: CalendarEvent[]) => void;
   }
 ): () => void {
   const unsubQuarters = onSnapshot(
@@ -563,6 +619,51 @@ export function subscribeUserWorkspace(
       handleFirestoreError(err, OperationType.LIST, `users/${uid}/reflections`)
   );
 
+  const unsubCalendar = onSnapshot(
+    query(
+      collection(db, 'users', uid, 'calendarEvents'),
+      where('ownerId', '==', uid)
+    ),
+    (snap) => {
+      if (!callbacks.onCalendarEvents) return;
+      const list = snap.docs
+        .map((d) => {
+          const raw = d.data() as Record<string, unknown>;
+          const catRaw = String(raw.category ?? 'شخصي');
+          const category: CalendarCategory =
+            catRaw === 'دراسة' ||
+            catRaw === 'موعد' ||
+            catRaw === 'مراجعة' ||
+            catRaw === 'قراءة'
+              ? catRaw
+              : 'شخصي';
+          const colRaw = String(raw.color ?? 'navy');
+          const color: CalendarColor =
+            colRaw === 'emerald' || colRaw === 'amber' || colRaw === 'rose'
+              ? colRaw
+              : 'navy';
+          return {
+            id: String(raw.id ?? d.id),
+            dateKey: String(raw.dateKey ?? ''),
+            timeSlot: String(raw.timeSlot ?? ''),
+            title: String(raw.title ?? ''),
+            notes: String(raw.notes ?? ''),
+            category,
+            color,
+            done: Boolean(raw.done),
+            linkedTaskText: String(raw.linkedTaskText ?? ''),
+          } satisfies CalendarEvent;
+        })
+        .sort((a, b) => {
+          if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey);
+          return (a.timeSlot || '99:99').localeCompare(b.timeSlot || '99:99');
+        });
+      callbacks.onCalendarEvents(list);
+    },
+    (err) =>
+      handleFirestoreError(err, OperationType.LIST, `users/${uid}/calendarEvents`)
+  );
+
   return () => {
     unsubQuarters();
     unsubMonths();
@@ -573,6 +674,7 @@ export function subscribeUserWorkspace(
     unsubHistory();
     unsubPrefs();
     unsubReflections();
+    unsubCalendar();
   };
 }
 
@@ -766,6 +868,32 @@ export async function deleteReflectionDoc(
   const path = `users/${uid}/reflections/${id}`;
   try {
     await deleteDoc(doc(db, 'users', uid, 'reflections', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function saveCalendarEventDoc(
+  uid: string,
+  event: CalendarEvent
+): Promise<void> {
+  const p = buildCalendarEventPayload(uid, event);
+  const path = `users/${uid}/calendarEvents/${p.id}`;
+  try {
+    await setDoc(doc(db, 'users', uid, 'calendarEvents', p.id), p);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteCalendarEventDoc(
+  uid: string,
+  eventId: string
+): Promise<void> {
+  const id = sanitizeId(eventId);
+  const path = `users/${uid}/calendarEvents/${id}`;
+  try {
+    await deleteDoc(doc(db, 'users', uid, 'calendarEvents', id));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }

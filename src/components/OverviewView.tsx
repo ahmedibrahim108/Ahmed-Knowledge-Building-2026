@@ -3,6 +3,7 @@ import { User } from 'firebase/auth';
 import {
   ArrowLeft,
   BookOpen,
+  CalendarDays,
   CheckCircle2,
   Clock,
   Edit3,
@@ -316,6 +317,15 @@ export default function OverviewView({
               >
                 <NotebookPen className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
                 <span>مكتبة دفاتر التلخيص</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigateTab('calendar')}
+                className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-slate-800 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <CalendarDays className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <span>التقويم</span>
               </button>
 
               {!user && (

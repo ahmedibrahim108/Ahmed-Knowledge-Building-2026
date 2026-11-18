@@ -15,7 +15,8 @@ export type ActiveTab =
   | 'plan'
   | 'domains'
   | 'courses'
-  | 'journal';
+  | 'journal'
+  | 'calendar';
 
 interface HeaderProps {
   activeTab: ActiveTab;
@@ -50,6 +51,7 @@ export default function Header({
     { id: 'domains', label: `المحاور (${domainsCount})` },
     { id: 'courses', label: `الكورسات (${coursesCount})` },
     { id: 'journal', label: `دفتر التلخيص (${notesCount})` },
+    { id: 'calendar', label: 'التقويم' },
   ];
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);

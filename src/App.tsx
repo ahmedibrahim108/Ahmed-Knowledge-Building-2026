@@ -6,6 +6,7 @@
 import { User, onAuthStateChanged } from 'firebase/auth';
 import { useEffect, useState } from 'react';
 import { CheckCircle2, Lock, LogIn } from 'lucide-react';
+import CalendarView from './components/CalendarView';
 import CoursesView from './components/CoursesView';
 import DomainsView from './components/DomainsView';
 import Header, { ActiveTab } from './components/Header';
@@ -14,6 +15,7 @@ import OverviewView from './components/OverviewView';
 import TwelveMonthPlanView from './components/TwelveMonthPlanView';
 import {
   BookNote,
+  CalendarEvent,
   CustomCategory,
   DEFAULT_USER_PREFERENCES,
   DOMAINS,
@@ -40,6 +42,7 @@ import {
 import { auth, signInWithGoogle, signOutUser } from './firebase';
 import {
   deleteBookNoteDoc,
+  deleteCalendarEventDoc,
   deleteCourseDoc,
   deleteCustomCategoryDoc,
   deleteDomainDoc,
@@ -50,6 +53,7 @@ import {
   ensureUserDocumentAndSeed,
   sanitizeId,
   saveBookNoteDoc,
+  saveCalendarEventDoc,
   saveCourseDoc,
   saveCustomCategoryDoc,
   saveDomainDoc,
@@ -99,6 +103,7 @@ export default function App() {
   );
   const [history, setHistory] = useState<StudyHistoryEntry[]>([]);
   const [reflections, setReflections] = useState<PersonalReflection[]>([]);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences>(
     DEFAULT_USER_PREFERENCES
   );
@@ -127,6 +132,7 @@ export default function App() {
     setCustomCategories(INITIAL_CUSTOM_CATEGORIES);
     setHistory([]);
     setReflections([]);
+    setCalendarEvents([]);
     setPreferences(DEFAULT_USER_PREFERENCES);
     setActiveBookNoteId(INITIAL_BOOK_NOTES[0]?.id ?? null);
     setDomainFilter('all');
@@ -191,6 +197,9 @@ export default function App() {
             },
             onReflections: (items) => {
               setReflections(items);
+            },
+            onCalendarEvents: (items) => {
+              setCalendarEvents(items);
             },
           });
         } catch (err) {
@@ -635,18 +644,31 @@ export default function App() {
     monthId: number,
     title: string,
     type: StudyResource['type'],
-    note: string
+    note: string,
+    extras?: {
+      id?: string;
+      externalUrl?: string;
+      attachmentName?: string;
+      extractedPreview?: string;
+    }
   ) => {
     if (!user) {
       handleRequireAuth();
       return;
     }
     const newRes: StudyResource = {
-      id: `m${monthId}-res-${Date.now()}`,
+      id: extras?.id || `m${monthId}-res-${Date.now()}`,
       title,
       type,
       note,
       searchQuery: title,
+      ...(extras?.externalUrl ? { externalUrl: extras.externalUrl } : {}),
+      ...(extras?.attachmentName
+        ? { attachmentName: extras.attachmentName }
+        : {}),
+      ...(extras?.extractedPreview
+        ? { extractedPreview: extras.extractedPreview }
+        : {}),
       custom: true,
     };
     setMonths((prev) =>
@@ -878,18 +900,31 @@ export default function App() {
     courseId: number,
     title: string,
     type: StudyResource['type'],
-    note: string
+    note: string,
+    extras?: {
+      id?: string;
+      externalUrl?: string;
+      attachmentName?: string;
+      extractedPreview?: string;
+    }
   ) => {
     if (!user) {
       handleRequireAuth();
       return;
     }
     const newRes: StudyResource = {
-      id: `c${courseId}-res-${Date.now()}`,
+      id: extras?.id || `c${courseId}-res-${Date.now()}`,
       title,
       type,
       note,
       searchQuery: title,
+      ...(extras?.externalUrl ? { externalUrl: extras.externalUrl } : {}),
+      ...(extras?.attachmentName
+        ? { attachmentName: extras.attachmentName }
+        : {}),
+      ...(extras?.extractedPreview
+        ? { extractedPreview: extras.extractedPreview }
+        : {}),
       custom: true,
     };
     setCourses((prev) =>
@@ -929,6 +964,7 @@ export default function App() {
     courseTitle?: string;
     lectureTitle?: string;
     categoryLabel?: string;
+    initialContent?: string;
   }) => {
     if (!user) {
       handleRequireAuth();
@@ -944,7 +980,7 @@ export default function App() {
       lectureTitle: payload.lectureTitle ?? '',
       categoryLabel: payload.categoryLabel ?? '',
       progressMarker: '',
-      content: '',
+      content: payload.initialContent ?? '',
       quotes: '',
       updatedAt: formatArabicDate(),
     };
@@ -969,7 +1005,11 @@ export default function App() {
     });
   };
 
-  const handleAddOrOpenBookNote = (bookTitle: string, author: string) => {
+  const handleAddOrOpenBookNote = (
+    bookTitle: string,
+    author: string,
+    initialContent?: string
+  ) => {
     const existing = bookNotes.find(
       (bn) => bn.bookTitle.trim() === bookTitle.trim()
     );
@@ -989,13 +1029,20 @@ export default function App() {
       bookTitle,
       author,
       categoryLabel: customCategories[0]?.title ?? 'قراءات تأسيسية',
+      initialContent,
     });
   };
 
-  const handleOpenCourseNote = (course: PersonalCourse) => {
-    const existing = bookNotes.find(
-      (bn) => bn.noteType === 'course_lecture' && bn.courseId === course.id
-    );
+  const handleOpenCourseNote = (
+    course: PersonalCourse,
+    lectureTitle?: string,
+    initialContent?: string
+  ) => {
+    const existing = !lectureTitle
+      ? bookNotes.find(
+          (bn) => bn.noteType === 'course_lecture' && bn.courseId === course.id
+        )
+      : undefined;
     if (existing) {
       setActiveBookNoteId(existing.id);
       setActiveTab('journal');
@@ -1009,12 +1056,15 @@ export default function App() {
 
     handleAddStructuredNote({
       noteType: 'course_lecture',
-      bookTitle: `ملاحظات ${course.title}`,
+      bookTitle: lectureTitle
+        ? `${course.title} — ${lectureTitle}`
+        : `ملاحظات ${course.title}`,
       author: course.bookAuthor || 'محاضر الكورس',
       courseId: course.id,
       courseTitle: course.title,
-      lectureTitle: 'المحاضرة 1',
+      lectureTitle: lectureTitle || 'المحاضرة 1',
       categoryLabel: 'محاضرات وتطبيق عملي',
+      initialContent,
     });
   };
 
@@ -1158,6 +1208,58 @@ export default function App() {
     }
     setReflections((prev) => prev.filter((r) => r.id !== id));
     void deleteReflectionDoc(user.uid, id);
+  };
+
+  // --- Calendar Events (Weekly & Monthly) CRUD ---
+  const handleAddCalendarEvent = (payload: Omit<CalendarEvent, 'id'>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    const newEvent: CalendarEvent = {
+      ...payload,
+      id: `cal-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    };
+    setCalendarEvents((prev) =>
+      [...prev, newEvent].sort((a, b) => {
+        if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey);
+        return (a.timeSlot || '99:99').localeCompare(b.timeSlot || '99:99');
+      })
+    );
+    void saveCalendarEventDoc(user.uid, newEvent);
+    recordHistory({
+      actionType: 'task',
+      title: `أضفت موعدًا في التقويم: ${newEvent.title}`,
+      detail: `${newEvent.dateKey} · ${newEvent.category}`,
+      targetTab: 'calendar',
+    });
+  };
+
+  const handleUpdateCalendarEvent = (
+    id: string,
+    updates: Partial<CalendarEvent>
+  ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setCalendarEvents((prev) =>
+      prev.map((ev) => {
+        if (ev.id !== id) return ev;
+        const next = { ...ev, ...updates };
+        void saveCalendarEventDoc(user.uid, next);
+        return next;
+      })
+    );
+  };
+
+  const handleDeleteCalendarEvent = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setCalendarEvents((prev) => prev.filter((ev) => ev.id !== id));
+    void deleteCalendarEventDoc(user.uid, id);
   };
 
   const handleResetPlan = () => {
@@ -1375,6 +1477,20 @@ export default function App() {
               })
             }
             onExportExcel={handleExportExcel}
+          />
+        )}
+
+        {activeTab === 'calendar' && (
+          <CalendarView
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            events={calendarEvents}
+            months={months}
+            courses={courses}
+            onAddEvent={handleAddCalendarEvent}
+            onUpdateEvent={handleUpdateCalendarEvent}
+            onDeleteEvent={handleDeleteCalendarEvent}
+            onJumpToMonth={handleJumpToMonth}
           />
         )}
       </main>

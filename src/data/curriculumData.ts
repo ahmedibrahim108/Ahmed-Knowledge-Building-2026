@@ -22,9 +22,18 @@ export interface SmallTask {
 export interface StudyResource {
   id: string;
   title: string;
-  type: 'كتاب' | 'سلسلة محاضرات' | 'مقال / مدخل' | 'أداة تطبيق';
+  type:
+    | 'كتاب'
+    | 'سلسلة محاضرات'
+    | 'مقال / مدخل'
+    | 'أداة تطبيق'
+    | 'ملف / مستند'
+    | 'رابط خارجي';
   note: string;
   searchQuery: string;
+  externalUrl?: string;
+  attachmentName?: string;
+  extractedPreview?: string;
   custom?: boolean;
 }
 
@@ -122,7 +131,7 @@ export interface StudyHistoryEntry {
   actionType: 'note' | 'voice' | 'task' | 'course' | 'domain' | 'month';
   title: string;
   detail: string;
-  targetTab: 'overview' | 'plan' | 'domains' | 'courses' | 'journal';
+  targetTab: 'overview' | 'plan' | 'domains' | 'courses' | 'journal' | 'calendar';
   targetNoteId?: string;
   targetMonthId?: number;
   timestampLabel: string;
@@ -139,6 +148,21 @@ export interface PersonalReflection {
   pinned: boolean;
   createdAtLabel: string;
   createdAtMs: number;
+}
+
+export type CalendarCategory = 'شخصي' | 'دراسة' | 'موعد' | 'مراجعة' | 'قراءة';
+export type CalendarColor = 'navy' | 'emerald' | 'amber' | 'rose';
+
+export interface CalendarEvent {
+  id: string;
+  dateKey: string; // YYYY-MM-DD
+  timeSlot: string;
+  title: string;
+  notes: string;
+  category: CalendarCategory;
+  color: CalendarColor;
+  done: boolean;
+  linkedTaskText?: string;
 }
 
 export type HighlightColorKey = 'amber' | 'emerald' | 'sky' | 'rose';

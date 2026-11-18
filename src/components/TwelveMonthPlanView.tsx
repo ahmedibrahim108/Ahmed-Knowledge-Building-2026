@@ -1,12 +1,15 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   CheckCircle2,
   CheckSquare,
   Circle,
   Clock,
+  Download,
   Edit3,
   ExternalLink,
+  FileText,
+  FileUp,
   Headphones,
   MessageSquare,
   PenLine,
@@ -30,6 +33,11 @@ import {
   StudyResource,
   VoiceDialectMode,
 } from '../data/curriculumData';
+import {
+  downloadLocalAttachment,
+  parseDocumentFile,
+  saveLocalAttachment,
+} from '../utils/documentImportExport';
 import VoiceRecorderButton from './VoiceRecorderButton';
 
 interface TwelveMonthPlanViewProps {
@@ -78,10 +86,20 @@ interface TwelveMonthPlanViewProps {
     monthId: number,
     title: string,
     type: StudyResource['type'],
-    note: string
+    note: string,
+    extras?: {
+      id?: string;
+      externalUrl?: string;
+      attachmentName?: string;
+      extractedPreview?: string;
+    }
   ) => void;
   onDeleteMonthResource: (monthId: number, resourceId: string) => void;
-  onOpenBookNote: (bookTitle: string, author: string) => void;
+  onOpenBookNote: (
+    bookTitle: string,
+    author: string,
+    initialContent?: string
+  ) => void;
 }
 
 const STATUS_META: Record<
@@ -178,6 +196,14 @@ export default function TwelveMonthPlanView({
   const [newResType, setNewResType] =
     useState<StudyResource['type']>('كتاب');
   const [newResNote, setNewResNote] = useState('');
+  const [newResUrl, setNewResUrl] = useState('');
+  const [newResAttachmentName, setNewResAttachmentName] = useState('');
+  const [newResPreview, setNewResPreview] = useState('');
+  const [pendingResId, setPendingResId] = useState<string>('');
+  const [expandedResPreviewId, setExpandedResPreviewId] = useState<string | null>(
+    null
+  );
+  const resFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const getDomainTitle = (domainId: DomainId) =>
     domains.find((d) => d.id === domainId)?.title ?? domainId;
@@ -272,6 +298,28 @@ export default function TwelveMonthPlanView({
     setNewTaskText('');
   };
 
+  const handlePickMonthResourceFile = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !activeMonth) return;
+
+    const generatedId = `m${activeMonth.id}-res-${Date.now()}`;
+    setPendingResId(generatedId);
+    await saveLocalAttachment(generatedId, file);
+    const parsed = await parseDocumentFile(file);
+    if (!newResTitle.trim()) {
+      setNewResTitle(parsed.title);
+    }
+    setNewResType('ملف / مستند');
+    setNewResAttachmentName(file.name);
+    setNewResPreview(parsed.plainText.slice(0, 7500));
+    if (!newResNote.trim()) {
+      setNewResNote(`ملف مرفق (${file.name})`);
+    }
+  };
+
   const handleSubmitResource = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeMonth) return;
@@ -281,10 +329,20 @@ export default function TwelveMonthPlanView({
       activeMonth.id,
       title,
       newResType,
-      newResNote.trim() || 'مصدر مضاف يدويًا لهذا الشهر.'
+      newResNote.trim() || 'مصدر مضاف يدويًا لهذا الشهر.',
+      {
+        id: pendingResId || undefined,
+        externalUrl: newResUrl.trim() || undefined,
+        attachmentName: newResAttachmentName || undefined,
+        extractedPreview: newResPreview || undefined,
+      }
     );
     setNewResTitle('');
     setNewResNote('');
+    setNewResUrl('');
+    setNewResAttachmentName('');
+    setNewResPreview('');
+    setPendingResId('');
     setShowAddResource(false);
   };
 
@@ -1265,14 +1323,14 @@ export default function TwelveMonthPlanView({
               {showAddResource && canEdit && (
                 <form
                   onSubmit={handleSubmitResource}
-                  className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2"
+                  className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-2.5"
                 >
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <input
                       type="text"
                       value={newResTitle}
                       onChange={(e) => setNewResTitle(e.target.value)}
-                      placeholder="اسم الكتاب أو المحاضرة..."
+                      placeholder="اسم الكتاب أو المحاضرة أو الملف..."
                       className="sm:col-span-2 px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
                     />
                     <select
@@ -1286,8 +1344,42 @@ export default function TwelveMonthPlanView({
                       <option value="سلسلة محاضرات">سلسلة محاضرات</option>
                       <option value="مقال / مدخل">مقال / مدخل</option>
                       <option value="أداة تطبيق">أداة تطبيق</option>
+                      <option value="ملف / مستند">ملف / مستند (Word / PDF)</option>
+                      <option value="رابط خارجي">رابط خارجي</option>
                     </select>
                   </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="url"
+                      value={newResUrl}
+                      onChange={(e) => setNewResUrl(e.target.value)}
+                      placeholder="رابط خارجي اختياري (https://...) — يوتيوب / درايف / مقال"
+                      className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        ref={resFileInputRef}
+                        type="file"
+                        accept=".docx,.doc,.txt,.md,.markdown,.pdf"
+                        className="hidden"
+                        onChange={(e) => void handlePickMonthResourceFile(e)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => resFileInputRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-100 rounded-md cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <FileUp className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>
+                          {newResAttachmentName
+                            ? `تم إرفاق: ${newResAttachmentName}`
+                            : 'رفع ملف Word / PDF / نص'}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
                   <input
                     type="text"
                     value={newResNote}
@@ -1305,51 +1397,120 @@ export default function TwelveMonthPlanView({
               )}
 
               <div className="divide-y divide-slate-200 border border-slate-200 rounded-lg">
-                {activeMonth.resources.map((res) => (
-                  <div
-                    key={res.id}
-                    className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-white"
-                  >
-                    <div className="space-y-0.5">
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="font-semibold text-slate-900">
-                          {res.title}
-                        </span>
-                        <span aria-hidden="true" className="text-slate-300">
-                          ·
-                        </span>
-                        <span className="text-slate-500">{res.type}</span>
-                      </div>
-                      <p className="text-xs text-slate-600">{res.note}</p>
-                    </div>
+                {activeMonth.resources.map((res) => {
+                  const isPreviewOpen = expandedResPreviewId === res.id;
+                  return (
+                    <div key={res.id} className="bg-white">
+                      <div className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="space-y-0.5">
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="font-semibold text-slate-900">
+                              {res.title}
+                            </span>
+                            <span aria-hidden="true" className="text-slate-300">
+                              ·
+                            </span>
+                            <span className="text-slate-500">{res.type}</span>
+                            {res.attachmentName && (
+                              <span className="text-[11px] text-emerald-700 font-medium">
+                                ({res.attachmentName})
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-600">{res.note}</p>
+                        </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      <a
-                        href={`https://www.google.com/search?q=${encodeURIComponent(
-                          res.searchQuery
-                        )}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs font-medium text-[#1E3A5F] hover:underline whitespace-nowrap"
-                      >
-                        <span>بحث عن المصدر</span>
-                        <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                      </a>
-                      {canEdit && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onDeleteMonthResource(activeMonth.id, res.id)
-                          }
-                          aria-label="حذف المصدر"
-                          className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          {res.extractedPreview && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedResPreviewId(
+                                    isPreviewOpen ? null : res.id
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                              >
+                                <FileText className="w-3 h-3" aria-hidden="true" />
+                                <span>{isPreviewOpen ? 'إخفاء النص' : 'معاينة'}</span>
+                              </button>
+                              {canEdit && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onOpenBookNote(
+                                      res.title,
+                                      activeMonth.theme,
+                                      res.extractedPreview
+                                    )
+                                  }
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                                >
+                                  <PenLine className="w-3 h-3" aria-hidden="true" />
+                                  <span>فتح كدفتر نوتس</span>
+                                </button>
+                              )}
+                            </>
+                          )}
+
+                          {res.attachmentName && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void downloadLocalAttachment(
+                                  res.id,
+                                  res.attachmentName || res.title
+                                )
+                              }
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                            >
+                              <Download className="w-3 h-3" aria-hidden="true" />
+                              <span>تحميل الملف</span>
+                            </button>
+                          )}
+
+                          <a
+                            href={
+                              res.externalUrl ||
+                              `https://www.google.com/search?q=${encodeURIComponent(
+                                res.searchQuery
+                              )}`
+                            }
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-[#1E3A5F] hover:underline whitespace-nowrap"
+                          >
+                            <span>
+                              {res.externalUrl ? 'فتح الرابط الخارجي' : 'بحث عن المصدر'}
+                            </span>
+                            <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                          </a>
+                          {canEdit && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onDeleteMonthResource(activeMonth.id, res.id)
+                              }
+                              aria-label="حذف المصدر"
+                              className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {isPreviewOpen && res.extractedPreview && (
+                        <div className="px-4 pb-3 pt-1">
+                          <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed">
+                            {res.extractedPreview}
+                          </div>
+                        </div>
                       )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 

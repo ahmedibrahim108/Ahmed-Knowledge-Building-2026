@@ -24,6 +24,48 @@ type RecorderPhase =
   | 'stopped_transcribing'
   | 'stopped_done';
 
+interface BrowserSpeechRecognitionAlternative {
+  transcript: string;
+}
+
+interface BrowserSpeechRecognitionResult {
+  isFinal: boolean;
+  0: BrowserSpeechRecognitionAlternative;
+}
+
+interface BrowserSpeechRecognitionEvent {
+  resultIndex: number;
+  results: ArrayLike<BrowserSpeechRecognitionResult>;
+}
+
+interface BrowserSpeechRecognition {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
+type SpeechRecognitionCtor = new () => BrowserSpeechRecognition;
+
+function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
+  if (typeof window === 'undefined') return null;
+  const w = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  };
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+
+function getSpeechLang(dialect: VoiceDialectMode): string {
+  if (dialect === 'egyptian_arabic') return 'ar-EG';
+  if (dialect === 'bilingual') return 'ar-EG';
+  return 'ar-SA';
+}
+
 export default function VoiceRecorderButton({
   onTranscript,
   label = 'إملاء صوتي',
@@ -33,6 +75,7 @@ export default function VoiceRecorderButton({
 }: VoiceRecorderButtonProps) {
   const [phase, setPhase] = useState<RecorderPhase>('idle');
   const [seconds, setSeconds] = useState(0);
+  const [livePreview, setLivePreview] = useState('');
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isPermissionError, setIsPermissionError] = useState(false);
@@ -41,6 +84,10 @@ export default function VoiceRecorderButton({
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const doneTimerRef = useRef<number | null>(null);
+  const speechRecRef = useRef<BrowserSpeechRecognition | null>(null);
+  const speechFinalTextRef = useRef<string>('');
+  const speechInterimTextRef = useRef<string>('');
+  const speechOnlyModeRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (phase !== 'recording') {
@@ -56,6 +103,11 @@ export default function VoiceRecorderButton({
   useEffect(() => {
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      try {
+        speechRecRef.current?.stop();
+      } catch {
+        // ignore
+      }
       if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
     };
   }, []);
@@ -117,6 +169,100 @@ export default function VoiceRecorderButton({
     };
   };
 
+  const startShadowSpeechRecognition = (isPrimary: boolean) => {
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) return false;
+    try {
+      const rec = new Ctor();
+      rec.lang = getSpeechLang(dialect);
+      rec.continuous = true;
+      rec.interimResults = true;
+      speechFinalTextRef.current = '';
+      speechInterimTextRef.current = '';
+
+      rec.onresult = (ev) => {
+        let finalSeg = '';
+        let interimSeg = '';
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          const r = ev.results[i];
+          const txt = r[0]?.transcript ?? '';
+          if (r.isFinal) {
+            finalSeg += `${txt} `;
+          } else {
+            interimSeg += `${txt} `;
+          }
+        }
+        if (finalSeg) {
+          speechFinalTextRef.current = `${speechFinalTextRef.current} ${finalSeg}`.trim();
+        }
+        speechInterimTextRef.current = interimSeg.trim();
+        setLivePreview(
+          `${speechFinalTextRef.current} ${speechInterimTextRef.current}`.trim()
+        );
+      };
+
+      rec.onerror = (ev) => {
+        if (!isPrimary) return;
+        const code = ev.error || '';
+        if (code === 'not-allowed' || code === 'service-not-allowed') {
+          setIsPermissionError(true);
+          setErrorMsg(
+            'تم رفض إذن الميكروفون للتفريغ المباشر. اسمح بالميكروفون ثم أعد المحاولة.'
+          );
+          setPhase('idle');
+        }
+      };
+
+      rec.onend = () => {
+        if (isPrimary && speechOnlyModeRef.current && phase === 'recording') {
+          // Wait for explicit handleStop finalization
+        }
+      };
+
+      rec.start();
+      speechRecRef.current = rec;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const stopShadowSpeechRecognition = (): string => {
+    try {
+      speechRecRef.current?.stop();
+    } catch {
+      // ignore
+    }
+    speechRecRef.current = null;
+    const combined = `${speechFinalTextRef.current} ${speechInterimTextRef.current}`.trim();
+    return combined;
+  };
+
+  const finishSuccess = (text: string, sourceLabel?: string) => {
+    onTranscript(text);
+    setLivePreview('');
+    setPhase('stopped_done');
+    setStatusNotice(sourceLabel || 'تم التوقف وإدراج النص');
+    doneTimerRef.current = window.setTimeout(() => {
+      setPhase('idle');
+      setStatusNotice(null);
+    }, 4000);
+  };
+
+  const sanitizeServerError = (status: number, rawText: string): string => {
+    const trimmed = (rawText || '').trim();
+    if (
+      status === 404 ||
+      trimmed.includes('NOT_FOUND') ||
+      trimmed.includes('page could not be found') ||
+      trimmed.startsWith('<!') ||
+      trimmed.startsWith('<html')
+    ) {
+      return 'خدمة التفريغ السحابية غير متوفرة على هذا الرابط حاليًا. تأكد من تشغيل الخادم أو استخدم متصفح Chrome/Edge للتفريغ المباشر.';
+    }
+    return trimmed || 'تعذر تحويل الصوت إلى نص حاليًا.';
+  };
+
   const handleStart = async () => {
     if (disabled) {
       onRequireAuth?.();
@@ -131,15 +277,21 @@ export default function VoiceRecorderButton({
     setErrorMsg(null);
     setStatusNotice(null);
     setIsPermissionError(false);
+    setLivePreview('');
 
     if (!navigator.mediaDevices?.getUserMedia) {
+      // Try pure browser SpeechRecognition if MediaDevices missing
+      if (startShadowSpeechRecognition(true)) {
+        speechOnlyModeRef.current = true;
+        setPhase('recording');
+        return;
+      }
       setErrorMsg('المتصفح الحالي لا يدعم واجهة تسجيل الصوت.');
       return;
     }
 
     setPhase('requesting');
 
-    // Proactively check permission state if supported
     try {
       if (navigator.permissions?.query) {
         const permStatus = await navigator.permissions.query({
@@ -155,7 +307,16 @@ export default function VoiceRecorderButton({
         }
       }
     } catch {
-      // permissions.query('microphone') isn't supported in all browsers; continue to getUserMedia
+      // permissions.query('microphone') isn't supported everywhere
+    }
+
+    // If server route was previously confirmed missing (404) & browser SpeechRecognition is available,
+    // use pure SpeechRecognition directly so recording works reliably without 404 errors.
+    if (speechOnlyModeRef.current && getSpeechRecognitionCtor()) {
+      if (startShadowSpeechRecognition(true)) {
+        setPhase('recording');
+        return;
+      }
     }
 
     try {
@@ -185,6 +346,7 @@ export default function VoiceRecorderButton({
       recorder.onerror = () => {
         stream.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
+        stopShadowSpeechRecognition();
         setPhase('idle');
         setErrorMsg('انقطع تسجيل الصوت فجأة. حاول التسجيل مرة أخرى.');
       };
@@ -192,12 +354,17 @@ export default function VoiceRecorderButton({
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
+        const backupSpeechText = stopShadowSpeechRecognition();
 
         const actualType = recorder.mimeType || mimeType || 'audio/webm';
         const blob = new Blob(chunksRef.current, { type: actualType });
         chunksRef.current = [];
 
         if (blob.size < 256) {
+          if (backupSpeechText) {
+            finishSuccess(backupSpeechText, 'تم التوقف وإدراج النص');
+            return;
+          }
           setPhase('idle');
           setStatusNotice('تم التوقف');
           setErrorMsg(
@@ -219,24 +386,47 @@ export default function VoiceRecorderButton({
             }),
           });
           const rawText = await res.text();
+          const isRouteMissing =
+            res.status === 404 ||
+            rawText.includes('NOT_FOUND') ||
+            rawText.includes('page could not be found');
+
+          if (isRouteMissing) {
+            speechOnlyModeRef.current = true;
+          }
+
           let data: { text?: string; error?: string } = {};
           try {
             data = JSON.parse(rawText) as { text?: string; error?: string };
           } catch {
-            data = { error: rawText || 'تعذر الاتصال بخدمة التفريغ الصوتي.' };
+            data = { error: sanitizeServerError(res.status, rawText) };
           }
+
           if (!res.ok || !data.text) {
-            throw new Error(data.error || 'تعذر تحويل الصوت إلى نص.');
+            // Automatic fallback to browser Web Speech transcript if captured!
+            if (backupSpeechText) {
+              finishSuccess(
+                backupSpeechText,
+                'تم التوقف وإدراج النص (تفريغ المتصفح المباشر)'
+              );
+              return;
+            }
+            throw new Error(
+              sanitizeServerError(res.status, data.error || rawText)
+            );
           }
-          onTranscript(data.text);
-          setPhase('stopped_done');
-          setStatusNotice('تم التوقف وإدراج النص');
-          doneTimerRef.current = window.setTimeout(() => {
-            setPhase('idle');
-            setStatusNotice(null);
-          }, 4000);
+
+          finishSuccess(data.text, 'تم التوقف وإدراج النص');
         } catch (err) {
+          if (backupSpeechText) {
+            finishSuccess(
+              backupSpeechText,
+              'تم التوقف وإدراج النص (تفريغ المتصفح المباشر)'
+            );
+            return;
+          }
           setPhase('idle');
+          setLivePreview('');
           setStatusNotice('تم التوقف');
           setErrorMsg(
             err instanceof Error ? err.message : 'حدث خطأ أثناء التفريغ الصوتي.'
@@ -246,6 +436,8 @@ export default function VoiceRecorderButton({
 
       mediaRecorderRef.current = recorder;
       recorder.start(250);
+      // Also run silent browser SpeechRecognition in parallel as resilience backup
+      startShadowSpeechRecognition(false);
       setPhase('recording');
     } catch (err) {
       const mapped = mapMicError(err);
@@ -256,15 +448,30 @@ export default function VoiceRecorderButton({
   };
 
   const handleStop = () => {
-    if (mediaRecorderRef.current && phase === 'recording') {
+    if (phase !== 'recording') return;
+
+    if (speechOnlyModeRef.current && !mediaRecorderRef.current) {
+      const captured = stopShadowSpeechRecognition();
+      if (captured) {
+        finishSuccess(captured, 'تم التوقف وإدراج النص');
+      } else {
+        setPhase('idle');
+        setStatusNotice('تم التوقف');
+        setErrorMsg('لم يتم التقاط كلام واضح. حاول التحدث بوضوح وإعادة المحاولة.');
+      }
+      return;
+    }
+
+    if (mediaRecorderRef.current) {
       try {
         if (mediaRecorderRef.current.state === 'recording') {
           mediaRecorderRef.current.requestData();
         }
       } catch {
-        // ignore if unsupported
+        // ignore
       }
       mediaRecorderRef.current.stop();
+      mediaRecorderRef.current = null;
     }
   };
 
@@ -329,7 +536,10 @@ export default function VoiceRecorderButton({
         {phase === 'stopped_done' && (
           <div className="inline-flex items-center gap-2">
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg whitespace-nowrap shrink-0">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" aria-hidden="true" />
+              <CheckCircle2
+                className="w-3.5 h-3.5 text-emerald-700"
+                aria-hidden="true"
+              />
               <span>{statusNotice || 'تم التوقف وإدراج النص'}</span>
             </span>
             <button
@@ -343,6 +553,12 @@ export default function VoiceRecorderButton({
           </div>
         )}
       </div>
+
+      {phase === 'recording' && livePreview && (
+        <p className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1 max-w-sm text-right leading-relaxed">
+          {livePreview}
+        </p>
+      )}
 
       {phase === 'idle' && statusNotice && !errorMsg && (
         <span className="text-[11px] font-medium text-slate-500">

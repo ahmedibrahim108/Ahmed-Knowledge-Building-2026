@@ -416,7 +416,7 @@
         },
         "targetTab": {
           "type": "string",
-          "enum": ["overview", "plan", "domains", "courses", "journal"]
+          "enum": ["overview", "plan", "domains", "courses", "journal", "calendar"]
         },
         "targetNoteId": {
           "type": "string",
@@ -567,6 +567,72 @@
         "createdAtMs",
         "updatedAt"
       ]
+    },
+    "CalendarEventItem": {
+      "title": "CalendarEventItem",
+      "description": "Personal weekly/monthly calendar event with optional task link.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "dateKey": {
+          "type": "string",
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "timeSlot": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "category": {
+          "type": "string",
+          "enum": ["شخصي", "دراسة", "موعد", "مراجعة", "قراءة"]
+        },
+        "color": {
+          "type": "string",
+          "enum": ["navy", "emerald", "amber", "rose"]
+        },
+        "done": {
+          "type": "boolean"
+        },
+        "linkedTaskText": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "dateKey",
+        "timeSlot",
+        "title",
+        "notes",
+        "category",
+        "color",
+        "done",
+        "linkedTaskText",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -609,6 +675,10 @@
     "/users/{userId}/reflections/{reflectionId}": {
       "schema": { "$ref": "#/entities/PersonalReflectionItem" },
       "description": "User's private personal reflections and thoughts on the dashboard."
+    },
+    "/users/{userId}/calendarEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/CalendarEventItem" },
+      "description": "User's personal weekly and monthly calendar schedule events."
     }
   }
 }

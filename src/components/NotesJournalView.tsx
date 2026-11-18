@@ -6,6 +6,7 @@ import {
   Download,
   FileSpreadsheet,
   FileText,
+  FileUp,
   GraduationCap,
   Layers,
   Lock,
@@ -37,6 +38,11 @@ import {
   exportSingleBookNoteAsMarkdown,
 } from '../utils/excelExport';
 import {
+  exportNotebookBundleAsWord,
+  exportSingleBookNoteAsWord,
+  parseDocumentFile,
+} from '../utils/documentImportExport';
+import {
   HIGHLIGHT_SWATCHES,
   ensureRichHtml,
   richHtmlToPlainText,
@@ -64,6 +70,7 @@ interface NotesJournalViewProps {
     courseTitle?: string;
     lectureTitle?: string;
     categoryLabel?: string;
+    initialContent?: string;
   }) => void;
   onUpdateBookNote: (id: string, updates: Partial<BookNote>) => void;
   onDeleteBookNote: (id: string) => void;
@@ -140,6 +147,10 @@ export default function NotesJournalView({
     null
   );
   const [selectedExportIds, setSelectedExportIds] = useState<string[]>([]);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [importingFile, setImportingFile] = useState(false);
+  const newNoteFileInputRef = useRef<HTMLInputElement | null>(null);
+  const appendFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const toggleExportSelection = (noteId: string) => {
     setSelectedExportIds((prev) =>
@@ -449,6 +460,66 @@ export default function NotesJournalView({
     onLogVoiceNote?.(note.bookTitle);
   };
 
+  const handleImportNewNoteFromFile = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    targetCourse?: PersonalCourse
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!requireEdit()) return;
+
+    setImportingFile(true);
+    setImportNotice(null);
+    try {
+      const parsed = await parseDocumentFile(file);
+      onAddStructuredNote({
+        noteType: targetCourse ? 'course_lecture' : 'book',
+        bookTitle: parsed.title,
+        author: targetCourse?.bookAuthor || 'مستند مستورد',
+        courseId: targetCourse?.id ?? 0,
+        courseTitle: targetCourse?.title ?? '',
+        lectureTitle: targetCourse ? parsed.title : '',
+        categoryLabel: customCategories[0]?.title ?? '',
+        initialContent: parsed.html,
+      });
+      setSelectedCourseNotebookId(targetCourse?.id ?? null);
+      setIsWorkspaceOpen(true);
+      setImportNotice(`تم استيراد «${file.name}» بنجاح. يمكنك الآن تعديله أو تصديره.`);
+    } catch {
+      setImportNotice('تعذر قراءة الملف. تأكد أنه بصيغة .docx أو .txt أو .md صالحة.');
+    } finally {
+      setImportingFile(false);
+    }
+  };
+
+  const handleAppendFileToNote = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    note: BookNote
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!requireEdit()) return;
+
+    setImportingFile(true);
+    setImportNotice(null);
+    try {
+      const parsed = await parseDocumentFile(file);
+      const headerHtml = `<p><strong>محتوى مستورد من: ${escapePlainToHtml(file.name)}</strong></p>`;
+      const existing = ensureRichHtml(note.content || '');
+      const nextHtml = existing
+        ? `${existing}${headerHtml}${parsed.html}`
+        : `${headerHtml}${parsed.html}`;
+      onUpdateBookNote(note.id, { content: nextHtml });
+      setImportNotice(`تم إدراج محتوى «${file.name}» داخل الملاحظة.`);
+    } catch {
+      setImportNotice('تعذر قراءة محتوى الملف المرفق.');
+    } finally {
+      setImportingFile(false);
+    }
+  };
+
   const renderActiveNoteEditor = (note: BookNote) => (
     <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 pb-5 border-b border-slate-200">
@@ -652,6 +723,25 @@ export default function NotesJournalView({
             النوتس والأفكار المستخلصة (شريط التنسيق الكامل + صوت)
           </span>
           <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={appendFileInputRef}
+              type="file"
+              accept=".docx,.doc,.txt,.md,.markdown"
+              className="hidden"
+              onChange={(e) => void handleAppendFileToNote(e, note)}
+            />
+            <button
+              type="button"
+              disabled={!canEdit || importingFile}
+              onClick={() => {
+                if (!requireEdit()) return;
+                appendFileInputRef.current?.click();
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+            >
+              <FileUp className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>{importingFile ? 'جاري الاستيراد...' : 'استيراد Word / نص'}</span>
+            </button>
             <ReadAloudButton
               text={richHtmlToPlainText(note.content)}
               voiceName={preferences.readAloudVoice}
@@ -728,14 +818,22 @@ export default function NotesJournalView({
         <span className="text-xs text-slate-500">
           تحميل هذا الدفتر فقط في ملف مستقل:
         </span>
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => exportSingleBookNoteAsWord(note)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[#1E3A5F] bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <FileText className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>تحميل ملف Word (.doc)</span>
+          </button>
           <button
             type="button"
             onClick={() => exportSingleBookNoteAsMarkdown(note)}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-slate-800 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-800 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <FileText className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>تحميل ملف نصي (.md)</span>
+            <span>ملف نصي (.md)</span>
           </button>
           <button
             type="button"
@@ -743,7 +841,7 @@ export default function NotesJournalView({
             className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Download className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>تحميل ملف Excel (.xlsx)</span>
+            <span>ملف Excel (.xlsx)</span>
           </button>
         </div>
       </div>
@@ -1085,7 +1183,20 @@ export default function NotesJournalView({
                         {selectedCourseNotes.length} محاضرات / ملخصات
                       </span>
                       {selectedCourseNotes.length > 0 && (
-                        <div className="flex items-center gap-1.5 mr-2">
+                        <div className="flex flex-wrap items-center gap-1.5 mr-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              exportNotebookBundleAsWord(
+                                selectedCourse.title,
+                                selectedCourseNotes
+                              )
+                            }
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-md whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            <FileText className="w-3 h-3" aria-hidden="true" />
+                            <span>Word (.doc)</span>
+                          </button>
                           <button
                             type="button"
                             onClick={() =>
@@ -1097,7 +1208,7 @@ export default function NotesJournalView({
                             className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md whitespace-nowrap shrink-0 cursor-pointer"
                           >
                             <FileText className="w-3 h-3" aria-hidden="true" />
-                            <span>تصدير الدفتر (.md)</span>
+                            <span>.md</span>
                           </button>
                           <button
                             type="button"
@@ -1110,7 +1221,7 @@ export default function NotesJournalView({
                             className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md whitespace-nowrap shrink-0 cursor-pointer"
                           >
                             <Download className="w-3 h-3" aria-hidden="true" />
-                            <span>تصدير الدفتر (.xlsx)</span>
+                            <span>Excel (.xlsx)</span>
                           </button>
                         </div>
                       )}
@@ -1351,18 +1462,57 @@ export default function NotesJournalView({
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!requireEdit()) return;
-                      setShowComposer((v) => !v);
-                    }}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>{showComposer ? 'إخفاء نموذج الإضافة' : 'إضافة دفتر تلخيص جديد'}</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      ref={newNoteFileInputRef}
+                      type="file"
+                      accept=".docx,.doc,.txt,.md,.markdown"
+                      className="hidden"
+                      onChange={(e) => void handleImportNewNoteFromFile(e)}
+                    />
+                    <button
+                      type="button"
+                      disabled={importingFile}
+                      onClick={() => {
+                        if (!requireEdit()) return;
+                        newNoteFileInputRef.current?.click();
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+                    >
+                      <FileUp className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>
+                        {importingFile
+                          ? 'جاري رفع الملف...'
+                          : 'رفع محاضرة / ملف Word (.docx)'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!requireEdit()) return;
+                        setShowComposer((v) => !v);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>{showComposer ? 'إخفاء نموذج الإضافة' : 'إضافة دفتر تلخيص جديد'}</span>
+                    </button>
+                  </div>
                 </div>
+
+                {importNotice && (
+                  <div className="px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 flex items-center justify-between gap-2">
+                    <span>{importNotice}</span>
+                    <button
+                      type="button"
+                      onClick={() => setImportNotice(null)}
+                      className="text-[11px] font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                    >
+                      إغلاق
+                    </button>
+                  </div>
+                )}
 
                 {showComposer && canEdit && (
                   <div className="pt-4 border-t border-slate-200 space-y-4">
