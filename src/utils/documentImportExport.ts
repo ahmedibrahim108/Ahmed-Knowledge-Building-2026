@@ -1,5 +1,8 @@
 import mammoth from 'mammoth';
+import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { getBlob, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { BookNote } from '../data/curriculumData';
+import { auth, db, storage } from '../firebase';
 import { ensureRichHtml, richHtmlToPlainText } from './richText';
 
 export interface ParsedImportedDocument {
@@ -18,6 +21,12 @@ function escapeHtml(text: string): string {
 
 function stripExtension(name: string): string {
   return name.replace(/\.(docx|doc|txt|md|markdown|pdf|html|htm)$/i, '').trim();
+}
+
+export function isPdfAttachment(fileName?: string, mimeType?: string): boolean {
+  if (mimeType && mimeType.toLowerCase().includes('pdf')) return true;
+  if (!fileName) return false;
+  return /\.pdf($|\?)/i.test(fileName.trim());
 }
 
 export async function parseDocumentFile(
@@ -109,13 +118,16 @@ function openAttachmentsDb(): Promise<IDBDatabase> {
 
 export async function saveLocalAttachment(
   resourceId: string,
-  file: File
+  file: Blob,
+  fileName?: string
 ): Promise<void> {
   try {
     const db = await openAttachmentsDb();
     const tx = db.transaction(IDB_STORE, 'readwrite');
+    const resolvedName =
+      file instanceof File ? file.name : fileName || 'document.pdf';
     tx.objectStore(IDB_STORE).put(
-      { blob: file, name: file.name, type: file.type },
+      { blob: file, name: resolvedName, type: file.type },
       resourceId
     );
     await new Promise<void>((resolve, reject) => {
@@ -127,20 +139,35 @@ export async function saveLocalAttachment(
   }
 }
 
-export async function downloadLocalAttachment(
-  resourceId: string,
-  fallbackName: string
-): Promise<boolean> {
+export async function getLocalAttachmentBlob(
+  resourceId: string
+): Promise<{ blob: Blob; name?: string; type?: string } | null> {
   try {
     const db = await openAttachmentsDb();
     const tx = db.transaction(IDB_STORE, 'readonly');
     const req = tx.objectStore(IDB_STORE).get(resourceId);
     const record = await new Promise<
-      { blob: Blob; name?: string } | undefined
+      { blob: Blob; name?: string; type?: string } | undefined
     >((resolve, reject) => {
-      req.onsuccess = () => resolve(req.result as { blob: Blob; name?: string } | undefined);
+      req.onsuccess = () =>
+        resolve(
+          req.result as { blob: Blob; name?: string; type?: string } | undefined
+        );
       req.onerror = () => reject(req.error);
     });
+    if (!record?.blob) return null;
+    return record;
+  } catch {
+    return null;
+  }
+}
+
+export async function downloadLocalAttachment(
+  resourceId: string,
+  fallbackName: string
+): Promise<boolean> {
+  try {
+    const record = await getLocalAttachmentBlob(resourceId);
     if (!record?.blob) return false;
     const url = URL.createObjectURL(record.blob);
     const a = document.createElement('a');
@@ -154,6 +181,239 @@ export async function downloadLocalAttachment(
   } catch {
     return false;
   }
+}
+
+export interface UploadedAttachmentResult {
+  storagePath?: string;
+  downloadUrl?: string;
+  mimeType: string;
+  sizeBytes: number;
+  uploadedToCloud: boolean;
+}
+
+function fileToDataUrl(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function dataUrlToBlob(dataUrl: string): Promise<Blob | null> {
+  try {
+    const res = await fetch(dataUrl);
+    return await res.blob();
+  } catch {
+    return null;
+  }
+}
+
+export async function uploadResourceAttachment(
+  uid: string | undefined,
+  resourceId: string,
+  file: File
+): Promise<UploadedAttachmentResult> {
+  const mimeType =
+    file.type ||
+    (isPdfAttachment(file.name) ? 'application/pdf' : 'application/octet-stream');
+
+  // Always persist locally in IndexedDB for instant offline/in-app PDF viewing
+  await saveLocalAttachment(resourceId, file, file.name);
+
+  if (!uid) {
+    return {
+      mimeType,
+      sizeBytes: file.size,
+      uploadedToCloud: false,
+    };
+  }
+
+  const safeId = resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+  let storagePath: string | undefined;
+  let downloadUrl: string | undefined;
+  let uploadedToCloud = false;
+
+  try {
+    const safeFileName =
+      file.name.replace(/[^a-zA-Z0-9._\-\u0600-\u06FF]/g, '_').slice(0, 120) ||
+      'attachment';
+    storagePath = `users/${uid}/resources/${safeId}/${safeFileName}`;
+    const storageRef = ref(storage, storagePath);
+    await uploadBytes(storageRef, file, { contentType: mimeType });
+    downloadUrl = await getDownloadURL(storageRef);
+    uploadedToCloud = true;
+  } catch (err) {
+    console.warn('Cloud Storage upload fallback:', err);
+    storagePath = undefined;
+  }
+
+  // Also save smaller PDFs/docs directly in Firestore `attachments` for instant cross-device reliability
+  if (file.size <= 640 * 1024) {
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      if (dataUrl.length <= 899_000) {
+        await setDoc(doc(db, 'users', uid, 'attachments', safeId), {
+          id: safeId,
+          ownerId: uid,
+          fileName: file.name.slice(0, 200),
+          mimeType: mimeType.slice(0, 120),
+          sizeBytes: file.size,
+          dataUrl,
+          updatedAt: serverTimestamp(),
+        });
+        uploadedToCloud = true;
+      }
+    } catch (err) {
+      console.warn('Firestore attachment backup failed:', err);
+    }
+  }
+
+  return {
+    storagePath,
+    downloadUrl,
+    mimeType,
+    sizeBytes: file.size,
+    uploadedToCloud,
+  };
+}
+
+export async function getPdfBlobForViewing(options: {
+  resourceId?: string;
+  storagePath?: string;
+  downloadUrl?: string;
+}): Promise<Blob | null> {
+  if (options.resourceId) {
+    const local = await getLocalAttachmentBlob(options.resourceId);
+    if (local?.blob) return local.blob;
+  }
+
+  const uid = auth.currentUser?.uid;
+  if (uid && options.resourceId) {
+    try {
+      const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+      const snap = await getDoc(doc(db, 'users', uid, 'attachments', safeId));
+      if (snap.exists()) {
+        const raw = snap.data() as { dataUrl?: string; fileName?: string };
+        if (raw.dataUrl) {
+          const blob = await dataUrlToBlob(raw.dataUrl);
+          if (blob) {
+            await saveLocalAttachment(options.resourceId, blob, raw.fileName);
+            return blob;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed reading attachment from Firestore:', err);
+    }
+  }
+
+  if (options.storagePath) {
+    try {
+      const blob = await getBlob(ref(storage, options.storagePath));
+      if (options.resourceId && blob) {
+        await saveLocalAttachment(options.resourceId, blob);
+      }
+      return blob;
+    } catch (err) {
+      console.warn('Failed reading PDF via Storage SDK:', err);
+    }
+  }
+
+  if (options.downloadUrl) {
+    try {
+      const res = await fetch(options.downloadUrl);
+      if (res.ok) {
+        const blob = await res.blob();
+        if (options.resourceId && blob) {
+          await saveLocalAttachment(options.resourceId, blob);
+        }
+        return blob;
+      }
+    } catch (err) {
+      console.warn('Failed fetching PDF URL:', err);
+    }
+  }
+
+  return null;
+}
+
+export async function downloadResourceAttachment(options: {
+  resourceId?: string;
+  fileName: string;
+  storagePath?: string;
+  downloadUrl?: string;
+}): Promise<boolean> {
+  const triggerBlobDownload = (blob: Blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = options.fileName || 'document.pdf';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  if (options.resourceId) {
+    const local = await getLocalAttachmentBlob(options.resourceId);
+    if (local?.blob) {
+      triggerBlobDownload(local.blob);
+      return true;
+    }
+  }
+
+  const uid = auth.currentUser?.uid;
+  if (uid && options.resourceId) {
+    try {
+      const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+      const snap = await getDoc(doc(db, 'users', uid, 'attachments', safeId));
+      if (snap.exists()) {
+        const raw = snap.data() as { dataUrl?: string };
+        if (raw.dataUrl) {
+          const blob = await dataUrlToBlob(raw.dataUrl);
+          if (blob) {
+            triggerBlobDownload(blob);
+            return true;
+          }
+        }
+      }
+    } catch {
+      // Fall through
+    }
+  }
+
+  if (options.storagePath) {
+    try {
+      const blob = await getBlob(ref(storage, options.storagePath));
+      triggerBlobDownload(blob);
+      return true;
+    } catch {
+      // Fall through to downloadUrl
+    }
+  }
+
+  if (options.downloadUrl) {
+    try {
+      const res = await fetch(options.downloadUrl);
+      if (res.ok) {
+        const blob = await res.blob();
+        triggerBlobDownload(blob);
+        return true;
+      }
+    } catch {
+      const a = document.createElement('a');
+      a.href = options.downloadUrl;
+      a.download = options.fileName || 'document.pdf';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // --- Export Notes to Word (.doc) ---

@@ -7,18 +7,24 @@ import { User, onAuthStateChanged } from 'firebase/auth';
 import { useEffect, useState } from 'react';
 import { CheckCircle2, Lock, LogIn } from 'lucide-react';
 import CalendarView from './components/CalendarView';
+import ConfirmDialog from './components/ConfirmDialog';
 import CoursesView from './components/CoursesView';
 import DomainsView from './components/DomainsView';
 import Header, { ActiveTab } from './components/Header';
+import LibraryView from './components/LibraryView';
 import NotesJournalView from './components/NotesJournalView';
 import OfflineIndicator from './components/OfflineIndicator';
 import OverviewView from './components/OverviewView';
+import PathsView from './components/PathsView';
+import PDFViewerModal, { ActivePdfTarget } from './components/PDFViewerModal';
 import PWAInstallButton from './components/PWAInstallButton';
+import TasksProjectsView from './components/TasksProjectsView';
 import TwelveMonthPlanView from './components/TwelveMonthPlanView';
 import {
   BookNote,
   CalendarEvent,
   CustomCategory,
+  DEFAULT_HUB_CATEGORIES,
   DEFAULT_USER_PREFERENCES,
   DOMAINS,
   DomainId,
@@ -28,17 +34,22 @@ import {
   INITIAL_CUSTOM_CATEGORIES,
   INITIAL_MONTHS,
   INITIAL_QUARTERS,
+  LearningHubId,
+  LearningPath,
   MonthActivities,
   MonthPlan,
   MonthStatus,
   NoteCategoryType,
   PersonalCourse,
   PersonalReflection,
+  PracticalProject,
   QuarterInfo,
+  ReadingLibraryItem,
   ReflectionMood,
   SmallTask,
   StudyHistoryEntry,
   StudyResource,
+  UnifiedTask,
   UserPreferences,
 } from './data/curriculumData';
 import { auth, signInWithGoogle, signOutUser } from './firebase';
@@ -49,9 +60,13 @@ import {
   deleteCustomCategoryDoc,
   deleteDomainDoc,
   deleteHistoryEntryDoc,
+  deleteLearningPathDoc,
   deleteMonthDoc,
+  deletePracticalProjectDoc,
   deleteQuarterDoc,
+  deleteReadingItemDoc,
   deleteReflectionDoc,
+  deleteUnifiedTaskDoc,
   ensureUserDocumentAndSeed,
   sanitizeId,
   saveBookNoteDoc,
@@ -60,9 +75,13 @@ import {
   saveCustomCategoryDoc,
   saveDomainDoc,
   saveHistoryEntryDoc,
+  saveLearningPathDoc,
   saveMonthDoc,
+  savePracticalProjectDoc,
   saveQuarterDoc,
+  saveReadingItemDoc,
   saveReflectionDoc,
+  saveUnifiedTaskDoc,
   saveUserPreferencesDoc,
   subscribeUserWorkspace,
 } from './services/firestoreSync';
@@ -106,12 +125,21 @@ export default function App() {
   const [history, setHistory] = useState<StudyHistoryEntry[]>([]);
   const [reflections, setReflections] = useState<PersonalReflection[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [learningPaths, setLearningPaths] = useState<LearningPath[]>([]);
+  const [readingItems, setReadingItems] = useState<ReadingLibraryItem[]>([]);
+  const [projects, setProjects] = useState<PracticalProject[]>([]);
+  const [unifiedTasks, setUnifiedTasks] = useState<UnifiedTask[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences>(
     DEFAULT_USER_PREFERENCES
   );
-  const [activeBookNoteId, setActiveBookNoteId] = useState<string | null>(
-    () => INITIAL_BOOK_NOTES[0]?.id ?? null
-  );
+  const [activeBookNoteId, setActiveBookNoteId] = useState<string | null>(null);
+  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
+  const [activeHubFilter, setActiveHubFilter] = useState<
+    LearningHubId | 'all'
+  >('all');
+  const [activePdfTarget, setActivePdfTarget] =
+    useState<ActivePdfTarget | null>(null);
+  const [confirmResetOpen, setConfirmResetOpen] = useState(false);
   const [selectedMonthId, setSelectedMonthId] = useState<number>(1);
   const [domainFilter, setDomainFilter] = useState<DomainId | 'all'>('all');
   const [exportNotice, setExportNotice] = useState<string | null>(null);
@@ -135,8 +163,15 @@ export default function App() {
     setHistory([]);
     setReflections([]);
     setCalendarEvents([]);
+    setLearningPaths([]);
+    setReadingItems([]);
+    setProjects([]);
+    setUnifiedTasks([]);
     setPreferences(DEFAULT_USER_PREFERENCES);
-    setActiveBookNoteId(INITIAL_BOOK_NOTES[0]?.id ?? null);
+    setActiveBookNoteId(null);
+    setSelectedCourseId(null);
+    setActiveHubFilter('all');
+    setActivePdfTarget(null);
     setDomainFilter('all');
     setSelectedMonthId(1);
   };
@@ -202,6 +237,18 @@ export default function App() {
             },
             onCalendarEvents: (items) => {
               setCalendarEvents(items);
+            },
+            onLearningPaths: (items) => {
+              setLearningPaths(items);
+            },
+            onReadingItems: (items) => {
+              setReadingItems(items);
+            },
+            onProjects: (items) => {
+              setProjects(items);
+            },
+            onUnifiedTasks: (items) => {
+              setUnifiedTasks(items);
             },
           });
         } catch (err) {
@@ -413,15 +460,17 @@ export default function App() {
       },
       status: 'not_started',
       notes: '',
-      tasks: [
-        {
-          id: `m${nextId}-t1-${Date.now()}`,
-          text: `البدء بقراءة ${payload.foundationalTitle} وتدوين الملاحظات الأولى.`,
-          track: 'foundational',
-          done: false,
-          custom: true,
-        },
-      ],
+      tasks: payload.foundationalTitle
+        ? [
+            {
+              id: `m${nextId}-t1-${Date.now()}`,
+              text: `البدء بقراءة ${payload.foundationalTitle} وتدوين الملاحظات الأولى.`,
+              track: 'foundational',
+              done: false,
+              custom: true,
+            },
+          ]
+        : [],
       resources: [],
     };
 
@@ -652,6 +701,10 @@ export default function App() {
       externalUrl?: string;
       attachmentName?: string;
       extractedPreview?: string;
+      storagePath?: string;
+      downloadUrl?: string;
+      mimeType?: string;
+      sizeBytes?: number;
     }
   ) => {
     if (!user) {
@@ -670,6 +723,12 @@ export default function App() {
         : {}),
       ...(extras?.extractedPreview
         ? { extractedPreview: extras.extractedPreview }
+        : {}),
+      ...(extras?.storagePath ? { storagePath: extras.storagePath } : {}),
+      ...(extras?.downloadUrl ? { downloadUrl: extras.downloadUrl } : {}),
+      ...(extras?.mimeType ? { mimeType: extras.mimeType } : {}),
+      ...(typeof extras?.sizeBytes === 'number'
+        ? { sizeBytes: extras.sizeBytes }
         : {}),
       custom: true,
     };
@@ -753,7 +812,14 @@ export default function App() {
 
   const handleAddCourse = (payload: {
     title: string;
+    hubId: LearningHubId;
     category: string;
+    instructor?: string;
+    platform?: string;
+    durationLabel?: string;
+    startDate?: string;
+    targetDate?: string;
+    notes?: string;
     complementaryBook: string;
     bookAuthor: string;
     applicationMilestone: string;
@@ -768,7 +834,15 @@ export default function App() {
       id: nextId,
       docId: `course-${nextId}-${Date.now()}`,
       title: payload.title,
+      hubId: payload.hubId,
       category: payload.category,
+      instructor: payload.instructor ?? '',
+      platform: payload.platform ?? '',
+      durationLabel: payload.durationLabel ?? '',
+      startDate: payload.startDate ?? '',
+      targetDate: payload.targetDate ?? '',
+      notes: payload.notes ?? '',
+      progressPct: 0,
       linkedMonths: payload.linkedMonths,
       complementaryBook: payload.complementaryBook,
       bookAuthor: payload.bookAuthor,
@@ -908,6 +982,10 @@ export default function App() {
       externalUrl?: string;
       attachmentName?: string;
       extractedPreview?: string;
+      storagePath?: string;
+      downloadUrl?: string;
+      mimeType?: string;
+      sizeBytes?: number;
     }
   ) => {
     if (!user) {
@@ -926,6 +1004,12 @@ export default function App() {
         : {}),
       ...(extras?.extractedPreview
         ? { extractedPreview: extras.extractedPreview }
+        : {}),
+      ...(extras?.storagePath ? { storagePath: extras.storagePath } : {}),
+      ...(extras?.downloadUrl ? { downloadUrl: extras.downloadUrl } : {}),
+      ...(extras?.mimeType ? { mimeType: extras.mimeType } : {}),
+      ...(typeof extras?.sizeBytes === 'number'
+        ? { sizeBytes: extras.sizeBytes }
         : {}),
       custom: true,
     };
@@ -959,6 +1043,7 @@ export default function App() {
 
   // --- Structured Book / Course / Lecture Notes CRUD ---
   const handleAddStructuredNote = (payload: {
+    hubId?: LearningHubId;
     noteType: NoteCategoryType;
     bookTitle: string;
     author: string;
@@ -974,6 +1059,7 @@ export default function App() {
     }
     const newNote: BookNote = {
       id: `bn-${Date.now()}`,
+      hubId: payload.hubId ?? 'knowledge',
       noteType: payload.noteType,
       bookTitle: payload.bookTitle,
       author: payload.author,
@@ -1027,6 +1113,7 @@ export default function App() {
     }
 
     handleAddStructuredNote({
+      hubId: 'knowledge',
       noteType: 'book',
       bookTitle,
       author,
@@ -1057,15 +1144,16 @@ export default function App() {
     }
 
     handleAddStructuredNote({
+      hubId: course.hubId || 'knowledge',
       noteType: 'course_lecture',
       bookTitle: lectureTitle
         ? `${course.title} — ${lectureTitle}`
         : `ملاحظات ${course.title}`,
-      author: course.bookAuthor || 'محاضر الكورس',
+      author: course.instructor || course.bookAuthor || '',
       courseId: course.id,
       courseTitle: course.title,
       lectureTitle: lectureTitle || 'المحاضرة 1',
-      categoryLabel: 'محاضرات وتطبيق عملي',
+      categoryLabel: course.category || 'محاضرات وتطبيق عملي',
       initialContent,
     });
   };
@@ -1266,6 +1354,194 @@ export default function App() {
     void deleteCalendarEventDoc(user.uid, id);
   };
 
+  // --- Learning Paths CRUD ---
+  const handleAddLearningPath = (payload: Omit<LearningPath, 'id'>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    const newPath: LearningPath = {
+      ...payload,
+      id: `path-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    };
+    setLearningPaths((prev) => [newPath, ...prev]);
+    void saveLearningPathDoc(user.uid, newPath);
+    recordHistory({
+      actionType: 'course',
+      title: `أنشأت مسار تعلّم: ${newPath.title}`,
+      detail: newPath.categoryLabel,
+      targetTab: 'paths',
+    });
+  };
+
+  const handleUpdateLearningPath = (
+    id: string,
+    updates: Partial<LearningPath>
+  ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setLearningPaths((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const next = { ...p, ...updates };
+        void saveLearningPathDoc(user.uid, next);
+        return next;
+      })
+    );
+  };
+
+  const handleDeleteLearningPath = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setLearningPaths((prev) => prev.filter((p) => p.id !== id));
+    void deleteLearningPathDoc(user.uid, id);
+  };
+
+  // --- Reading Library CRUD ---
+  const handleAddReadingItem = (payload: Omit<ReadingLibraryItem, 'id'>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    const newItem: ReadingLibraryItem = {
+      ...payload,
+      id: `lib-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    };
+    setReadingItems((prev) => [newItem, ...prev]);
+    void saveReadingItemDoc(user.uid, newItem);
+    recordHistory({
+      actionType: 'note',
+      title: `أضفت إلى المكتبة: ${newItem.title}`,
+      detail: newItem.categoryLabel,
+      targetTab: 'library',
+    });
+  };
+
+  const handleUpdateReadingItem = (
+    id: string,
+    updates: Partial<ReadingLibraryItem>
+  ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setReadingItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const next = { ...item, ...updates };
+        void saveReadingItemDoc(user.uid, next);
+        return next;
+      })
+    );
+  };
+
+  const handleDeleteReadingItem = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setReadingItems((prev) => prev.filter((item) => item.id !== id));
+    void deleteReadingItemDoc(user.uid, id);
+  };
+
+  // --- Practical Projects CRUD ---
+  const handleAddProject = (payload: Omit<PracticalProject, 'id'>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    const newProj: PracticalProject = {
+      ...payload,
+      id: `proj-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    };
+    setProjects((prev) => [newProj, ...prev]);
+    void savePracticalProjectDoc(user.uid, newProj);
+    recordHistory({
+      actionType: 'task',
+      title: `أضفت مشروعًا عمليًا: ${newProj.title}`,
+      detail: newProj.categoryLabel,
+      targetTab: 'tasks',
+    });
+  };
+
+  const handleUpdateProject = (
+    id: string,
+    updates: Partial<PracticalProject>
+  ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const next = { ...p, ...updates };
+        void savePracticalProjectDoc(user.uid, next);
+        return next;
+      })
+    );
+  };
+
+  const handleDeleteProject = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setProjects((prev) => prev.filter((p) => p.id !== id));
+    void deletePracticalProjectDoc(user.uid, id);
+  };
+
+  // --- Unified Tasks CRUD ---
+  const handleAddUnifiedTask = (payload: Omit<UnifiedTask, 'id'>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    const newTask: UnifiedTask = {
+      ...payload,
+      id: `utask-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    };
+    setUnifiedTasks((prev) => [newTask, ...prev]);
+    void saveUnifiedTaskDoc(user.uid, newTask);
+    recordHistory({
+      actionType: 'task',
+      title: `أضفت مهمة جديدة: ${newTask.title}`,
+      detail: newTask.categoryLabel,
+      targetTab: 'tasks',
+    });
+  };
+
+  const handleUpdateUnifiedTask = (
+    id: string,
+    updates: Partial<UnifiedTask>
+  ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setUnifiedTasks((prev) =>
+      prev.map((t) => {
+        if (t.id !== id) return t;
+        const next = { ...t, ...updates };
+        void saveUnifiedTaskDoc(user.uid, next);
+        return next;
+      })
+    );
+  };
+
+  const handleDeleteUnifiedTask = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setUnifiedTasks((prev) => prev.filter((t) => t.id !== id));
+    void deleteUnifiedTaskDoc(user.uid, id);
+  };
+
   const handleResetPlan = () => {
     if (!user) {
       handleRequireAuth();
@@ -1297,6 +1573,9 @@ export default function App() {
         monthsCount={months.length}
         domainsCount={domains.length}
         coursesCount={courses.length}
+        pathsCount={learningPaths.length}
+        libraryCount={readingItems.length}
+        tasksCount={unifiedTasks.length}
         notesCount={bookNotes.length}
       />
 
@@ -1373,16 +1652,30 @@ export default function App() {
             canEdit={canEdit}
             onRequireAuth={handleRequireAuth}
             voiceDialect={preferences.voiceDialect}
+            preferences={preferences}
+            onUpdatePreferences={handleUpdatePreferences}
             quarters={quarters}
             months={months}
             domains={domains}
             courses={courses}
             bookNotes={bookNotes}
+            learningPaths={learningPaths}
+            readingItems={readingItems}
+            projects={projects}
+            unifiedTasks={unifiedTasks}
             customCategories={customCategories}
             history={history}
             reflections={reflections}
             onGoogleSignIn={handleGoogleSignIn}
             onNavigateTab={setActiveTab}
+            onSelectHub={(hub, targetTab) => {
+              setActiveHubFilter(hub);
+              setActiveTab(targetTab);
+            }}
+            onSelectCourse={(courseId) => {
+              setSelectedCourseId(courseId);
+              setActiveTab('courses');
+            }}
             onJumpToMonth={handleJumpToMonth}
             onFilterByDomain={handleFilterByDomain}
             onOpenNoteById={handleOpenNoteById}
@@ -1397,6 +1690,7 @@ export default function App() {
 
         {activeTab === 'plan' && (
           <TwelveMonthPlanView
+            uid={user?.uid}
             canEdit={canEdit}
             onRequireAuth={handleRequireAuth}
             voiceDialect={preferences.voiceDialect}
@@ -1408,6 +1702,7 @@ export default function App() {
             domainFilter={domainFilter}
             onSelectMonth={setSelectedMonthId}
             onChangeDomainFilter={setDomainFilter}
+            onOpenPdf={setActivePdfTarget}
             onAddQuarter={handleAddQuarter}
             onUpdateQuarter={handleUpdateQuarter}
             onDeleteQuarter={handleDeleteQuarter}
@@ -1441,8 +1736,16 @@ export default function App() {
 
         {activeTab === 'courses' && (
           <CoursesView
+            uid={user?.uid}
             canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
             courses={courses}
+            selectedCourseId={selectedCourseId}
+            onSelectCourse={setSelectedCourseId}
+            activeHubFilter={activeHubFilter}
+            onChangeHubFilter={setActiveHubFilter}
+            hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
+            onOpenPdf={setActivePdfTarget}
             onAddCourse={handleAddCourse}
             onUpdateCourse={handleUpdateCourse}
             onDeleteCourse={handleDeleteCourse}
@@ -1456,8 +1759,71 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'paths' && (
+          <PathsView
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            paths={learningPaths}
+            courses={courses}
+            hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
+            activeHubFilter={activeHubFilter}
+            onChangeHubFilter={setActiveHubFilter}
+            onAddPath={handleAddLearningPath}
+            onUpdatePath={handleUpdateLearningPath}
+            onDeletePath={handleDeleteLearningPath}
+            onOpenCourse={(courseId) => {
+              setSelectedCourseId(courseId);
+              setActiveTab('courses');
+            }}
+          />
+        )}
+
+        {activeTab === 'library' && (
+          <LibraryView
+            uid={user?.uid}
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            items={readingItems}
+            hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
+            activeHubFilter={activeHubFilter}
+            onChangeHubFilter={setActiveHubFilter}
+            onAddItem={handleAddReadingItem}
+            onUpdateItem={handleUpdateReadingItem}
+            onDeleteItem={handleDeleteReadingItem}
+            onOpenPdf={setActivePdfTarget}
+          />
+        )}
+
+        {activeTab === 'tasks' && (
+          <TasksProjectsView
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            unifiedTasks={unifiedTasks}
+            projects={projects}
+            months={months}
+            courses={courses}
+            hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
+            activeHubFilter={activeHubFilter}
+            onChangeHubFilter={setActiveHubFilter}
+            onAddUnifiedTask={handleAddUnifiedTask}
+            onUpdateUnifiedTask={handleUpdateUnifiedTask}
+            onDeleteUnifiedTask={handleDeleteUnifiedTask}
+            onAddProject={handleAddProject}
+            onUpdateProject={handleUpdateProject}
+            onDeleteProject={handleDeleteProject}
+            onToggleMonthTask={handleToggleMonthTask}
+            onToggleCourseTask={handleToggleCourseTask}
+            onJumpToMonth={handleJumpToMonth}
+            onOpenCourse={(courseId) => {
+              setSelectedCourseId(courseId);
+              setActiveTab('courses');
+            }}
+          />
+        )}
+
         {activeTab === 'journal' && (
           <NotesJournalView
+            uid={user?.uid}
             canEdit={canEdit}
             onRequireAuth={handleRequireAuth}
             preferences={preferences}
@@ -1468,6 +1834,11 @@ export default function App() {
             bookNotes={bookNotes}
             activeBookNoteId={activeBookNoteId}
             onSelectBookNote={setActiveBookNoteId}
+            activeHubFilter={activeHubFilter}
+            onChangeHubFilter={setActiveHubFilter}
+            hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
+            onOpenPdf={setActivePdfTarget}
+            showExcelExport={preferences.showExcelExport !== false}
             onAddStructuredNote={handleAddStructuredNote}
             onUpdateBookNote={handleUpdateBookNote}
             onDeleteBookNote={handleDeleteBookNote}
@@ -1502,24 +1873,28 @@ export default function App() {
       <footer className="border-t border-slate-200 bg-white mt-auto">
         <div className="max-w-[1280px] mx-auto px-4 sm:px-8 py-5 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
           <p className="text-center sm:text-right">
-            ميزان المعرفة · خطة الدراسة العامة المتوازنة (قراءة · استماع · تلخيص · مناقشة وتطبيق)
+            ميزان المعرفة · منظومة التعلّم والتطوير الشخصي المتوازنة (قراءة · استماع · تلخيص · تطبيق)
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4">
             <PWAInstallButton compact />
-            <span aria-hidden="true" className="hidden sm:inline">·</span>
-            <button
-              type="button"
-              onClick={handleExportExcel}
-              className="text-slate-700 font-medium hover:text-[#1E3A5F] hover:underline cursor-pointer"
-            >
-              تنزيل نسخة Excel
-            </button>
+            {preferences.showExcelExport !== false && (
+              <>
+                <span aria-hidden="true" className="hidden sm:inline">·</span>
+                <button
+                  type="button"
+                  onClick={handleExportExcel}
+                  className="text-slate-700 font-medium hover:text-[#1E3A5F] hover:underline cursor-pointer"
+                >
+                  تنزيل نسخة Excel
+                </button>
+              </>
+            )}
             {canEdit && (
               <>
                 <span aria-hidden="true">·</span>
                 <button
                   type="button"
-                  onClick={handleResetPlan}
+                  onClick={() => setConfirmResetOpen(true)}
                   className="text-slate-500 hover:text-slate-800 hover:underline cursor-pointer"
                 >
                   استعادة الخطة الافتراضية
@@ -1529,6 +1904,24 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      <ConfirmDialog
+        open={confirmResetOpen}
+        title="استعادة الخطة الافتراضية"
+        message="سيتم إعادة ضبط خطة الـ 12 شهرًا والمحاور الافتراضية دون حذف خواطرك أو مساراتك الإضافية. هل تريد المتابعة؟"
+        confirmLabel="استعادة الافتراضي"
+        destructive={false}
+        onCancel={() => setConfirmResetOpen(false)}
+        onConfirm={() => {
+          setConfirmResetOpen(false);
+          handleResetPlan();
+        }}
+      />
+
+      <PDFViewerModal
+        target={activePdfTarget}
+        onClose={() => setActivePdfTarget(null)}
+      />
 
       <OfflineIndicator />
     </div>

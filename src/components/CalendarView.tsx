@@ -6,13 +6,17 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Edit3,
   Link2,
   ListTodo,
   Lock,
   Plus,
+  Save,
   Square,
   Trash2,
+  X,
 } from 'lucide-react';
+import ConfirmDialog from './ConfirmDialog';
 import {
   CalendarCategory,
   CalendarColor,
@@ -152,6 +156,20 @@ export default function CalendarView({
   const [color, setColor] = useState<CalendarColor>('navy');
   const [notes, setNotes] = useState('');
   const [linkedTaskText, setLinkedTaskText] = useState('');
+
+  // Edit & Delete confirmation state
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<{
+    title: string;
+    dateKey: string;
+    timeSlot: string;
+    category: CalendarCategory;
+    color: CalendarColor;
+    notes: string;
+    linkedTaskText: string;
+  } | null>(null);
+  const [pendingDeleteEvent, setPendingDeleteEvent] =
+    useState<CalendarEvent | null>(null);
 
   const eventsByDate = useMemo(() => {
     const map: Record<string, CalendarEvent[]> = {};
@@ -313,6 +331,40 @@ export default function CalendarView({
       done: false,
       linkedTaskText: `${task.sourceLabel}: ${task.text}`,
     });
+  };
+
+  const handleStartEditEvent = (ev: CalendarEvent) => {
+    setEditingEventId(ev.id);
+    setEditDraft({
+      title: ev.title,
+      dateKey: ev.dateKey,
+      timeSlot: ev.timeSlot || '',
+      category: ev.category,
+      color: ev.color,
+      notes: ev.notes || '',
+      linkedTaskText: ev.linkedTaskText || '',
+    });
+  };
+
+  const handleSaveEditEvent = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingEventId || !editDraft) return;
+    const cleanTitle = editDraft.title.trim();
+    if (!cleanTitle) return;
+    onUpdateEvent(editingEventId, {
+      title: cleanTitle,
+      dateKey: editDraft.dateKey || selectedDateKey,
+      timeSlot: editDraft.timeSlot.trim(),
+      category: editDraft.category,
+      color: editDraft.color,
+      notes: editDraft.notes.trim(),
+      linkedTaskText: editDraft.linkedTaskText.trim(),
+    });
+    if (editDraft.dateKey) {
+      setSelectedDateKey(editDraft.dateKey);
+    }
+    setEditingEventId(null);
+    setEditDraft(null);
   };
 
   return (
@@ -617,7 +669,7 @@ export default function CalendarView({
                               {canEdit && (
                                 <button
                                   type="button"
-                                  onClick={() => onDeleteEvent(ev.id)}
+                                  onClick={() => setPendingDeleteEvent(ev)}
                                   aria-label="حذف الموعد"
                                   className="p-1 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
                                 >
@@ -654,9 +706,133 @@ export default function CalendarView({
                 لا توجد مواعيد في هذا اليوم. أضف موعدًا أو ملاحظة يومية بالأسفل.
               </p>
             ) : (
-              <div className="space-y-2.5 max-h-[300px] overflow-y-auto">
+              <div className="space-y-2.5 max-h-[380px] overflow-y-auto">
                 {selectedDayEvents.map((ev) => {
                   const style = COLOR_STYLES[ev.color] ?? COLOR_STYLES.navy;
+                  const isEditingThis = editingEventId === ev.id && editDraft;
+
+                  if (isEditingThis) {
+                    return (
+                      <form
+                        key={ev.id}
+                        onSubmit={handleSaveEditEvent}
+                        className="p-3 rounded-lg border border-[#1E3A5F]/40 bg-slate-50 space-y-2.5"
+                      >
+                        <input
+                          type="text"
+                          required
+                          value={editDraft.title}
+                          onChange={(e) =>
+                            setEditDraft((prev) =>
+                              prev ? { ...prev, title: e.target.value } : prev
+                            )
+                          }
+                          className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md focus:outline-none focus:border-[#1E3A5F]"
+                        />
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="date"
+                            value={editDraft.dateKey}
+                            onChange={(e) =>
+                              setEditDraft((prev) =>
+                                prev ? { ...prev, dateKey: e.target.value } : prev
+                              )
+                            }
+                            className="px-2 py-1 text-[11px] bg-white border border-slate-300 rounded-md"
+                          />
+                          <input
+                            type="time"
+                            value={editDraft.timeSlot}
+                            onChange={(e) =>
+                              setEditDraft((prev) =>
+                                prev ? { ...prev, timeSlot: e.target.value } : prev
+                              )
+                            }
+                            className="px-2 py-1 text-[11px] bg-white border border-slate-300 rounded-md"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 items-center">
+                          <select
+                            value={editDraft.category}
+                            onChange={(e) =>
+                              setEditDraft((prev) =>
+                                prev
+                                  ? {
+                                      ...prev,
+                                      category: e.target.value as CalendarCategory,
+                                    }
+                                  : prev
+                              )
+                            }
+                            className="px-2 py-1 text-[11px] bg-white border border-slate-300 rounded-md"
+                          >
+                            {CATEGORIES.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="flex items-center justify-end gap-1">
+                            {(Object.keys(COLOR_STYLES) as CalendarColor[]).map(
+                              (col) => (
+                                <button
+                                  key={col}
+                                  type="button"
+                                  onClick={() =>
+                                    setEditDraft((prev) =>
+                                      prev ? { ...prev, color: col } : prev
+                                    )
+                                  }
+                                  aria-label={COLOR_STYLES[col].label}
+                                  className={`w-5 h-5 rounded-full flex items-center justify-center border cursor-pointer ${
+                                    editDraft.color === col
+                                      ? 'border-slate-900 ring-1 ring-slate-300'
+                                      : 'border-slate-200'
+                                  }`}
+                                >
+                                  <span
+                                    className={`w-3 h-3 rounded-full ${COLOR_STYLES[col].dot}`}
+                                  />
+                                </button>
+                              )
+                            )}
+                          </div>
+                        </div>
+                        <textarea
+                          rows={2}
+                          value={editDraft.notes}
+                          onChange={(e) =>
+                            setEditDraft((prev) =>
+                              prev ? { ...prev, notes: e.target.value } : prev
+                            )
+                          }
+                          placeholder="ملاحظات..."
+                          className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                        />
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingEventId(null);
+                              setEditDraft(null);
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] text-slate-600 bg-slate-200 rounded-md cursor-pointer"
+                          >
+                            <X className="w-3 h-3" aria-hidden="true" />
+                            <span>إلغاء</span>
+                          </button>
+                          <button
+                            type="submit"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-white bg-[#1E3A5F] rounded-md cursor-pointer"
+                          >
+                            <Save className="w-3 h-3" aria-hidden="true" />
+                            <span>حفظ التغييرات</span>
+                          </button>
+                        </div>
+                      </form>
+                    );
+                  }
+
                   return (
                     <div
                       key={ev.id}
@@ -692,14 +868,24 @@ export default function CalendarView({
                         </button>
 
                         {canEdit && (
-                          <button
-                            type="button"
-                            onClick={() => onDeleteEvent(ev.id)}
-                            aria-label="حذف"
-                            className="p-0.5 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditEvent(ev)}
+                              aria-label="تعديل"
+                              className="p-1 text-slate-400 hover:text-[#1E3A5F] cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPendingDeleteEvent(ev)}
+                              aria-label="حذف"
+                              className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
                         )}
                       </div>
 
@@ -922,6 +1108,19 @@ export default function CalendarView({
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(pendingDeleteEvent)}
+        title={`حذف الموعد: ${pendingDeleteEvent?.title ?? ''}`}
+        message="هل أنت متأكد من رغبتك في حذف هذا الموعد من التقويم؟"
+        onCancel={() => setPendingDeleteEvent(null)}
+        onConfirm={() => {
+          if (pendingDeleteEvent) {
+            onDeleteEvent(pendingDeleteEvent.id);
+          }
+          setPendingDeleteEvent(null);
+        }}
+      />
     </div>
   );
 }

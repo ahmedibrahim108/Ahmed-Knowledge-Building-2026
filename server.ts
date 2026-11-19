@@ -322,8 +322,8 @@ async function startServer() {
           }
           let body = Buffer.concat(chunks).toString('utf8');
           body = body.replace(
-            /transport\.connect\(createHMRHandler\(handleMessage\)\);?/g,
-            '/* [vite] HMR WebSocket disabled in preview */'
+            /let wsTransport = createWebSocketModuleRunnerTransport\(\{[\s\S]*?\}\);/,
+            'let wsTransport = { async connect() {}, async disconnect() {}, send() {} };'
           );
           const outBuf = Buffer.from(body, 'utf8');
           res.removeHeader('Content-Length');

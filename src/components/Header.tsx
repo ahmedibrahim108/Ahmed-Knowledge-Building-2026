@@ -15,6 +15,9 @@ export type ActiveTab =
   | 'plan'
   | 'domains'
   | 'courses'
+  | 'paths'
+  | 'library'
+  | 'tasks'
   | 'journal'
   | 'calendar';
 
@@ -29,6 +32,9 @@ interface HeaderProps {
   monthsCount: number;
   domainsCount: number;
   coursesCount: number;
+  pathsCount?: number;
+  libraryCount?: number;
+  tasksCount?: number;
   notesCount: number;
 }
 
@@ -43,16 +49,23 @@ export default function Header({
   monthsCount,
   domainsCount,
   coursesCount,
+  pathsCount = 0,
+  libraryCount = 0,
+  tasksCount = 0,
   notesCount,
 }: HeaderProps) {
   const navItems: Array<{ id: ActiveTab; label: string }> = [
     { id: 'overview', label: 'لوحة المتابعة' },
+    { id: 'courses', label: `الكورسات (${coursesCount})` },
+    { id: 'paths', label: `المسارات (${pathsCount})` },
+    { id: 'library', label: `المكتبة (${libraryCount})` },
+    { id: 'tasks', label: `المهام والمشاريع (${tasksCount})` },
+    { id: 'journal', label: `التلخيص (${notesCount})` },
     { id: 'plan', label: `الخطة (${monthsCount})` },
     { id: 'domains', label: `المحاور (${domainsCount})` },
-    { id: 'courses', label: `الكورسات (${coursesCount})` },
-    { id: 'journal', label: `دفتر التلخيص (${notesCount})` },
     { id: 'calendar', label: 'التقويم' },
   ];
+
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
@@ -71,23 +84,23 @@ export default function Header({
 
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-200">
-      <div className="max-w-[1280px] mx-auto px-4 sm:px-8 h-16 flex items-center justify-between gap-6">
+      <div className="max-w-[1280px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
         {/* Zone 1: Brand Wordmark + Custom Emblem */}
         <button
           type="button"
           onClick={() => onSelectTab('overview')}
-          className="inline-flex items-center gap-2.5 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1E3A5F]"
+          className="inline-flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1E3A5F]"
         >
           <BrandMark className="w-8 h-8 shrink-0" />
-          <span className="font-editorial text-2xl font-bold text-slate-900 tracking-tight">
+          <span className="font-editorial text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
             ميزان المعرفة
           </span>
         </button>
 
-        {/* Zone 2: 5 concise single-line text nav links */}
+        {/* Zone 2: Horizontal Scroll-Safe Desktop Navigation */}
         <nav
           aria-label="التنقل الرئيسي"
-          className="hidden md:flex items-center gap-6 h-full"
+          className="hidden lg:flex items-center gap-4 xl:gap-5 h-full overflow-x-auto no-scrollbar"
         >
           {navItems.map((item) => {
             const isActive = activeTab === item.id;
@@ -96,7 +109,7 @@ export default function Header({
                 key={item.id}
                 type="button"
                 onClick={() => onSelectTab(item.id)}
-                className={`relative h-full inline-flex items-center text-sm font-medium transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F] ${
+                className={`relative h-full inline-flex items-center text-[13px] font-medium transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F] ${
                   isActive
                     ? 'text-[#1E3A5F] font-semibold'
                     : 'text-slate-600 hover:text-slate-900'
@@ -126,7 +139,7 @@ export default function Header({
                 type="button"
                 onClick={() => setMenuOpen((v) => !v)}
                 aria-expanded={menuOpen}
-                className="inline-flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 {user.photoURL ? (
                   <img
@@ -140,7 +153,7 @@ export default function Header({
                     {userInitial}
                   </span>
                 )}
-                <div className="hidden sm:flex flex-col items-start text-right leading-tight max-w-[130px]">
+                <div className="hidden sm:flex flex-col items-start text-right leading-tight max-w-[115px]">
                   <span className="text-xs font-semibold text-slate-900 truncate w-full">
                     {user.displayName || 'حسابي'}
                   </span>
@@ -176,7 +189,7 @@ export default function Header({
                       className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                     >
                       <LayoutDashboard className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-                      <span>لوحة حسابي والتصنيفات</span>
+                      <span>لوحة المتابعة والمحاور الثلاثة</span>
                     </button>
                     <button
                       type="button"
@@ -187,7 +200,7 @@ export default function Header({
                       className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                     >
                       <NotebookPen className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-                      <span>دفتر ملاحظاتي المنظّمة</span>
+                      <span>دفتر التلخيص والنوتس</span>
                     </button>
                   </div>
 
@@ -220,10 +233,10 @@ export default function Header({
         </div>
       </div>
 
-      {/* Mobile Secondary Nav */}
+      {/* Tablet / Mobile Scrollable Secondary Nav */}
       <nav
-        aria-label="تنقل الجوال"
-        className="md:hidden border-t border-slate-100 px-4 py-2 flex items-center gap-4 overflow-x-auto"
+        aria-label="تنقل الجوال والتابلت"
+        className="lg:hidden border-t border-slate-100 px-4 py-2 flex items-center gap-4 overflow-x-auto no-scrollbar"
       >
         {navItems.map((item) => {
           const isActive = activeTab === item.id;

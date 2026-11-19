@@ -72,87 +72,36 @@
       "description": "A single month or milestone in the balanced study plan.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "integer"
-        },
-        "docId": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "ownerId": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "quarter": {
-          "type": "integer"
-        },
-        "quarterTitle": {
-          "type": "string",
-          "maxLength": 200
-        },
-        "theme": {
-          "type": "string",
-          "maxLength": 250
-        },
-        "foundational": {
-          "type": "object"
-        },
-        "exploratory": {
-          "type": "object"
-        },
-        "courseId": {
-          "type": "integer"
-        },
-        "discussionPrompt": {
-          "type": "string",
-          "maxLength": 1000
-        },
-        "applicationTask": {
-          "type": "string",
-          "maxLength": 1000
-        },
-        "activities": {
-          "type": "object"
-        },
-        "status": {
-          "type": "string",
-          "enum": ["not_started", "in_progress", "completed"]
-        },
-        "notes": {
-          "type": "string",
-          "maxLength": 20000
-        },
-        "tasks": {
-          "type": "array"
-        },
-        "resources": {
-          "type": "array"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
+        "id": { "type": "integer" },
+        "docId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "hubId": { "type": "string", "enum": ["marketing", "dental_career", "knowledge"] },
+        "quarter": { "type": "integer" },
+        "quarterTitle": { "type": "string", "maxLength": 200 },
+        "theme": { "type": "string", "maxLength": 250 },
+        "foundational": { "type": "object" },
+        "exploratory": { "type": "object" },
+        "courseId": { "type": "integer" },
+        "discussionPrompt": { "type": "string", "maxLength": 1000 },
+        "applicationTask": { "type": "string", "maxLength": 1000 },
+        "activities": { "type": "object" },
+        "status": { "type": "string", "enum": ["not_started", "in_progress", "completed"] },
+        "notes": { "type": "string", "maxLength": 20000 },
+        "tasks": { "type": "array" },
+        "resources": { "type": "array" },
+        "readingModes": { "type": "array" },
+        "learningMethods": { "type": "array" },
+        "reviewCount": { "type": "integer" },
+        "listenCount": { "type": "integer" },
+        "repetitionStage": { "type": "integer" },
+        "nextReviewDateKey": { "type": "string", "maxLength": 10 },
+        "lastReviewedDateKey": { "type": "string", "maxLength": 10 },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "id",
-        "docId",
-        "ownerId",
-        "quarter",
-        "quarterTitle",
-        "theme",
-        "foundational",
-        "exploratory",
-        "courseId",
-        "discussionPrompt",
-        "applicationTask",
-        "activities",
-        "status",
-        "notes",
-        "tasks",
-        "resources",
-        "updatedAt"
+        "id", "docId", "ownerId", "quarter", "quarterTitle", "theme",
+        "foundational", "exploratory", "courseId", "discussionPrompt",
+        "applicationTask", "activities", "status", "notes", "tasks", "resources", "updatedAt"
       ]
     },
     "DomainItem": {
@@ -160,110 +109,56 @@
       "description": "Intellectual domain and its curated thinkers.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "ownerId": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "order": {
-          "type": "integer"
-        },
-        "title": {
-          "type": "string",
-          "maxLength": 200
-        },
-        "subtitle": {
-          "type": "string",
-          "maxLength": 300
-        },
-        "purpose": {
-          "type": "string",
-          "maxLength": 1000
-        },
-        "thinkers": {
-          "type": "array"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "hubId": { "type": "string", "enum": ["marketing", "dental_career", "knowledge"] },
+        "order": { "type": "integer" },
+        "title": { "type": "string", "maxLength": 200 },
+        "subtitle": { "type": "string", "maxLength": 300 },
+        "purpose": { "type": "string", "maxLength": 1000 },
+        "thinkers": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "ownerId", "order", "title", "subtitle", "purpose", "thinkers", "updatedAt"]
     },
     "CourseItem": {
       "title": "CourseItem",
-      "description": "Personal development course linked with complementary references and tasks.",
+      "description": "Course linked with learning hub, complementary references, PDFs, spaced repetition, and tasks.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "integer"
-        },
-        "docId": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "ownerId": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "title": {
-          "type": "string",
-          "maxLength": 250
-        },
-        "category": {
-          "type": "string",
-          "maxLength": 120
-        },
-        "linkedMonths": {
-          "type": "array"
-        },
-        "complementaryBook": {
-          "type": "string",
-          "maxLength": 300
-        },
-        "bookAuthor": {
-          "type": "string",
-          "maxLength": 250
-        },
-        "applicationMilestone": {
-          "type": "string",
-          "maxLength": 1000
-        },
-        "completed": {
-          "type": "boolean"
-        },
-        "resources": {
-          "type": "array"
-        },
-        "tasks": {
-          "type": "array"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
+        "id": { "type": "integer" },
+        "docId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "hubId": { "type": "string", "enum": ["marketing", "dental_career", "knowledge"] },
+        "title": { "type": "string", "maxLength": 250 },
+        "category": { "type": "string", "maxLength": 120 },
+        "instructor": { "type": "string", "maxLength": 200 },
+        "platform": { "type": "string", "maxLength": 200 },
+        "durationLabel": { "type": "string", "maxLength": 120 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "targetDate": { "type": "string", "maxLength": 20 },
+        "progressPct": { "type": "integer" },
+        "notes": { "type": "string", "maxLength": 20000 },
+        "linkedMonths": { "type": "array" },
+        "complementaryBook": { "type": "string", "maxLength": 300 },
+        "bookAuthor": { "type": "string", "maxLength": 250 },
+        "applicationMilestone": { "type": "string", "maxLength": 1000 },
+        "completed": { "type": "boolean" },
+        "resources": { "type": "array" },
+        "tasks": { "type": "array" },
+        "readingModes": { "type": "array" },
+        "learningMethods": { "type": "array" },
+        "reviewCount": { "type": "integer" },
+        "listenCount": { "type": "integer" },
+        "repetitionStage": { "type": "integer" },
+        "nextReviewDateKey": { "type": "string", "maxLength": 10 },
+        "lastReviewedDateKey": { "type": "string", "maxLength": 10 },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "id",
-        "docId",
-        "ownerId",
-        "title",
-        "category",
-        "linkedMonths",
-        "complementaryBook",
-        "bookAuthor",
-        "applicationMilestone",
-        "completed",
-        "resources",
-        "tasks",
-        "updatedAt"
+        "id", "docId", "ownerId", "title", "category", "linkedMonths",
+        "complementaryBook", "bookAuthor", "applicationMilestone",
+        "completed", "resources", "tasks", "updatedAt"
       ]
     },
     "BookNoteItem": {
@@ -271,74 +166,32 @@
       "description": "Structured notes categorized by book, course/lecture, or custom topic.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "ownerId": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "noteType": {
-          "type": "string",
-          "enum": ["book", "course_lecture", "general"]
-        },
-        "bookTitle": {
-          "type": "string",
-          "maxLength": 300
-        },
-        "author": {
-          "type": "string",
-          "maxLength": 200
-        },
-        "courseId": {
-          "type": "integer"
-        },
-        "courseTitle": {
-          "type": "string",
-          "maxLength": 250
-        },
-        "lectureTitle": {
-          "type": "string",
-          "maxLength": 250
-        },
-        "categoryLabel": {
-          "type": "string",
-          "maxLength": 120
-        },
-        "progressMarker": {
-          "type": "string",
-          "maxLength": 200
-        },
-        "content": {
-          "type": "string",
-          "maxLength": 40000
-        },
-        "quotes": {
-          "type": "string",
-          "maxLength": 10000
-        },
-        "updatedAtLabel": {
-          "type": "string",
-          "maxLength": 100
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "hubId": { "type": "string", "enum": ["marketing", "dental_career", "knowledge"] },
+        "noteType": { "type": "string", "enum": ["book", "course_lecture", "general"] },
+        "bookTitle": { "type": "string", "maxLength": 300 },
+        "author": { "type": "string", "maxLength": 200 },
+        "courseId": { "type": "integer" },
+        "courseTitle": { "type": "string", "maxLength": 250 },
+        "lectureTitle": { "type": "string", "maxLength": 250 },
+        "categoryLabel": { "type": "string", "maxLength": 120 },
+        "progressMarker": { "type": "string", "maxLength": 200 },
+        "content": { "type": "string", "maxLength": 40000 },
+        "quotes": { "type": "string", "maxLength": 10000 },
+        "updatedAtLabel": { "type": "string", "maxLength": 100 },
+        "readingModes": { "type": "array" },
+        "learningMethods": { "type": "array" },
+        "reviewCount": { "type": "integer" },
+        "listenCount": { "type": "integer" },
+        "repetitionStage": { "type": "integer" },
+        "nextReviewDateKey": { "type": "string", "maxLength": 10 },
+        "lastReviewedDateKey": { "type": "string", "maxLength": 10 },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "id",
-        "ownerId",
-        "bookTitle",
-        "author",
-        "progressMarker",
-        "content",
-        "quotes",
-        "updatedAtLabel",
-        "updatedAt"
+        "id", "ownerId", "bookTitle", "author", "progressMarker",
+        "content", "quotes", "updatedAtLabel", "updatedAt"
       ]
     },
     "CustomCategoryItem": {
@@ -346,172 +199,60 @@
       "description": "User-defined personalized category for organizing study notes and dashboard insights.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "ownerId": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "title": {
-          "type": "string",
-          "maxLength": 120
-        },
-        "description": {
-          "type": "string",
-          "maxLength": 300
-        },
-        "color": {
-          "type": "string",
-          "enum": ["navy", "emerald", "amber", "slate"]
-        },
-        "createdAtLabel": {
-          "type": "string",
-          "maxLength": 100
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "hubId": { "type": "string", "enum": ["marketing", "dental_career", "knowledge", "all"] },
+        "title": { "type": "string", "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 300 },
+        "color": { "type": "string", "enum": ["navy", "emerald", "amber", "slate"] },
+        "createdAtLabel": { "type": "string", "maxLength": 100 },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": [
-        "id",
-        "ownerId",
-        "title",
-        "description",
-        "color",
-        "createdAtLabel",
-        "updatedAt"
-      ]
+      "required": ["id", "ownerId", "title", "description", "color", "createdAtLabel", "updatedAt"]
     },
     "StudyHistoryItem": {
       "title": "StudyHistoryItem",
       "description": "User study activity history entry synced to dashboard.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "ownerId": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "actionType": {
-          "type": "string",
-          "enum": ["note", "voice", "task", "course", "domain", "month"]
-        },
-        "title": {
-          "type": "string",
-          "maxLength": 200
-        },
-        "detail": {
-          "type": "string",
-          "maxLength": 400
-        },
-        "targetTab": {
-          "type": "string",
-          "enum": ["overview", "plan", "domains", "courses", "journal", "calendar"]
-        },
-        "targetNoteId": {
-          "type": "string",
-          "maxLength": 128
-        },
-        "targetMonthId": {
-          "type": "integer"
-        },
-        "timestampLabel": {
-          "type": "string",
-          "maxLength": 100
-        },
-        "createdAtMs": {
-          "type": "integer"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actionType": { "type": "string", "enum": ["note", "voice", "task", "course", "domain", "month"] },
+        "title": { "type": "string", "maxLength": 200 },
+        "detail": { "type": "string", "maxLength": 400 },
+        "targetTab": { "type": "string", "enum": ["overview", "plan", "domains", "courses", "journal", "calendar", "paths", "library", "tasks"] },
+        "targetNoteId": { "type": "string", "maxLength": 128 },
+        "targetMonthId": { "type": "integer" },
+        "targetCourseId": { "type": "integer" },
+        "timestampLabel": { "type": "string", "maxLength": 100 },
+        "createdAtMs": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": [
-        "id",
-        "ownerId",
-        "actionType",
-        "title",
-        "detail",
-        "targetTab",
-        "timestampLabel",
-        "createdAtMs",
-        "updatedAt"
-      ]
+      "required": ["id", "ownerId", "actionType", "title", "detail", "targetTab", "timestampLabel", "createdAtMs", "updatedAt"]
     },
     "UserPreferencesItem": {
       "title": "UserPreferencesItem",
-      "description": "User customization settings for rich notes formatting and voice transcription/playback.",
+      "description": "User customization settings for rich notes formatting, voice controls, and hub categories.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "ownerId": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "noteFontSize": {
-          "type": "string",
-          "enum": ["sm", "base", "lg"]
-        },
-        "noteHighlightColor": {
-          "type": "string",
-          "enum": ["amber", "emerald", "sky", "rose"]
-        },
-        "notePaperTone": {
-          "type": "string",
-          "enum": ["clean", "warm", "slate"]
-        },
-        "autoAddTimestampOnVoice": {
-          "type": "boolean"
-        },
-        "voiceDialect": {
-          "type": "string",
-          "enum": ["standard_arabic", "egyptian_arabic", "bilingual"]
-        },
-        "voiceInsertMode": {
-          "type": "string",
-          "enum": ["append_paragraph", "append_bullet", "append_quote"]
-        },
-        "readAloudVoice": {
-          "type": "string",
-          "enum": ["Kore", "Puck", "Charon", "Fenrir", "Zephyr"]
-        },
-        "readAloudSpeed": {
-          "type": "string",
-          "enum": ["normal", "calm"]
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "noteFontSize": { "type": "string", "enum": ["sm", "base", "lg"] },
+        "noteHighlightColor": { "type": "string", "enum": ["amber", "emerald", "sky", "rose"] },
+        "notePaperTone": { "type": "string", "enum": ["clean", "warm", "slate"] },
+        "autoAddTimestampOnVoice": { "type": "boolean" },
+        "voiceDialect": { "type": "string", "enum": ["standard_arabic", "egyptian_arabic", "bilingual"] },
+        "voiceInsertMode": { "type": "string", "enum": ["append_paragraph", "append_bullet", "append_quote"] },
+        "readAloudVoice": { "type": "string", "enum": ["Kore", "Puck", "Charon", "Fenrir", "Zephyr"] },
+        "readAloudSpeed": { "type": "string", "enum": ["normal", "calm"] },
+        "showExcelExport": { "type": "boolean" },
+        "hubCategories": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "id",
-        "ownerId",
-        "noteFontSize",
-        "noteHighlightColor",
-        "notePaperTone",
-        "autoAddTimestampOnVoice",
-        "voiceDialect",
-        "voiceInsertMode",
-        "readAloudVoice",
-        "readAloudSpeed",
-        "updatedAt"
+        "id", "ownerId", "noteFontSize", "noteHighlightColor", "notePaperTone",
+        "autoAddTimestampOnVoice", "voiceDialect", "voiceInsertMode",
+        "readAloudVoice", "readAloudSpeed", "updatedAt"
       ]
     },
     "PersonalReflectionItem": {
@@ -519,120 +260,174 @@
       "description": "User's private personal reflections and study thoughts stored on their dashboard.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "ownerId": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "title": {
-          "type": "string",
-          "maxLength": 200
-        },
-        "content": {
-          "type": "string",
-          "maxLength": 10000
-        },
-        "moodTag": {
-          "type": "string",
-          "enum": ["تأمل", "فكرة", "امتنان", "هدف"]
-        },
-        "pinned": {
-          "type": "boolean"
-        },
-        "createdAtLabel": {
-          "type": "string",
-          "maxLength": 100
-        },
-        "createdAtMs": {
-          "type": "integer"
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 200 },
+        "content": { "type": "string", "maxLength": 10000 },
+        "moodTag": { "type": "string", "enum": ["تأمل", "فكرة", "امتنان", "هدف"] },
+        "pinned": { "type": "boolean" },
+        "createdAtLabel": { "type": "string", "maxLength": 100 },
+        "createdAtMs": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": [
-        "id",
-        "ownerId",
-        "title",
-        "content",
-        "moodTag",
-        "pinned",
-        "createdAtLabel",
-        "createdAtMs",
-        "updatedAt"
-      ]
+      "required": ["id", "ownerId", "title", "content", "moodTag", "pinned", "createdAtLabel", "createdAtMs", "updatedAt"]
     },
     "CalendarEventItem": {
       "title": "CalendarEventItem",
       "description": "Personal weekly/monthly calendar event with optional task link.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "ownerId": {
-          "type": "string",
-          "maxLength": 128,
-          "pattern": "^[a-zA-Z0-9_\\-]+$"
-        },
-        "dateKey": {
-          "type": "string",
-          "maxLength": 10,
-          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-        },
-        "timeSlot": {
-          "type": "string",
-          "maxLength": 20
-        },
-        "title": {
-          "type": "string",
-          "maxLength": 200
-        },
-        "notes": {
-          "type": "string",
-          "maxLength": 2000
-        },
-        "category": {
-          "type": "string",
-          "enum": ["شخصي", "دراسة", "موعد", "مراجعة", "قراءة"]
-        },
-        "color": {
-          "type": "string",
-          "enum": ["navy", "emerald", "amber", "rose"]
-        },
-        "done": {
-          "type": "boolean"
-        },
-        "linkedTaskText": {
-          "type": "string",
-          "maxLength": 300
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time"
-        }
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "dateKey": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "timeSlot": { "type": "string", "maxLength": 20 },
+        "title": { "type": "string", "maxLength": 200 },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "category": { "type": "string", "enum": ["شخصي", "دراسة", "موعد", "مراجعة", "قراءة"] },
+        "color": { "type": "string", "enum": ["navy", "emerald", "amber", "rose"] },
+        "done": { "type": "boolean" },
+        "linkedTaskText": { "type": "string", "maxLength": 300 },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": [
-        "id",
-        "ownerId",
-        "dateKey",
-        "timeSlot",
-        "title",
-        "notes",
-        "category",
-        "color",
-        "done",
-        "linkedTaskText",
-        "updatedAt"
-      ]
+      "required": ["id", "ownerId", "dateKey", "timeSlot", "title", "notes", "category", "color", "done", "linkedTaskText", "updatedAt"]
+    },
+    "LearningPathItem": {
+      "title": "LearningPathItem",
+      "description": "Structured multi-stage learning path linked to a learning hub and courses.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 250 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "hubId": { "type": "string", "enum": ["marketing", "dental_career", "knowledge"] },
+        "categoryLabel": { "type": "string", "maxLength": 120 },
+        "objectives": { "type": "string", "maxLength": 2000 },
+        "currentLevel": { "type": "string", "maxLength": 120 },
+        "targetLevel": { "type": "string", "maxLength": 120 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "expectedCompletionDate": { "type": "string", "maxLength": 20 },
+        "progressPct": { "type": "integer" },
+        "status": { "type": "string", "enum": ["planned", "in_progress", "completed"] },
+        "stages": { "type": "array" },
+        "linkedCourseIds": { "type": "array" },
+        "readingModes": { "type": "array" },
+        "learningMethods": { "type": "array" },
+        "reviewCount": { "type": "integer" },
+        "listenCount": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "title", "hubId", "status", "progressPct", "stages", "linkedCourseIds", "updatedAt"]
+    },
+    "ReadingLibraryItem": {
+      "title": "ReadingLibraryItem",
+      "description": "Unified reading & PDF item with reading modes and spaced repetition tracking.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 300 },
+        "author": { "type": "string", "maxLength": 200 },
+        "hubId": { "type": "string", "enum": ["marketing", "dental_career", "knowledge"] },
+        "categoryLabel": { "type": "string", "maxLength": 120 },
+        "itemType": { "type": "string", "enum": ["كتاب", "مقال", "بحث", "ورقة علمية", "ملف PDF", "ملخص"] },
+        "status": { "type": "string", "enum": ["to_read", "reading", "completed"] },
+        "currentPage": { "type": "integer" },
+        "totalPages": { "type": "integer" },
+        "takeaways": { "type": "string", "maxLength": 20000 },
+        "attachmentName": { "type": "string", "maxLength": 200 },
+        "attachmentResourceId": { "type": "string", "maxLength": 128 },
+        "storagePath": { "type": "string", "maxLength": 400 },
+        "downloadUrl": { "type": "string", "maxLength": 1200 },
+        "externalUrl": { "type": "string", "maxLength": 800 },
+        "readingModes": { "type": "array" },
+        "learningMethods": { "type": "array" },
+        "reviewCount": { "type": "integer" },
+        "listenCount": { "type": "integer" },
+        "repetitionStage": { "type": "integer" },
+        "nextReviewDateKey": { "type": "string", "maxLength": 10 },
+        "lastReviewedDateKey": { "type": "string", "maxLength": 10 },
+        "updatedAtLabel": { "type": "string", "maxLength": 100 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "title", "hubId", "itemType", "status", "readingModes", "learningMethods", "reviewCount", "listenCount", "repetitionStage", "updatedAt"]
+    },
+    "PracticalProjectItem": {
+      "title": "PracticalProjectItem",
+      "description": "Practical applied project linked to a hub and optionally to a course.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 250 },
+        "description": { "type": "string", "maxLength": 3000 },
+        "hubId": { "type": "string", "enum": ["marketing", "dental_career", "knowledge"] },
+        "categoryLabel": { "type": "string", "maxLength": 120 },
+        "objectives": { "type": "string", "maxLength": 2000 },
+        "status": { "type": "string", "enum": ["planned", "in_progress", "completed"] },
+        "progressPct": { "type": "integer" },
+        "deliverables": { "type": "string", "maxLength": 2000 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "targetDate": { "type": "string", "maxLength": 20 },
+        "linkedCourseId": { "type": "integer" },
+        "notes": { "type": "string", "maxLength": 10000 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "title", "hubId", "status", "progressPct", "updatedAt"]
+    },
+    "UnifiedTaskItem": {
+      "title": "UnifiedTaskItem",
+      "description": "Personal task categorized by learning hub, priority, and status.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 300 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "hubId": { "type": "string", "enum": ["marketing", "dental_career", "knowledge"] },
+        "categoryLabel": { "type": "string", "maxLength": 120 },
+        "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+        "status": { "type": "string", "enum": ["todo", "in_progress", "done"] },
+        "dueDate": { "type": "string", "maxLength": 10 },
+        "linkedLabel": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "title", "hubId", "priority", "status", "updatedAt"]
+    },
+    "ImageAttachmentItem": {
+      "title": "ImageAttachmentItem",
+      "description": "Cloud-synced image attachment for courses, months, notes, and reflections.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "scopeKey": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "mimeType": { "type": "string", "maxLength": 80 },
+        "sizeKb": { "type": "integer" },
+        "caption": { "type": "string", "maxLength": 500 },
+        "createdAtMs": { "type": "integer" },
+        "dataUrl": { "type": "string", "maxLength": 900000 },
+        "storagePath": { "type": "string", "maxLength": 400 },
+        "downloadUrl": { "type": "string", "maxLength": 1200 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "scopeKey", "name", "mimeType", "sizeKb", "createdAtMs", "updatedAt"]
+    },
+    "FileAttachmentItem": {
+      "title": "FileAttachmentItem",
+      "description": "Cloud-synced PDF/document backup payload for cross-device reading.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fileName": { "type": "string", "maxLength": 200 },
+        "mimeType": { "type": "string", "maxLength": 120 },
+        "sizeBytes": { "type": "integer" },
+        "dataUrl": { "type": "string", "maxLength": 900000 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "fileName", "mimeType", "sizeBytes", "dataUrl", "updatedAt"]
     }
   },
   "firestore": {
@@ -654,7 +449,7 @@
     },
     "/users/{userId}/courses/{courseId}": {
       "schema": { "$ref": "#/entities/CourseItem" },
-      "description": "User's editable personal development courses."
+      "description": "User's editable personal and professional development courses."
     },
     "/users/{userId}/bookNotes/{noteId}": {
       "schema": { "$ref": "#/entities/BookNoteItem" },
@@ -670,7 +465,7 @@
     },
     "/users/{userId}/preferences/{prefId}": {
       "schema": { "$ref": "#/entities/UserPreferencesItem" },
-      "description": "User's personal customization for notes editor and voice controls."
+      "description": "User's personal customization for notes editor, voice controls, and hubs."
     },
     "/users/{userId}/reflections/{reflectionId}": {
       "schema": { "$ref": "#/entities/PersonalReflectionItem" },
@@ -679,6 +474,30 @@
     "/users/{userId}/calendarEvents/{eventId}": {
       "schema": { "$ref": "#/entities/CalendarEventItem" },
       "description": "User's personal weekly and monthly calendar schedule events."
+    },
+    "/users/{userId}/learningPaths/{pathId}": {
+      "schema": { "$ref": "#/entities/LearningPathItem" },
+      "description": "User's structured learning paths across hubs."
+    },
+    "/users/{userId}/readingItems/{itemId}": {
+      "schema": { "$ref": "#/entities/ReadingLibraryItem" },
+      "description": "User's reading and PDF library with spaced repetition tracking."
+    },
+    "/users/{userId}/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/PracticalProjectItem" },
+      "description": "User's practical applied projects."
+    },
+    "/users/{userId}/unifiedTasks/{taskId}": {
+      "schema": { "$ref": "#/entities/UnifiedTaskItem" },
+      "description": "User's standalone tasks organized by hub."
+    },
+    "/users/{userId}/images/{imageId}": {
+      "schema": { "$ref": "#/entities/ImageAttachmentItem" },
+      "description": "User's cloud-synced image attachments across devices."
+    },
+    "/users/{userId}/attachments/{attachmentId}": {
+      "schema": { "$ref": "#/entities/FileAttachmentItem" },
+      "description": "User's cloud-synced PDF/document backup payloads."
     }
   }
 }

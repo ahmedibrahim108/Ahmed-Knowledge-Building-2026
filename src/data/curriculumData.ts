@@ -1,5 +1,165 @@
 export type DomainId = string;
 
+export type LearningHubId = 'marketing' | 'dental_career' | 'knowledge';
+
+export type ReadingMode =
+  | 'surface'
+  | 'survey'
+  | 'deep'
+  | 'applied'
+  | 'breakdown';
+
+export interface LearningHubMeta {
+  id: LearningHubId;
+  title: string;
+  shortTitle: string;
+  englishTitle: string;
+  purpose: string;
+  accentHex: string;
+  badgeClass: string;
+  defaultCategories: string[];
+}
+
+export const LEARNING_HUBS: LearningHubMeta[] = [
+  {
+    id: 'marketing',
+    title: 'الماركتينج والأعمال',
+    shortTitle: 'الماركتينج',
+    englishTitle: 'Marketing & Business',
+    purpose:
+      'إدارة تعليم التسويق الرقمي، كتابة المحتوى، الإعلانات الممولة، الاستراتيجية، وريادة الأعمال.',
+    accentHex: '#B45309',
+    badgeClass: 'bg-amber-50 text-amber-900 border-amber-200',
+    defaultCategories: [
+      'أساسيات التسويق (Marketing Fundamentals)',
+      'التسويق الرقمي (Digital Marketing)',
+      'السوشيال ميديا (Social Media Marketing)',
+      'تسويق المحتوى (Content Marketing)',
+      'كتابة المحتوى والإعلانات (Copywriting)',
+      'تحسين محركات البحث (SEO)',
+      'إعلانات ميتا (Meta Advertising)',
+      'استراتيجية التسويق (Marketing Strategy)',
+      'الأعمال وريادة الأعمال (Business & Entrepreneurship)',
+    ],
+  },
+  {
+    id: 'dental_career',
+    title: 'الدنتال والكارير والتطوير المهني',
+    shortTitle: 'الدنتال والكارير',
+    englishTitle: 'Career & Dental Development',
+    purpose:
+      'إدارة التعليم الطبي لطب الأسنان، المهارات الإكلينيكية، التصميم والتقنية، والقيادة والمشاريع المهنية.',
+    accentHex: '#047857',
+    badgeClass: 'bg-emerald-50 text-emerald-900 border-emerald-200',
+    defaultCategories: [
+      'طب الأسنان والتطوير الإكلينيكي (Dentistry & Clinical)',
+      'علاج الجذور (Endodontics)',
+      'العلاج التحفظي (Operative Dentistry)',
+      'التركيبات الثابتة (Fixed Prosthodontics)',
+      'جراحة الفم (Oral Surgery)',
+      'تصميم UI/UX (UI/UX Design)',
+      'التكنولوجيا (Technology)',
+      'مهارات التواصل (Communication Skills)',
+      'القيادة والإدارة (Leadership & Management)',
+      'المشاريع المهنية (Professional Projects)',
+    ],
+  },
+  {
+    id: 'knowledge',
+    title: 'الثقافة والمعرفة والتطوير الشخصي',
+    shortTitle: 'المعرفة والثقافة',
+    englishTitle: 'Intellectual & Personal Development',
+    purpose:
+      'منظومة البناء المعرفي والفكري، خطة الـ 12 شهرًا، العلوم الشرعية والفلسفة والتاريخ وعلم النفس والأدب.',
+    accentHex: '#1E3A5F',
+    badgeClass: 'bg-slate-100 text-[#1E3A5F] border-slate-300',
+    defaultCategories: [
+      'الدراسات الإسلامية (Islamic Studies)',
+      'الفلسفة والفكر (Philosophy & Thought)',
+      'التاريخ والحضارة (History & Civilization)',
+      'علم النفس (Psychology)',
+      'التفكير النقدي (Critical Thinking)',
+      'الإنسانيات (Humanities)',
+      'القراءة والأدب (Reading & Literature)',
+      'المعرفة العامة (General Knowledge)',
+      'التطوير الشخصي (Personal Development)',
+    ],
+  },
+];
+
+export const READING_MODES_META: Array<{
+  id: ReadingMode;
+  label: string;
+  shortLabel: string;
+  description: string;
+}> = [
+  {
+    id: 'surface',
+    label: 'قراءة سطحية',
+    shortLabel: 'سطحية',
+    description: 'تصفح أولي وسريع لاستكشاف الفكرة العامة والانطباع المبدئي.',
+  },
+  {
+    id: 'survey',
+    label: 'قراءة مسح',
+    shortLabel: 'مسح',
+    description: 'عملية مسح منظمة للفهرس والعناوين الرئيسية والخلاصات.',
+  },
+  {
+    id: 'deep',
+    label: 'قراءة عميقة',
+    shortLabel: 'عميقة',
+    description: 'قراءة فاحصة وتحليلية للأدلة والمفاهيم والتفاصيل الدقيقة.',
+  },
+  {
+    id: 'applied',
+    label: 'قراءة تطبيقية',
+    shortLabel: 'تطبيقية',
+    description: 'استخراج خطوات عملية وربط المعرفة بمشاريع ومهام واقعية.',
+  },
+  {
+    id: 'breakdown',
+    label: 'قراءة تكسير',
+    shortLabel: 'تكسير',
+    description: 'تفكيك المادة المعقدة لأجزاء صغيرة وإعادة صياغتها وتكرارها.',
+  },
+];
+
+export const DEFAULT_LEARNING_METHODS: string[] = [
+  'استماع متكرر',
+  'تلخيص مكتوب',
+  'تطبيق عملي',
+  'بطاقات استرجاع',
+  'خرائط ذهنية',
+  'مناقشة وتعليم',
+];
+
+export const SPACED_REPETITION_INTERVALS = [1, 3, 7, 14, 30, 60];
+
+export function getTodayDateKey(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function addDaysToDateKey(baseDateKey: string, days: number): string {
+  const [y, m, d] = baseDateKey.split('-').map(Number);
+  const dt = new Date(y || 2026, (m || 1) - 1, (d || 1) + days);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+export function getHubMeta(hubId?: LearningHubId): LearningHubMeta {
+  return (
+    LEARNING_HUBS.find((h) => h.id === hubId) ??
+    LEARNING_HUBS[2]
+  );
+}
+
 export type MonthStatus = 'not_started' | 'in_progress' | 'completed';
 
 export type ResourceFormat = 'كتاب' | 'سلسلة محاضرات' | 'كتاب + محاضرات';
@@ -34,6 +194,10 @@ export interface StudyResource {
   externalUrl?: string;
   attachmentName?: string;
   extractedPreview?: string;
+  storagePath?: string;
+  downloadUrl?: string;
+  mimeType?: string;
+  sizeBytes?: number;
   custom?: boolean;
 }
 
@@ -56,6 +220,7 @@ export interface MonthActivities {
 export interface MonthPlan {
   id: number;
   docId?: string;
+  hubId?: LearningHubId;
   quarter: number;
   quarterTitle: string;
   theme: string;
@@ -69,6 +234,13 @@ export interface MonthPlan {
   notes: string;
   tasks: SmallTask[];
   resources: StudyResource[];
+  readingModes?: ReadingMode[];
+  learningMethods?: string[];
+  reviewCount?: number;
+  listenCount?: number;
+  repetitionStage?: number;
+  nextReviewDateKey?: string;
+  lastReviewedDateKey?: string;
 }
 
 export interface ThinkerInfo {
@@ -81,6 +253,7 @@ export interface ThinkerInfo {
 export interface DomainInfo {
   id: DomainId;
   order?: number;
+  hubId?: LearningHubId;
   title: string;
   subtitle: string;
   purpose: string;
@@ -90,8 +263,16 @@ export interface DomainInfo {
 export interface PersonalCourse {
   id: number;
   docId?: string;
+  hubId?: LearningHubId;
   title: string;
   category: string;
+  instructor?: string;
+  platform?: string;
+  durationLabel?: string;
+  startDate?: string;
+  targetDate?: string;
+  progressPct?: number;
+  notes?: string;
   linkedMonths: number[];
   complementaryBook: string;
   bookAuthor: string;
@@ -99,12 +280,20 @@ export interface PersonalCourse {
   completed: boolean;
   resources: StudyResource[];
   tasks: SmallTask[];
+  readingModes?: ReadingMode[];
+  learningMethods?: string[];
+  reviewCount?: number;
+  listenCount?: number;
+  repetitionStage?: number;
+  nextReviewDateKey?: string;
+  lastReviewedDateKey?: string;
 }
 
 export type NoteCategoryType = 'book' | 'course_lecture' | 'general';
 
 export interface BookNote {
   id: string;
+  hubId?: LearningHubId;
   noteType?: NoteCategoryType;
   bookTitle: string;
   author: string;
@@ -116,14 +305,121 @@ export interface BookNote {
   content: string;
   quotes: string;
   updatedAt: string;
+  readingModes?: ReadingMode[];
+  learningMethods?: string[];
+  reviewCount?: number;
+  listenCount?: number;
+  repetitionStage?: number;
+  nextReviewDateKey?: string;
+  lastReviewedDateKey?: string;
 }
 
 export interface CustomCategory {
   id: string;
+  hubId?: LearningHubId | 'all';
   title: string;
   description: string;
   color: 'navy' | 'emerald' | 'amber' | 'slate';
   createdAtLabel: string;
+}
+
+export interface LearningPathStage {
+  id: string;
+  title: string;
+  done: boolean;
+  notes?: string;
+}
+
+export type LearningPathStatus = 'planned' | 'in_progress' | 'completed';
+
+export interface LearningPath {
+  id: string;
+  title: string;
+  description: string;
+  hubId: LearningHubId;
+  categoryLabel: string;
+  objectives: string;
+  currentLevel: string;
+  targetLevel: string;
+  startDate: string;
+  expectedCompletionDate: string;
+  progressPct: number;
+  status: LearningPathStatus;
+  stages: LearningPathStage[];
+  linkedCourseIds: number[];
+  readingModes?: ReadingMode[];
+  learningMethods?: string[];
+  reviewCount?: number;
+  listenCount?: number;
+}
+
+export type ReadingItemType =
+  | 'كتاب'
+  | 'مقال'
+  | 'بحث'
+  | 'ورقة علمية'
+  | 'ملف PDF'
+  | 'ملخص';
+
+export type ReadingItemStatus = 'to_read' | 'reading' | 'completed';
+
+export interface ReadingLibraryItem {
+  id: string;
+  title: string;
+  author: string;
+  hubId: LearningHubId;
+  categoryLabel: string;
+  itemType: ReadingItemType;
+  status: ReadingItemStatus;
+  currentPage: number;
+  totalPages: number;
+  takeaways: string;
+  attachmentName?: string;
+  attachmentResourceId?: string;
+  storagePath?: string;
+  downloadUrl?: string;
+  externalUrl?: string;
+  readingModes: ReadingMode[];
+  learningMethods: string[];
+  reviewCount: number;
+  listenCount: number;
+  repetitionStage: number;
+  nextReviewDateKey?: string;
+  lastReviewedDateKey?: string;
+  updatedAtLabel: string;
+}
+
+export type ProjectStatus = 'planned' | 'in_progress' | 'completed';
+
+export interface PracticalProject {
+  id: string;
+  title: string;
+  description: string;
+  hubId: LearningHubId;
+  categoryLabel: string;
+  objectives: string;
+  status: ProjectStatus;
+  progressPct: number;
+  deliverables: string;
+  startDate: string;
+  targetDate: string;
+  linkedCourseId?: number;
+  notes: string;
+}
+
+export type TaskPriority = 'low' | 'medium' | 'high';
+export type UnifiedTaskStatus = 'todo' | 'in_progress' | 'done';
+
+export interface UnifiedTask {
+  id: string;
+  title: string;
+  description: string;
+  hubId: LearningHubId;
+  categoryLabel: string;
+  priority: TaskPriority;
+  status: UnifiedTaskStatus;
+  dueDate: string;
+  linkedLabel?: string;
 }
 
 export interface StudyHistoryEntry {
@@ -131,9 +427,19 @@ export interface StudyHistoryEntry {
   actionType: 'note' | 'voice' | 'task' | 'course' | 'domain' | 'month';
   title: string;
   detail: string;
-  targetTab: 'overview' | 'plan' | 'domains' | 'courses' | 'journal' | 'calendar';
+  targetTab:
+    | 'overview'
+    | 'plan'
+    | 'domains'
+    | 'courses'
+    | 'journal'
+    | 'calendar'
+    | 'paths'
+    | 'library'
+    | 'tasks';
   targetNoteId?: string;
   targetMonthId?: number;
+  targetCourseId?: number;
   timestampLabel: string;
   createdAtMs: number;
 }
@@ -179,7 +485,15 @@ export interface UserPreferences {
   voiceInsertMode: VoiceInsertMode;
   readAloudVoice: ReadAloudVoiceName;
   readAloudSpeed: 'normal' | 'calm';
+  showExcelExport?: boolean;
+  hubCategories?: Record<LearningHubId, string[]>;
 }
+
+export const DEFAULT_HUB_CATEGORIES: Record<LearningHubId, string[]> = {
+  marketing: LEARNING_HUBS[0].defaultCategories,
+  dental_career: LEARNING_HUBS[1].defaultCategories,
+  knowledge: LEARNING_HUBS[2].defaultCategories,
+};
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   noteFontSize: 'base',
@@ -190,6 +504,8 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   voiceInsertMode: 'append_paragraph',
   readAloudVoice: 'Kore',
   readAloudSpeed: 'normal',
+  showExcelExport: true,
+  hubCategories: DEFAULT_HUB_CATEGORIES,
 };
 
 export interface WeeklyRhythmSlot {

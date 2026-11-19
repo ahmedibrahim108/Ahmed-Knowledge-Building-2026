@@ -10,9 +10,13 @@ import {
 import {
   DomainId,
   DomainInfo,
+  LEARNING_HUBS,
+  LearningHubId,
   MonthPlan,
   ThinkerInfo,
+  getHubMeta,
 } from '../data/curriculumData';
+import ConfirmDialog from './ConfirmDialog';
 
 interface DomainsViewProps {
   canEdit: boolean;
@@ -35,12 +39,15 @@ export default function DomainsView({
 }: DomainsViewProps) {
   const [showAddDomain, setShowAddDomain] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  const [newHubId, setNewHubId] = useState<LearningHubId>('knowledge');
   const [newSubtitle, setNewSubtitle] = useState('');
   const [newPurpose, setNewPurpose] = useState('');
 
   const [editingDomainId, setEditingDomainId] = useState<string | null>(null);
-  const [confirmDeleteDomainId, setConfirmDeleteDomainId] = useState<
-    string | null
+  const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<
+    | { type: 'domain'; domain: DomainInfo }
+    | { type: 'thinker'; domain: DomainInfo; index: number; name: string }
+    | null
   >(null);
 
   const [addingThinkerDomainId, setAddingThinkerDomainId] = useState<
@@ -61,12 +68,13 @@ export default function DomainsView({
     if (!title) return;
     onAddDomain({
       title,
-      subtitle: newSubtitle.trim() || 'محور معرفي مضاف',
-      purpose:
-        newPurpose.trim() || 'توسيع المعرفة وبناء الفهم المتوازن في هذا المجال.',
+      hubId: newHubId,
+      subtitle: newSubtitle.trim(),
+      purpose: newPurpose.trim(),
       thinkers: [],
     });
     setNewTitle('');
+    setNewHubId('knowledge');
     setNewSubtitle('');
     setNewPurpose('');
     setShowAddDomain(false);
@@ -78,14 +86,12 @@ export default function DomainsView({
     if (!name) return;
     const newThinker: ThinkerInfo = {
       name,
-      role: thinkerRole.trim() || 'مفكر / باحث',
+      role: thinkerRole.trim(),
       keyWorks: thinkerWorks
         .split('،')
         .map((s) => s.trim())
         .filter(Boolean),
-      contribution:
-        thinkerContribution.trim() ||
-        'إسهام فكري مكمل لمحاور الخطة المتوازنة.',
+      contribution: thinkerContribution.trim(),
     };
     onUpdateDomain(domain.id, {
       thinkers: [...domain.thinkers, newThinker],
@@ -154,20 +160,34 @@ export default function DomainsView({
           <h2 className="text-base font-semibold text-slate-900">
             إضافة محور معرفي جديد
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <label className="block text-xs font-medium text-slate-600">
-              اسم المحور
+              اسم المحور *
               <input
                 type="text"
                 required
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
-                placeholder="مثلاً: الاقتصاد والوعي المالي أو العلوم والتقنية"
+                placeholder="مثلاً: التسويق الرقمي أو الفلسفة"
                 className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
               />
             </label>
             <label className="block text-xs font-medium text-slate-600">
-              الوصف المختصر
+              المستوى / التصنيف الرئيسي
+              <select
+                value={newHubId}
+                onChange={(e) => setNewHubId(e.target.value as LearningHubId)}
+                className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+              >
+                {LEARNING_HUBS.map((hub) => (
+                  <option key={hub.id} value={hub.id}>
+                    {hub.shortTitle}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs font-medium text-slate-600">
+              الوصف المختصر (اختياري)
               <input
                 type="text"
                 value={newSubtitle}
@@ -178,7 +198,7 @@ export default function DomainsView({
             </label>
           </div>
           <label className="block text-xs font-medium text-slate-600">
-            هدف المحور وأثره في بناء العقل المتوازن
+            هدف المحور وأثره (اختياري)
             <textarea
               rows={2}
               value={newPurpose}
@@ -213,8 +233,8 @@ export default function DomainsView({
               m.exploratory.domainId === domain.id
           ).length;
           const isEditingDomain = editingDomainId === domain.id;
-          const isConfirmingDelete = confirmDeleteDomainId === domain.id;
           const isAddingThinker = addingThinkerDomainId === domain.id;
+          const hubMeta = getHubMeta(domain.hubId);
 
           return (
             <section
@@ -224,9 +244,16 @@ export default function DomainsView({
               <div className="space-y-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="space-y-1 flex-1">
-                    <div className="flex items-center gap-2 text-xs text-slate-500 tabular-nums">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 tabular-nums">
                       <span>{String(index + 1).padStart(2, '0')}.</span>
-                      {!isEditingDomain && <span>{domain.subtitle}</span>}
+                      <span
+                        className={`px-2 py-0.5 text-[11px] font-medium rounded border ${hubMeta.badgeClass}`}
+                      >
+                        {hubMeta.shortTitle}
+                      </span>
+                      {!isEditingDomain && domain.subtitle && (
+                        <span>{domain.subtitle}</span>
+                      )}
                     </div>
                     {!isEditingDomain && (
                       <h2 className="font-editorial text-2xl font-bold text-slate-900">
@@ -248,53 +275,53 @@ export default function DomainsView({
                         <span>{isEditingDomain ? 'حفظ' : 'تعديل'}</span>
                       </button>
 
-                      {!isConfirmingDelete ? (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteDomainId(domain.id)}
-                          aria-label={`حذف ${domain.title}`}
-                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-md hover:bg-red-50 transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                      ) : (
-                        <div className="inline-flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onDeleteDomain(domain.id);
-                              setConfirmDeleteDomainId(null);
-                            }}
-                            className="px-2 py-1 text-[11px] font-medium text-white bg-red-600 rounded-md hover:bg-red-700 cursor-pointer"
-                          >
-                            تأكيد الحذف
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteDomainId(null)}
-                            className="px-2 py-1 text-[11px] text-slate-600 bg-slate-100 rounded-md cursor-pointer"
-                          >
-                            إلغاء
-                          </button>
-                        </div>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setConfirmDeleteTarget({ type: 'domain', domain })
+                        }
+                        aria-label={`حذف ${domain.title}`}
+                        className="p-1.5 text-slate-400 hover:text-red-600 rounded-md hover:bg-red-50 transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
                     </div>
                   )}
                 </div>
 
                 {isEditingDomain ? (
                   <div className="space-y-3 p-4 bg-slate-50 border border-slate-200 rounded-lg">
-                    <label className="block text-xs text-slate-600">
-                      اسم المحور
-                      <input
-                        type="text"
-                        value={domain.title}
-                        onChange={(e) =>
-                          onUpdateDomain(domain.id, { title: e.target.value })
-                        }
-                        className="mt-1 w-full px-3 py-1.5 text-sm bg-white border border-slate-300 rounded-md"
-                      />
-                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <label className="block text-xs text-slate-600">
+                        اسم المحور
+                        <input
+                          type="text"
+                          value={domain.title}
+                          onChange={(e) =>
+                            onUpdateDomain(domain.id, { title: e.target.value })
+                          }
+                          className="mt-1 w-full px-3 py-1.5 text-sm bg-white border border-slate-300 rounded-md"
+                        />
+                      </label>
+                      <label className="block text-xs text-slate-600">
+                        المستوى / التصنيف الرئيسي
+                        <select
+                          value={domain.hubId || 'knowledge'}
+                          onChange={(e) =>
+                            onUpdateDomain(domain.id, {
+                              hubId: e.target.value as LearningHubId,
+                            })
+                          }
+                          className="mt-1 w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                        >
+                          {LEARNING_HUBS.map((hub) => (
+                            <option key={hub.id} value={hub.id}>
+                              {hub.shortTitle}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
                     <label className="block text-xs text-slate-600">
                       الوصف الفرعي
                       <input
@@ -319,9 +346,11 @@ export default function DomainsView({
                     </label>
                   </div>
                 ) : (
-                  <p className="text-sm text-slate-600 leading-relaxed">
-                    {domain.purpose}
-                  </p>
+                  domain.purpose && (
+                    <p className="text-sm text-slate-600 leading-relaxed">
+                      {domain.purpose}
+                    </p>
+                  )
                 )}
 
                 {/* Thinkers List */}
@@ -401,9 +430,11 @@ export default function DomainsView({
                                 <h3 className="text-base font-semibold text-slate-900">
                                   {thinker.name}
                                 </h3>
-                                <span className="text-xs text-slate-500">
-                                  {thinker.role}
-                                </span>
+                                {thinker.role && (
+                                  <span className="text-xs text-slate-500">
+                                    {thinker.role}
+                                  </span>
+                                )}
                               </div>
                               {canEdit && (
                                 <div className="flex items-center gap-1">
@@ -417,7 +448,14 @@ export default function DomainsView({
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => handleDeleteThinker(domain, tIdx)}
+                                    onClick={() =>
+                                      setConfirmDeleteTarget({
+                                        type: 'thinker',
+                                        domain,
+                                        index: tIdx,
+                                        name: thinker.name,
+                                      })
+                                    }
                                     aria-label={`حذف ${thinker.name}`}
                                     className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
                                   >
@@ -426,9 +464,11 @@ export default function DomainsView({
                                 </div>
                               )}
                             </div>
-                            <p className="text-xs text-slate-600 leading-relaxed">
-                              {thinker.contribution}
-                            </p>
+                            {thinker.contribution && (
+                              <p className="text-xs text-slate-600 leading-relaxed">
+                                {thinker.contribution}
+                              </p>
+                            )}
                             {thinker.keyWorks.length > 0 && (
                               <div className="flex items-start gap-2 pt-1 text-xs text-slate-700">
                                 <BookMarked
@@ -540,6 +580,33 @@ export default function DomainsView({
           );
         })}
       </div>
+
+      <ConfirmDialog
+        open={Boolean(confirmDeleteTarget)}
+        title={
+          confirmDeleteTarget?.type === 'domain'
+            ? `حذف المحور: ${confirmDeleteTarget.domain.title}`
+            : `حذف المفكر: ${confirmDeleteTarget?.name ?? ''}`
+        }
+        message={
+          confirmDeleteTarget?.type === 'domain'
+            ? 'سيتم حذف هذا المحور وقائمة المفكرين بداخله من مساحتك الشخصية. هل تريد المتابعة؟'
+            : 'سيتم إزالة هذا المفكر وأعماله من هذا المحور. هل أنت متأكد؟'
+        }
+        onCancel={() => setConfirmDeleteTarget(null)}
+        onConfirm={() => {
+          if (!confirmDeleteTarget) return;
+          if (confirmDeleteTarget.type === 'domain') {
+            onDeleteDomain(confirmDeleteTarget.domain.id);
+          } else {
+            handleDeleteThinker(
+              confirmDeleteTarget.domain,
+              confirmDeleteTarget.index
+            );
+          }
+          setConfirmDeleteTarget(null);
+        }}
+      />
     </div>
   );
 }

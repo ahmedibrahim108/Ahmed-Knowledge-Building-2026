@@ -8,9 +8,11 @@ import {
   Download,
   Edit3,
   ExternalLink,
+  Eye,
   FileText,
   FileUp,
   Headphones,
+  Loader2,
   MessageSquare,
   PenLine,
   Plus,
@@ -33,15 +35,21 @@ import {
   StudyResource,
   VoiceDialectMode,
 } from '../data/curriculumData';
+import { auth } from '../firebase';
 import {
-  downloadLocalAttachment,
+  downloadResourceAttachment,
+  isPdfAttachment,
   parseDocumentFile,
-  saveLocalAttachment,
+  uploadResourceAttachment,
 } from '../utils/documentImportExport';
+import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
+import { ActivePdfTarget } from './PDFViewerModal';
+import SpacedRepetitionPanel from './SpacedRepetitionPanel';
 import VoiceRecorderButton from './VoiceRecorderButton';
 
 interface TwelveMonthPlanViewProps {
+  uid?: string;
   canEdit: boolean;
   onRequireAuth: () => void;
   voiceDialect: VoiceDialectMode;
@@ -53,6 +61,7 @@ interface TwelveMonthPlanViewProps {
   domainFilter: DomainId | 'all';
   onSelectMonth: (id: number) => void;
   onChangeDomainFilter: (domainId: DomainId | 'all') => void;
+  onOpenPdf?: (target: ActivePdfTarget) => void;
   onAddQuarter: (title: string, subtitle: string) => void;
   onUpdateQuarter: (id: string, updates: Partial<QuarterInfo>) => void;
   onDeleteQuarter: (id: string) => void;
@@ -93,6 +102,10 @@ interface TwelveMonthPlanViewProps {
       externalUrl?: string;
       attachmentName?: string;
       extractedPreview?: string;
+      storagePath?: string;
+      downloadUrl?: string;
+      mimeType?: string;
+      sizeBytes?: number;
     }
   ) => void;
   onDeleteMonthResource: (monthId: number, resourceId: string) => void;
@@ -131,6 +144,7 @@ const TRACK_LABELS: Record<SmallTask['track'], string> = {
 };
 
 export default function TwelveMonthPlanView({
+  uid,
   canEdit,
   onRequireAuth,
   voiceDialect,
@@ -142,6 +156,7 @@ export default function TwelveMonthPlanView({
   domainFilter,
   onSelectMonth,
   onChangeDomainFilter,
+  onOpenPdf,
   onAddQuarter,
   onUpdateQuarter,
   onDeleteQuarter,
@@ -184,8 +199,12 @@ export default function TwelveMonthPlanView({
 
   // Edit active month state
   const [isEditingMonth, setIsEditingMonth] = useState(false);
-  const [confirmDeleteMonthId, setConfirmDeleteMonthId] = useState<
-    number | null
+  const [confirmDeleteTarget, setConfirmDeleteTarget] = useState<
+    | { type: 'quarter'; id: string; label: string }
+    | { type: 'month'; id: number; label: string }
+    | { type: 'task'; monthId: number; taskId: string; label: string }
+    | { type: 'resource'; monthId: number; resourceId: string; label: string }
+    | null
   >(null);
 
   // Small task & resource inline inputs
@@ -200,6 +219,13 @@ export default function TwelveMonthPlanView({
   const [newResUrl, setNewResUrl] = useState('');
   const [newResAttachmentName, setNewResAttachmentName] = useState('');
   const [newResPreview, setNewResPreview] = useState('');
+  const [newResStoragePath, setNewResStoragePath] = useState('');
+  const [newResDownloadUrl, setNewResDownloadUrl] = useState('');
+  const [newResMimeType, setNewResMimeType] = useState('');
+  const [newResSizeBytes, setNewResSizeBytes] = useState<number | undefined>(
+    undefined
+  );
+  const [uploadingResFile, setUploadingResFile] = useState(false);
   const [pendingResId, setPendingResId] = useState<string>('');
   const [expandedResPreviewId, setExpandedResPreviewId] = useState<string | null>(
     null
@@ -264,7 +290,7 @@ export default function TwelveMonthPlanView({
     e.preventDefault();
     const title = newQuarterTitle.trim();
     if (!title) return;
-    onAddQuarter(title, newQuarterSubtitle.trim() || 'مرحلة مضافة للخطة');
+    onAddQuarter(title, newQuarterSubtitle.trim());
     setNewQuarterTitle('');
     setNewQuarterSubtitle('');
   };
@@ -276,10 +302,10 @@ export default function TwelveMonthPlanView({
     onAddMonth({
       quarter: newMonthQuarter,
       theme,
-      foundationalTitle: newMonthFTitle.trim() || 'مصدر تأسيسي مخصص',
-      foundationalAuthor: newMonthFAuthor.trim() || 'مفكر / محاضر',
-      exploratoryTitle: newMonthETitle.trim() || 'مصدر استكشافي مخصص',
-      exploratoryAuthor: newMonthEAuthor.trim() || 'مؤلف',
+      foundationalTitle: newMonthFTitle.trim(),
+      foundationalAuthor: newMonthFAuthor.trim(),
+      exploratoryTitle: newMonthETitle.trim(),
+      exploratoryAuthor: newMonthEAuthor.trim(),
       courseId: newMonthCourseId,
     });
     setNewMonthTheme('');
@@ -308,16 +334,27 @@ export default function TwelveMonthPlanView({
 
     const generatedId = `m${activeMonth.id}-res-${Date.now()}`;
     setPendingResId(generatedId);
-    await saveLocalAttachment(generatedId, file);
-    const parsed = await parseDocumentFile(file);
-    if (!newResTitle.trim()) {
-      setNewResTitle(parsed.title);
-    }
-    setNewResType('ملف / مستند');
-    setNewResAttachmentName(file.name);
-    setNewResPreview(parsed.plainText.slice(0, 7500));
-    if (!newResNote.trim()) {
-      setNewResNote(`ملف مرفق (${file.name})`);
+    setUploadingResFile(true);
+    try {
+      const effectiveUid = uid || auth.currentUser?.uid;
+      const uploaded = await uploadResourceAttachment(
+        effectiveUid,
+        generatedId,
+        file
+      );
+      const parsed = await parseDocumentFile(file);
+      if (!newResTitle.trim()) {
+        setNewResTitle(parsed.title || file.name.replace(/\.[^.]+$/, ''));
+      }
+      setNewResType('ملف / مستند');
+      setNewResAttachmentName(file.name);
+      setNewResPreview(parsed.plainText.slice(0, 7500));
+      setNewResStoragePath(uploaded.storagePath ?? '');
+      setNewResDownloadUrl(uploaded.downloadUrl ?? '');
+      setNewResMimeType(uploaded.mimeType || file.type || '');
+      setNewResSizeBytes(uploaded.sizeBytes ?? file.size);
+    } finally {
+      setUploadingResFile(false);
     }
   };
 
@@ -330,12 +367,16 @@ export default function TwelveMonthPlanView({
       activeMonth.id,
       title,
       newResType,
-      newResNote.trim() || 'مصدر مضاف يدويًا لهذا الشهر.',
+      newResNote.trim(),
       {
         id: pendingResId || undefined,
         externalUrl: newResUrl.trim() || undefined,
         attachmentName: newResAttachmentName || undefined,
         extractedPreview: newResPreview || undefined,
+        storagePath: newResStoragePath || undefined,
+        downloadUrl: newResDownloadUrl || undefined,
+        mimeType: newResMimeType || undefined,
+        sizeBytes: newResSizeBytes,
       }
     );
     setNewResTitle('');
@@ -343,6 +384,10 @@ export default function TwelveMonthPlanView({
     setNewResUrl('');
     setNewResAttachmentName('');
     setNewResPreview('');
+    setNewResStoragePath('');
+    setNewResDownloadUrl('');
+    setNewResMimeType('');
+    setNewResSizeBytes(undefined);
     setPendingResId('');
     setShowAddResource(false);
   };
@@ -484,7 +529,13 @@ export default function TwelveMonthPlanView({
                     {quarters.length > 1 && (
                       <button
                         type="button"
-                        onClick={() => onDeleteQuarter(q.id)}
+                        onClick={() =>
+                          setConfirmDeleteTarget({
+                            type: 'quarter',
+                            id: q.id,
+                            label: q.title,
+                          })
+                        }
                         className="text-slate-400 hover:text-red-600 cursor-pointer"
                         aria-label={`حذف ${q.title}`}
                       >
@@ -723,7 +774,6 @@ export default function TwelveMonthPlanView({
                     onClick={() => {
                       onSelectMonth(month.id);
                       setIsEditingMonth(false);
-                      setConfirmDeleteMonthId(null);
                     }}
                     className={`w-full text-right px-5 py-4 transition-colors duration-150 cursor-pointer flex flex-col gap-1.5 ${
                       isSelected
@@ -748,10 +798,18 @@ export default function TwelveMonthPlanView({
                     </p>
 
                     <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-                      <span>{month.foundational.author}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{month.exploratory.author}</span>
-                      <span aria-hidden="true">·</span>
+                      {month.foundational.author && (
+                        <>
+                          <span>{month.foundational.author}</span>
+                          <span aria-hidden="true">·</span>
+                        </>
+                      )}
+                      {month.exploratory.author && (
+                        <>
+                          <span>{month.exploratory.author}</span>
+                          <span aria-hidden="true">·</span>
+                        </>
+                      )}
                       <span className="tabular-nums">
                         {mTasksDone}/{month.tasks.length} مهام
                       </span>
@@ -844,38 +902,22 @@ export default function TwelveMonthPlanView({
                   <span>{isEditingMonth ? 'إنهاء التعديل' : 'تعديل الشهر'}</span>
                 </button>
 
-                {canEdit &&
-                  months.length > 1 &&
-                  (confirmDeleteMonthId === activeMonth.id ? (
-                    <div className="inline-flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onDeleteMonth(activeMonth.id);
-                          setConfirmDeleteMonthId(null);
-                        }}
-                        className="px-2.5 py-1.5 text-xs font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 cursor-pointer"
-                      >
-                        تأكيد الحذف
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteMonthId(null)}
-                        className="px-2.5 py-1.5 text-xs text-slate-600 bg-slate-100 rounded-lg cursor-pointer"
-                      >
-                        إلغاء
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDeleteMonthId(activeMonth.id)}
-                      aria-label={`حذف الشهر ${activeMonth.id}`}
-                      className="p-2 text-slate-400 hover:text-red-600 bg-slate-100 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                    </button>
-                  ))}
+                {canEdit && months.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setConfirmDeleteTarget({
+                        type: 'month',
+                        id: activeMonth.id,
+                        label: activeMonth.theme,
+                      })
+                    }
+                    aria-label={`حذف الشهر ${activeMonth.id}`}
+                    className="p-2 text-slate-400 hover:text-red-600 bg-slate-100 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1256,7 +1298,14 @@ export default function TwelveMonthPlanView({
                     {canEdit && (
                       <button
                         type="button"
-                        onClick={() => onDeleteMonthTask(activeMonth.id, task.id)}
+                        onClick={() =>
+                          setConfirmDeleteTarget({
+                            type: 'task',
+                            monthId: activeMonth.id,
+                            taskId: task.id,
+                            label: task.text,
+                          })
+                        }
                         aria-label="حذف المهمة"
                         className="p-1 text-slate-400 hover:text-red-600 transition-colors cursor-pointer shrink-0"
                       >
@@ -1368,12 +1417,19 @@ export default function TwelveMonthPlanView({
                       />
                       <button
                         type="button"
+                        disabled={uploadingResFile}
                         onClick={() => resFileInputRef.current?.click()}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-100 rounded-md cursor-pointer whitespace-nowrap shrink-0"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-100 rounded-md cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
                       >
-                        <FileUp className="w-3.5 h-3.5" aria-hidden="true" />
+                        {uploadingResFile ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <FileUp className="w-3.5 h-3.5" aria-hidden="true" />
+                        )}
                         <span>
-                          {newResAttachmentName
+                          {uploadingResFile
+                            ? 'جاري الرفع...'
+                            : newResAttachmentName
                             ? `تم إرفاق: ${newResAttachmentName}`
                             : 'رفع ملف Word / PDF / نص'}
                         </span>
@@ -1385,12 +1441,13 @@ export default function TwelveMonthPlanView({
                     type="text"
                     value={newResNote}
                     onChange={(e) => setNewResNote(e.target.value)}
-                    placeholder="ملاحظة مختصرة عن المصدر..."
+                    placeholder="ملاحظة مختصرة عن المصدر (اختياري)..."
                     className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
                   />
                   <button
                     type="submit"
-                    className="px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-md cursor-pointer"
+                    disabled={uploadingResFile}
+                    className="px-3 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-md cursor-pointer disabled:opacity-50"
                   >
                     حفظ المصدر
                   </button>
@@ -1400,6 +1457,11 @@ export default function TwelveMonthPlanView({
               <div className="divide-y divide-slate-200 border border-slate-200 rounded-lg">
                 {activeMonth.resources.map((res) => {
                   const isPreviewOpen = expandedResPreviewId === res.id;
+                  const isPdf = isPdfAttachment(res.attachmentName, res.mimeType);
+                  const hasAttachment = Boolean(
+                    res.attachmentName || res.storagePath || res.downloadUrl
+                  );
+
                   return (
                     <div key={res.id} className="bg-white">
                       <div className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -1418,10 +1480,32 @@ export default function TwelveMonthPlanView({
                               </span>
                             )}
                           </div>
-                          <p className="text-xs text-slate-600">{res.note}</p>
+                          {res.note && (
+                            <p className="text-xs text-slate-600">{res.note}</p>
+                          )}
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          {isPdf && onOpenPdf && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onOpenPdf({
+                                  title: res.title,
+                                  fileName: res.attachmentName || `${res.title}.pdf`,
+                                  resourceId: res.id,
+                                  storagePath: res.storagePath,
+                                  downloadUrl: res.downloadUrl,
+                                  contextLabel: `الشهر ${activeMonth.id}: ${activeMonth.theme}`,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded cursor-pointer"
+                            >
+                              <Eye className="w-3 h-3" aria-hidden="true" />
+                              <span>فتح PDF</span>
+                            </button>
+                          )}
+
                           {res.extractedPreview && (
                             <>
                               <button
@@ -1455,43 +1539,55 @@ export default function TwelveMonthPlanView({
                             </>
                           )}
 
-                          {res.attachmentName && (
+                          {hasAttachment && (
                             <button
                               type="button"
                               onClick={() =>
-                                void downloadLocalAttachment(
-                                  res.id,
-                                  res.attachmentName || res.title
-                                )
+                                void downloadResourceAttachment({
+                                  resourceId: res.id,
+                                  fileName: res.attachmentName || res.title,
+                                  storagePath: res.storagePath,
+                                  downloadUrl: res.downloadUrl,
+                                })
                               }
                               className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
                             >
                               <Download className="w-3 h-3" aria-hidden="true" />
-                              <span>تحميل الملف</span>
+                              <span>تنزيل</span>
                             </button>
                           )}
 
-                          <a
-                            href={
-                              res.externalUrl ||
-                              `https://www.google.com/search?q=${encodeURIComponent(
-                                res.searchQuery
-                              )}`
-                            }
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs font-medium text-[#1E3A5F] hover:underline whitespace-nowrap"
-                          >
-                            <span>
-                              {res.externalUrl ? 'فتح الرابط الخارجي' : 'بحث عن المصدر'}
-                            </span>
-                            <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                          </a>
+                          {(!hasAttachment || res.externalUrl) && (
+                            <a
+                              href={
+                                res.externalUrl ||
+                                `https://www.google.com/search?q=${encodeURIComponent(
+                                  res.searchQuery
+                                )}`
+                              }
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs font-medium text-[#1E3A5F] hover:underline whitespace-nowrap"
+                            >
+                              <span>
+                                {res.externalUrl
+                                  ? 'فتح الرابط الخارجي'
+                                  : 'بحث عن المصدر'}
+                              </span>
+                              <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                            </a>
+                          )}
+
                           {canEdit && (
                             <button
                               type="button"
                               onClick={() =>
-                                onDeleteMonthResource(activeMonth.id, res.id)
+                                setConfirmDeleteTarget({
+                                  type: 'resource',
+                                  monthId: activeMonth.id,
+                                  resourceId: res.id,
+                                  label: res.title,
+                                })
                               }
                               aria-label="حذف المصدر"
                               className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
@@ -1660,6 +1756,21 @@ export default function TwelveMonthPlanView({
               )}
             </div>
 
+            {/* Spaced Repetition, Reading Modes & Listen Counter */}
+            <SpacedRepetitionPanel
+              canEdit={canEdit}
+              value={{
+                readingModes: activeMonth.readingModes,
+                learningMethods: activeMonth.learningMethods,
+                reviewCount: activeMonth.reviewCount,
+                listenCount: activeMonth.listenCount,
+                repetitionStage: activeMonth.repetitionStage,
+                nextReviewDateKey: activeMonth.nextReviewDateKey,
+                lastReviewedDateKey: activeMonth.lastReviewedDateKey,
+              }}
+              onChange={(updates) => onUpdateMonth(activeMonth.id, updates)}
+            />
+
             {/* Month Reflection / Summary Box + Voice Dictation */}
             <div className="space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1700,6 +1811,40 @@ export default function TwelveMonthPlanView({
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={Boolean(confirmDeleteTarget)}
+        title={`تأكيد الحذف: ${confirmDeleteTarget?.label ?? ''}`}
+        message={
+          confirmDeleteTarget?.type === 'month'
+            ? 'سيتم حذف هذه الوحدة الشهرية ومهامها من خطتك. هل أنت متأكد؟'
+            : confirmDeleteTarget?.type === 'quarter'
+            ? 'سيتم حذف هذه المرحلة من قائمة المراحل. هل تريد المتابعة؟'
+            : confirmDeleteTarget?.type === 'resource'
+            ? 'سيتم حذف هذا المصدر المرفق من الشهر. هل تريد المتابعة؟'
+            : 'سيتم حذف هذه المهمة من الشهر. هل تريد المتابعة؟'
+        }
+        onCancel={() => setConfirmDeleteTarget(null)}
+        onConfirm={() => {
+          if (!confirmDeleteTarget) return;
+          if (confirmDeleteTarget.type === 'quarter') {
+            onDeleteQuarter(confirmDeleteTarget.id);
+          } else if (confirmDeleteTarget.type === 'month') {
+            onDeleteMonth(confirmDeleteTarget.id);
+          } else if (confirmDeleteTarget.type === 'task') {
+            onDeleteMonthTask(
+              confirmDeleteTarget.monthId,
+              confirmDeleteTarget.taskId
+            );
+          } else if (confirmDeleteTarget.type === 'resource') {
+            onDeleteMonthResource(
+              confirmDeleteTarget.monthId,
+              confirmDeleteTarget.resourceId
+            );
+          }
+          setConfirmDeleteTarget(null);
+        }}
+      />
     </div>
   );
 }

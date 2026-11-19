@@ -6,6 +6,7 @@ import {
   CalendarDays,
   CheckCircle2,
   Clock,
+  Compass,
   Edit3,
   Feather,
   FolderPlus,
@@ -13,6 +14,7 @@ import {
   Headphones,
   History,
   Layers,
+  ListTodo,
   Lock,
   LogIn,
   MessageSquare,
@@ -20,26 +22,41 @@ import {
   PenLine,
   Pin,
   Plus,
+  Repeat,
+  ShieldCheck,
   Sparkles,
   Tag,
   Trash2,
+  X,
 } from 'lucide-react';
 import {
   BookNote,
   CustomCategory,
+  DEFAULT_HUB_CATEGORIES,
   DomainId,
   DomainInfo,
   HERO_IMAGE_PATH,
+  LEARNING_HUBS,
+  LearningHubId,
+  LearningPath,
   MonthPlan,
   PersonalCourse,
   PersonalReflection,
+  PracticalProject,
   QuarterInfo,
+  ReadingLibraryItem,
   ReflectionMood,
   StudyHistoryEntry,
+  UnifiedTask,
+  UserPreferences,
   VoiceDialectMode,
   WEEKLY_RHYTHM,
+  getHubMeta,
+  getTodayDateKey,
 } from '../data/curriculumData';
+import { OWNER_ADMIN_EMAIL } from '../firebase';
 import { moveImagesScope } from '../utils/imageStorage';
+import ConfirmDialog from './ConfirmDialog';
 import { ActiveTab } from './Header';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
 import ProgressCharts from './ProgressCharts';
@@ -50,16 +67,24 @@ interface OverviewViewProps {
   canEdit: boolean;
   onRequireAuth: () => void;
   voiceDialect: VoiceDialectMode;
+  preferences: UserPreferences;
+  onUpdatePreferences: (updates: Partial<UserPreferences>) => void;
   quarters: QuarterInfo[];
   months: MonthPlan[];
   domains: DomainInfo[];
   courses: PersonalCourse[];
   bookNotes: BookNote[];
+  learningPaths: LearningPath[];
+  readingItems: ReadingLibraryItem[];
+  projects: PracticalProject[];
+  unifiedTasks: UnifiedTask[];
   customCategories: CustomCategory[];
   history: StudyHistoryEntry[];
   reflections: PersonalReflection[];
   onGoogleSignIn: () => void;
   onNavigateTab: (tab: ActiveTab) => void;
+  onSelectHub: (hub: LearningHubId, targetTab: ActiveTab) => void;
+  onSelectCourse: (courseId: number) => void;
   onJumpToMonth: (monthId: number) => void;
   onFilterByDomain: (domainId: DomainId) => void;
   onOpenNoteById: (noteId: string) => void;
@@ -96,16 +121,24 @@ export default function OverviewView({
   canEdit,
   onRequireAuth,
   voiceDialect,
+  preferences,
+  onUpdatePreferences,
   quarters,
   months,
   domains,
   courses,
   bookNotes,
+  learningPaths,
+  readingItems,
+  projects,
+  unifiedTasks,
   customCategories,
   history,
   reflections,
   onGoogleSignIn,
   onNavigateTab,
+  onSelectHub,
+  onSelectCourse,
   onJumpToMonth,
   onFilterByDomain,
   onOpenNoteById,
@@ -121,6 +154,18 @@ export default function OverviewView({
   const [catTitle, setCatTitle] = useState('');
   const [catDesc, setCatDesc] = useState('');
   const [catColor, setCatColor] = useState<CustomCategory['color']>('navy');
+
+  // Editable Hub Categories UI
+  const [editingHubCats, setEditingHubCats] = useState<LearningHubId | null>(null);
+  const [newHubCatName, setNewHubCatName] = useState('');
+
+  // Confirm Dialog State for Deletions
+  const [confirmDelete, setConfirmDelete] = useState<{
+    type: 'reflection' | 'category' | 'history' | 'hubCategory';
+    id: string;
+    label: string;
+    hubId?: LearningHubId;
+  } | null>(null);
 
   // History Filter State
   const [historyFilter, setHistoryFilter] = useState<
@@ -140,6 +185,15 @@ export default function OverviewView({
   const [editingRefTitle, setEditingRefTitle] = useState('');
   const [editingRefContent, setEditingRefContent] = useState('');
   const [draftImgRefresh, setDraftImgRefresh] = useState(0);
+
+  const isOwnerAdmin =
+    Boolean(user?.email) &&
+    user?.email?.toLowerCase() === OWNER_ADMIN_EMAIL.toLowerCase();
+
+  const resolvedHubCategories: Record<LearningHubId, string[]> =
+    preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES;
+
+  const today = getTodayDateKey();
 
   // Progress Calculations
   const completedMonths = months.filter((m) => m.status === 'completed').length;
@@ -268,6 +322,94 @@ export default function OverviewView({
       return new Date().toISOString().slice(0, 10);
     }
   }, []);
+
+  const dueItems = useMemo(() => {
+    const list: Array<{
+      key: string;
+      kind: 'course' | 'note' | 'library';
+      title: string;
+      hubId: LearningHubId;
+      nextDate?: string;
+      listenCount: number;
+      reviewCount: number;
+      courseId?: number;
+      noteId?: string;
+    }> = [];
+
+    for (const c of courses) {
+      const isDue = Boolean(c.nextReviewDateKey) && (c.nextReviewDateKey ?? '') <= today;
+      const isRepeated = (c.listenCount ?? 0) >= 2 || (c.reviewCount ?? 0) >= 2;
+      if (isDue || isRepeated) {
+        list.push({
+          key: `course-${c.id}`,
+          kind: 'course',
+          title: c.title,
+          hubId: c.hubId ?? 'knowledge',
+          nextDate: c.nextReviewDateKey,
+          listenCount: c.listenCount ?? 0,
+          reviewCount: c.reviewCount ?? 0,
+          courseId: c.id,
+        });
+      }
+    }
+
+    for (const n of bookNotes) {
+      const isDue = Boolean(n.nextReviewDateKey) && (n.nextReviewDateKey ?? '') <= today;
+      const isRepeated = (n.listenCount ?? 0) >= 2 || (n.reviewCount ?? 0) >= 2;
+      if (isDue || isRepeated) {
+        list.push({
+          key: `note-${n.id}`,
+          kind: 'note',
+          title: n.bookTitle,
+          hubId: n.hubId ?? 'knowledge',
+          nextDate: n.nextReviewDateKey,
+          listenCount: n.listenCount ?? 0,
+          reviewCount: n.reviewCount ?? 0,
+          noteId: n.id,
+        });
+      }
+    }
+
+    for (const item of readingItems) {
+      const isDue = Boolean(item.nextReviewDateKey) && (item.nextReviewDateKey ?? '') <= today;
+      const isRepeated = (item.listenCount ?? 0) >= 2 || (item.reviewCount ?? 0) >= 2;
+      if (isDue || isRepeated) {
+        list.push({
+          key: `lib-${item.id}`,
+          kind: 'library',
+          title: item.title,
+          hubId: item.hubId ?? 'knowledge',
+          nextDate: item.nextReviewDateKey,
+          listenCount: item.listenCount ?? 0,
+          reviewCount: item.reviewCount ?? 0,
+        });
+      }
+    }
+
+    return list;
+  }, [courses, bookNotes, readingItems, today]);
+
+  const handleAddHubCategory = (e: React.FormEvent, hubId: LearningHubId) => {
+    e.preventDefault();
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    const clean = newHubCatName.trim();
+    if (!clean) return;
+    const currentList = resolvedHubCategories[hubId] ?? [];
+    if (currentList.includes(clean)) {
+      setNewHubCatName('');
+      return;
+    }
+    onUpdatePreferences({
+      hubCategories: {
+        ...resolvedHubCategories,
+        [hubId]: [...currentList, clean],
+      },
+    });
+    setNewHubCatName('');
+  };
 
   const DAILY_PROMPTS: Array<{ label: string; mood: ReflectionMood }> = [
     { label: 'أهم فكرة تعلّمتها اليوم', mood: 'فكرة' },
@@ -463,6 +605,279 @@ export default function OverviewView({
           </p>
         </div>
       </section>
+
+      {/* 3 Learning Hubs Command Center */}
+      <section className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-2">
+          <div>
+            <p className="text-xs text-slate-500">
+              منظومة التعلم والنمو ثلاثية المستويات · تصنيفات قابلة للتخصيص
+            </p>
+            <h2 className="font-editorial text-2xl font-bold text-slate-900">
+              المستويات والمحاور الرئيسية الثلاثة في رحلتك
+            </h2>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+          {LEARNING_HUBS.map((hub) => {
+            const hCourses = courses.filter(
+              (c) => (c.hubId ?? 'knowledge') === hub.id
+            );
+            const hPaths = learningPaths.filter((p) => p.hubId === hub.id);
+            const hLibrary = readingItems.filter((r) => r.hubId === hub.id);
+            const hProjects = projects.filter((p) => p.hubId === hub.id);
+            const hTasks = unifiedTasks.filter((t) => t.hubId === hub.id);
+            const categories = resolvedHubCategories[hub.id] ?? hub.defaultCategories;
+            const isManagingCats = editingHubCats === hub.id;
+
+            return (
+              <div
+                key={hub.id}
+                className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col justify-between gap-5"
+              >
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <span
+                      className={`px-2.5 py-1 text-xs font-bold rounded-lg border ${hub.badgeClass}`}
+                    >
+                      {hub.shortTitle}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditingHubCats(isManagingCats ? null : hub.id)
+                      }
+                      className="text-[11px] font-medium text-slate-600 hover:text-[#1E3A5F] cursor-pointer"
+                    >
+                      {isManagingCats ? 'إخفاء التصنيفات' : 'تخصيص التخصصات'}
+                    </button>
+                  </div>
+
+                  <div>
+                    <h3 className="font-editorial text-xl font-bold text-slate-900">
+                      {hub.title}
+                    </h3>
+                    <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                      {hub.purpose}
+                    </p>
+                  </div>
+
+                  {/* Quick Hub Stats */}
+                  <div className="grid grid-cols-3 gap-2 pt-1 text-center">
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                      <span className="block text-sm font-bold text-slate-900 tabular-nums">
+                        {hCourses.length}
+                      </span>
+                      <span className="text-[11px] text-slate-500">كورس</span>
+                    </div>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                      <span className="block text-sm font-bold text-slate-900 tabular-nums">
+                        {hPaths.length}
+                      </span>
+                      <span className="text-[11px] text-slate-500">مسار</span>
+                    </div>
+                    <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg">
+                      <span className="block text-sm font-bold text-slate-900 tabular-nums">
+                        {hLibrary.length + hProjects.length + hTasks.length}
+                      </span>
+                      <span className="text-[11px] text-slate-500">مصدر ومهمة</span>
+                    </div>
+                  </div>
+
+                  {/* Editable Categories Drawer */}
+                  {isManagingCats && (
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2.5">
+                      <p className="text-[11px] font-semibold text-slate-700">
+                        تخصصات وفئات {hub.shortTitle} ({categories.length}):
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {categories.map((cat) => (
+                          <span
+                            key={cat}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] bg-white border border-slate-200 rounded-md text-slate-800"
+                          >
+                            <span>{cat}</span>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setConfirmDelete({
+                                    type: 'hubCategory',
+                                    id: cat,
+                                    label: cat,
+                                    hubId: hub.id,
+                                  })
+                                }
+                                aria-label={`حذف ${cat}`}
+                                className="text-slate-400 hover:text-red-600 cursor-pointer"
+                              >
+                                <X className="w-3 h-3" aria-hidden="true" />
+                              </button>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                      {canEdit && (
+                        <form
+                          onSubmit={(e) => handleAddHubCategory(e, hub.id)}
+                          className="flex items-center gap-1.5"
+                        >
+                          <input
+                            type="text"
+                            value={newHubCatName}
+                            onChange={(e) => setNewHubCatName(e.target.value)}
+                            placeholder="إضافة تخصص جديد..."
+                            className="flex-1 min-w-0 px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                          />
+                          <button
+                            type="submit"
+                            className="px-2.5 py-1.5 text-xs font-medium text-white bg-[#1E3A5F] rounded-md cursor-pointer shrink-0"
+                          >
+                            إضافة
+                          </button>
+                        </form>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Quick Hub Shortcuts */}
+                <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onSelectHub(hub.id, 'courses')}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                  >
+                    <GraduationCap className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>الكورسات</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectHub(hub.id, 'paths')}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    <Compass className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                    <span>المسارات</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectHub(hub.id, 'library')}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    <BookOpen className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                    <span>المكتبة</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectHub(hub.id, 'tasks')}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    <ListTodo className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                    <span>المهام والمشاريع</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Spaced Repetition & Repeated Listening Tracker */}
+      {dueItems.length > 0 && (
+        <section className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Repeat className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+              <h2 className="text-base font-bold text-slate-900">
+                متابعة التكرار المتباعد والمواد المسجلة / المسموعة أكثر من مرة ({dueItems.length})
+              </h2>
+            </div>
+            <span className="text-xs text-slate-500">
+              اضغط لفتح المادة مباشرة للمراجعة
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {dueItems.slice(0, 9).map((item) => {
+              const hubMeta = getHubMeta(item.hubId);
+              const isDue = Boolean(item.nextDate) && (item.nextDate ?? '') <= today;
+              return (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => {
+                    if (item.kind === 'course' && item.courseId) {
+                      onSelectCourse(item.courseId);
+                    } else if (item.kind === 'note' && item.noteId) {
+                      onOpenNoteById(item.noteId);
+                    } else {
+                      onNavigateTab('library');
+                    }
+                  }}
+                  className="p-3.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-right space-y-1.5 cursor-pointer transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <span
+                      className={`px-2 py-0.5 rounded border font-semibold ${hubMeta.badgeClass}`}
+                    >
+                      {hubMeta.shortTitle}
+                    </span>
+                    {isDue && (
+                      <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-900 font-semibold">
+                        مستحق اليوم
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs font-bold text-slate-900 truncate">
+                    {item.title}
+                  </p>
+                  <p className="text-[11px] text-slate-600 tabular-nums">
+                    {item.listenCount >= 2 ? `استماع/تسجيل: ${item.listenCount}× · ` : ''}
+                    مراجعات: {item.reviewCount}×
+                    {item.nextDate ? ` · القادم: ${item.nextDate}` : ''}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Owner-Only Admin Controls */}
+      {isOwnerAdmin && (
+        <section className="bg-slate-900 text-white rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="space-y-0.5">
+              <h2 className="text-sm font-bold">
+                لوحة تحكم المالك ({user?.email})
+              </h2>
+              <p className="text-xs text-slate-300">
+                تحكّم في إظهار أو إخفاء أزرار تصدير Excel في القوائم والتذييل.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              onUpdatePreferences({
+                showExcelExport: preferences.showExcelExport === false,
+              })
+            }
+            className={`px-4 py-2 text-xs font-semibold rounded-lg cursor-pointer whitespace-nowrap shrink-0 ${
+              preferences.showExcelExport === false
+                ? 'bg-amber-500 text-slate-950 hover:bg-amber-400'
+                : 'bg-emerald-600 text-white hover:bg-emerald-500'
+            }`}
+          >
+            {preferences.showExcelExport === false
+              ? 'زر Excel مخفي حاليًا — اضغط لإظهاره'
+              : 'زر Excel ظاهر حاليًا — اضغط لإخفائه'}
+          </button>
+        </section>
+      )}
 
       {/* Comprehensive Progress Tracker Section */}
       <section
@@ -984,7 +1399,13 @@ export default function OverviewView({
                             </button>
                             <button
                               type="button"
-                              onClick={() => onDeleteReflection(refItem.id)}
+                              onClick={() =>
+                                setConfirmDelete({
+                                  type: 'reflection',
+                                  id: refItem.id,
+                                  label: refItem.title || refItem.moodTag,
+                                })
+                              }
                               aria-label="حذف الخاطرة"
                               className="p-1 text-slate-400 hover:text-red-600 rounded hover:bg-red-50 cursor-pointer"
                             >
@@ -1163,7 +1584,13 @@ export default function OverviewView({
                     {canEdit && (
                       <button
                         type="button"
-                        onClick={() => onDeleteCustomCategory(cat.id)}
+                        onClick={() =>
+                          setConfirmDelete({
+                            type: 'category',
+                            id: cat.id,
+                            label: cat.title,
+                          })
+                        }
                         aria-label={`حذف ${cat.title}`}
                         className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
                       >
@@ -1346,7 +1773,13 @@ export default function OverviewView({
                     {canEdit && (
                       <button
                         type="button"
-                        onClick={() => onDeleteHistoryEntry(entry.id)}
+                        onClick={() =>
+                          setConfirmDelete({
+                            type: 'history',
+                            id: entry.id,
+                            label: entry.title,
+                          })
+                        }
                         aria-label="حذف السجل"
                         className="p-1 text-slate-300 hover:text-red-600 cursor-pointer shrink-0"
                       >
@@ -1439,6 +1872,35 @@ export default function OverviewView({
           })}
         </div>
       </section>
+
+      <ConfirmDialog
+        open={Boolean(confirmDelete)}
+        title="تأكيد الحذف"
+        message={`هل أنت متأكد من حذف «${confirmDelete?.label}»؟`}
+        confirmLabel="تأكيد الحذف"
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => {
+          if (!confirmDelete) return;
+          if (confirmDelete.type === 'reflection') {
+            onDeleteReflection(confirmDelete.id);
+          } else if (confirmDelete.type === 'category') {
+            onDeleteCustomCategory(confirmDelete.id);
+          } else if (confirmDelete.type === 'history') {
+            onDeleteHistoryEntry(confirmDelete.id);
+          } else if (confirmDelete.type === 'hubCategory' && confirmDelete.hubId) {
+            const currentList = resolvedHubCategories[confirmDelete.hubId] ?? [];
+            onUpdatePreferences({
+              hubCategories: {
+                ...resolvedHubCategories,
+                [confirmDelete.hubId]: currentList.filter(
+                  (c) => c !== confirmDelete.id
+                ),
+              },
+            });
+          }
+          setConfirmDelete(null);
+        }}
+      />
     </div>
   );
 }
