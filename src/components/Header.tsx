@@ -84,15 +84,15 @@ export default function Header({
 
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-200">
-      <div className="max-w-[1280px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+      <div className="max-w-[1280px] mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-3">
         {/* Zone 1: Brand Wordmark + Custom Emblem */}
         <button
           type="button"
           onClick={() => onSelectTab('overview')}
           className="inline-flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1E3A5F]"
         >
-          <BrandMark className="w-8 h-8 shrink-0" />
-          <span className="font-editorial text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+          <BrandMark className="w-7 h-7 sm:w-8 sm:h-8 shrink-0" />
+          <span className="font-editorial text-lg sm:text-2xl font-bold text-slate-900 tracking-tight">
             ميزان المعرفة
           </span>
         </button>
@@ -139,7 +139,7 @@ export default function Header({
                 type="button"
                 onClick={() => setMenuOpen((v) => !v)}
                 aria-expanded={menuOpen}
-                className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-2 px-2.5 py-1.5 min-h-[38px] rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 {user.photoURL ? (
                   <img
@@ -186,7 +186,7 @@ export default function Header({
                         onSelectTab('overview');
                         setMenuOpen(false);
                       }}
-                      className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                     >
                       <LayoutDashboard className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
                       <span>لوحة المتابعة والمحاور الثلاثة</span>
@@ -197,7 +197,7 @@ export default function Header({
                         onSelectTab('journal');
                         setMenuOpen(false);
                       }}
-                      className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                     >
                       <NotebookPen className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
                       <span>دفتر التلخيص والنوتس</span>
@@ -211,7 +211,7 @@ export default function Header({
                         setMenuOpen(false);
                         onSignOut();
                       }}
-                      className="w-full px-4 py-2 text-right text-xs font-medium text-red-700 hover:bg-red-50 flex items-center gap-2 cursor-pointer"
+                      className="w-full px-4 py-2.5 text-right text-xs font-medium text-red-700 hover:bg-red-50 flex items-center gap-2 cursor-pointer"
                     >
                       <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>تسجيل الخروج</span>
@@ -224,10 +224,11 @@ export default function Header({
             <button
               type="button"
               onClick={onGoogleSignIn}
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
+              className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 min-h-[38px] text-xs sm:text-sm font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
             >
               <LogIn className="w-4 h-4 shrink-0" aria-hidden="true" />
-              <span>دخول بحساب Google</span>
+              <span className="sm:hidden">دخول Google</span>
+              <span className="hidden sm:inline">دخول بحساب Google</span>
             </button>
           )}
         </div>
@@ -236,7 +237,7 @@ export default function Header({
       {/* Tablet / Mobile Scrollable Secondary Nav */}
       <nav
         aria-label="تنقل الجوال والتابلت"
-        className="lg:hidden border-t border-slate-100 px-4 py-2 flex items-center gap-4 overflow-x-auto no-scrollbar"
+        className="lg:hidden border-t border-slate-100 px-3 py-1 flex items-center gap-3 overflow-x-auto no-scrollbar snap-x"
       >
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
@@ -245,7 +246,7 @@ export default function Header({
               key={item.id}
               type="button"
               onClick={() => onSelectTab(item.id)}
-              className={`px-2 py-1.5 text-xs font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors ${
+              className={`snap-start px-2 py-2 min-h-[40px] text-xs font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors ${
                 isActive
                   ? 'border-[#1E3A5F] text-[#1E3A5F] font-semibold'
                   : 'border-transparent text-slate-600'

@@ -428,6 +428,25 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "ownerId", "fileName", "mimeType", "sizeBytes", "dataUrl", "updatedAt"]
+    },
+    "AudioCacheItem": {
+      "title": "AudioCacheItem",
+      "description": "Cloud-cached synthesized TTS audio clip reference for instant repeat playback across devices without re-calling API.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "voiceName": { "type": "string", "enum": ["Kore", "Puck", "Charon", "Fenrir", "Zephyr"] },
+        "speed": { "type": "string", "enum": ["normal", "calm"] },
+        "mimeType": { "type": "string", "maxLength": 80 },
+        "sizeBytes": { "type": "integer" },
+        "storagePath": { "type": "string", "maxLength": 400 },
+        "downloadUrl": { "type": "string", "maxLength": 1200 },
+        "inlineDataUrl": { "type": "string", "maxLength": 800000 },
+        "previewText": { "type": "string", "maxLength": 160 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "voiceName", "speed", "mimeType", "sizeBytes", "updatedAt"]
     }
   },
   "firestore": {
@@ -498,6 +517,10 @@
     "/users/{userId}/attachments/{attachmentId}": {
       "schema": { "$ref": "#/entities/FileAttachmentItem" },
       "description": "User's cloud-synced PDF/document backup payloads."
+    },
+    "/users/{userId}/audioCache/{cacheId}": {
+      "schema": { "$ref": "#/entities/AudioCacheItem" },
+      "description": "User's cloud-cached synthesized ReadAloud audio references across devices."
     }
   }
 }

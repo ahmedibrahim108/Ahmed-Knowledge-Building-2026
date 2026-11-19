@@ -43,6 +43,13 @@ const ALLOWED_TAGS = new Set([
   'H4',
   'MARK',
   'SPAN',
+  'TABLE',
+  'THEAD',
+  'TBODY',
+  'TFOOT',
+  'TR',
+  'TH',
+  'TD',
 ]);
 
 const ALLOWED_BG_COLORS = new Set([
@@ -65,7 +72,7 @@ function escapeHtml(text: string): string {
 }
 
 export function looksLikeHtml(value: string): boolean {
-  return /<\/?(p|div|br|b|strong|i|em|u|ul|ol|li|blockquote|h3|h4|mark|span)\b/i.test(
+  return /<\/?(p|div|br|b|strong|i|em|u|ul|ol|li|blockquote|h3|h4|mark|span|table|thead|tbody|tfoot|tr|th|td)\b/i.test(
     value
   );
 }
@@ -112,7 +119,7 @@ export function ensureRichHtml(raw: string): string {
 }
 
 /**
- * Sanitizes editor HTML so only safe structural, bold, italic, list, quote, and highlight tags remain.
+ * Sanitizes editor HTML so only safe structural, bold, italic, list, quote, table, and highlight tags remain.
  */
 export function sanitizeRichHtml(dirtyHtml: string): string {
   if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
@@ -157,6 +164,21 @@ export function sanitizeRichHtml(dirtyHtml: string): string {
       return childrenHtml;
     }
 
+    if (tag === 'TH' || tag === 'TD') {
+      const attrs: string[] = [];
+      const colspan = parseInt(el.getAttribute('colspan') || '', 10);
+      const rowspan = parseInt(el.getAttribute('rowspan') || '', 10);
+      if (!Number.isNaN(colspan) && colspan > 1 && colspan <= 20) {
+        attrs.push(`colspan="${colspan}"`);
+      }
+      if (!Number.isNaN(rowspan) && rowspan > 1 && rowspan <= 20) {
+        attrs.push(`rowspan="${rowspan}"`);
+      }
+      const attrStr = attrs.length > 0 ? ` ${attrs.join(' ')}` : '';
+      const lowerCell = tag.toLowerCase();
+      return `<${lowerCell}${attrStr}>${childrenHtml || '<br>'}</${lowerCell}>`;
+    }
+
     const lower = tag.toLowerCase();
     if (lower === 'b') return `<strong>${childrenHtml}</strong>`;
     if (lower === 'i') return `<em>${childrenHtml}</em>`;
@@ -195,12 +217,29 @@ export function richHtmlToPlainText(raw: string): string {
       lines.push('\n');
       return;
     }
+    if (tag === 'TR') {
+      const cells = Array.from(el.children)
+        .filter((c) => c.tagName === 'TH' || c.tagName === 'TD')
+        .map((c) => (c.textContent ?? '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+      if (cells.length > 0) {
+        lines.push(`\n${cells.join(' | ')}`);
+      }
+      return;
+    }
     if (tag === 'LI') {
       lines.push('\n• ');
       el.childNodes.forEach(walk);
       return;
     }
-    if (tag === 'P' || tag === 'DIV' || tag === 'BLOCKQUOTE' || tag === 'H3' || tag === 'H4') {
+    if (
+      tag === 'P' ||
+      tag === 'DIV' ||
+      tag === 'BLOCKQUOTE' ||
+      tag === 'H3' ||
+      tag === 'H4' ||
+      tag === 'TABLE'
+    ) {
       if (lines.length > 0) lines.push('\n');
       el.childNodes.forEach(walk);
       lines.push('\n');
@@ -217,7 +256,7 @@ export function richHtmlToPlainText(raw: string): string {
 }
 
 /**
- * Converts rich HTML into clean Markdown preserving bold, bullet lists, quotes, and ==highlights==.
+ * Converts rich HTML into clean Markdown preserving bold, bullet lists, quotes, tables, and ==highlights==.
  */
 export function richHtmlToMarkdown(raw: string): string {
   if (!raw) return '';
@@ -267,6 +306,27 @@ export function richHtmlToMarkdown(raw: string): string {
       }
       case 'LI':
         return `- ${inner.trim()}\n`;
+      case 'TABLE': {
+        const rows = Array.from(el.querySelectorAll('tr'));
+        if (rows.length === 0) return '';
+        const mdRows = rows.map((tr) => {
+          const cells = Array.from(tr.children)
+            .filter((c) => c.tagName === 'TH' || c.tagName === 'TD')
+            .map((c) => (c.textContent ?? '').replace(/\s+/g, ' ').trim());
+          return `| ${cells.join(' | ')} |`;
+        });
+        if (mdRows.length >= 1) {
+          const firstCols = Math.max(
+            1,
+            Array.from(rows[0].children).filter(
+              (c) => c.tagName === 'TH' || c.tagName === 'TD'
+            ).length
+          );
+          const sep = `| ${Array(firstCols).fill('---').join(' | ')} |`;
+          mdRows.splice(1, 0, sep);
+        }
+        return `\n${mdRows.join('\n')}\n\n`;
+      }
       case 'P':
       case 'DIV':
         return inner.trim() ? `${inner.trim()}\n\n` : '\n';

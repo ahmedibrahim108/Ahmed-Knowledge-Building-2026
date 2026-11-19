@@ -2,7 +2,9 @@ import { initializeApp } from 'firebase/app';
 import {
   GoogleAuthProvider,
   getAuth,
+  getRedirectResult,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
 } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
@@ -18,8 +20,36 @@ export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
+export async function completeGoogleRedirectIfAny() {
+  try {
+    return await getRedirectResult(auth);
+  } catch (err) {
+    console.warn('Redirect sign-in check:', err);
+    return null;
+  }
+}
+
 export async function signInWithGoogle() {
-  return signInWithPopup(auth, googleProvider);
+  const isTopWindow =
+    typeof window !== 'undefined' && window.self === window.top;
+  try {
+    return await signInWithPopup(auth, googleProvider);
+  } catch (err) {
+    const code =
+      (err as { code?: string } | null)?.code ||
+      (err instanceof Error ? err.message : '');
+    const popupBlockedOrUnsupported =
+      code.includes('popup-blocked') ||
+      code.includes('operation-not-supported-in-this-environment') ||
+      code.includes('cancelled-popup-request');
+
+    // On real mobile browsers/PWAs (top-level window), seamlessly fall back to full-page redirect login
+    if (isTopWindow && popupBlockedOrUnsupported) {
+      await signInWithRedirect(auth, googleProvider);
+      return null;
+    }
+    throw err;
+  }
 }
 
 export async function signOutUser() {

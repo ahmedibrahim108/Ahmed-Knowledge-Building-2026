@@ -522,6 +522,29 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidAudioCache(data, userId, cacheId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'voiceName', 'speed', 'mimeType', 'sizeBytes', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'voiceName', 'speed', 'mimeType', 'sizeBytes',
+          'storagePath', 'downloadUrl', 'inlineDataUrl', 'previewText', 'updatedAt'
+        ])
+        && data.id == cacheId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.voiceName in ['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr']
+        && data.speed in ['normal', 'calm']
+        && isValidStr(data.mimeType, 1, 80)
+        && data.sizeBytes is int && data.sizeBytes >= 0 && data.sizeBytes <= 50000000
+        && (!('storagePath' in data) || isValidStr(data.storagePath, 0, 400))
+        && (!('downloadUrl' in data) || isValidStr(data.downloadUrl, 0, 1200))
+        && (!('inlineDataUrl' in data) || isValidStr(data.inlineDataUrl, 0, 800000))
+        && (!('previewText' in data) || isValidStr(data.previewText, 0, 160))
+        && data.updatedAt is timestamp;
+    }
+
     // --- User Profile Document (PII Isolated to Owner) ---
     match /users/{userId} {
       allow get: if isValidId(userId) && isOwner(userId);
@@ -903,6 +926,28 @@ service cloud.firestore {
             'fileName', 'mimeType', 'sizeBytes', 'dataUrl', 'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(attachmentId) && isOwner(userId) && isVerifiedUser();
+      }
+
+      // --- Cloud-Cached ReadAloud Audio Clips ---
+      match /audioCache/{cacheId} {
+        allow get: if isValidId(userId) && isValidId(cacheId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(cacheId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidAudioCache(incoming(), userId, cacheId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(cacheId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidAudioCache(incoming(), userId, cacheId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'voiceName', 'speed', 'mimeType', 'sizeBytes',
+            'storagePath', 'downloadUrl', 'inlineDataUrl', 'previewText', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(cacheId) && isOwner(userId) && isVerifiedUser();
       }
     }
   }

@@ -5,7 +5,16 @@
 
 import { User, onAuthStateChanged } from 'firebase/auth';
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Lock, LogIn } from 'lucide-react';
+import {
+  CalendarDays,
+  CheckCircle2,
+  CheckSquare,
+  GraduationCap,
+  LayoutDashboard,
+  Lock,
+  LogIn,
+  NotebookPen,
+} from 'lucide-react';
 import CalendarView from './components/CalendarView';
 import ConfirmDialog from './components/ConfirmDialog';
 import CourseDetailPage from './components/CourseDetailPage';
@@ -53,7 +62,12 @@ import {
   UnifiedTask,
   UserPreferences,
 } from './data/curriculumData';
-import { auth, signInWithGoogle, signOutUser } from './firebase';
+import {
+  auth,
+  completeGoogleRedirectIfAny,
+  signInWithGoogle,
+  signOutUser,
+} from './firebase';
 import {
   deleteBookNoteDoc,
   deleteCalendarEventDoc,
@@ -261,6 +275,11 @@ export default function App() {
     setSelectedMonthId(1);
   };
 
+  // Complete mobile Google redirect sign-in if returning from OAuth redirect
+  useEffect(() => {
+    void completeGoogleRedirectIfAny();
+  }, []);
+
   // Listen to Firebase Auth state & attach strict per-user Firestore workspace listeners ONLY when authenticated
   useEffect(() => {
     let unsubWorkspace: (() => void) | null = null;
@@ -364,7 +383,7 @@ export default function App() {
         err instanceof Error ? err.message : 'تعذر تسجيل الدخول بحساب Google.';
       if (!msg.includes('popup-closed-by-user')) {
         setAuthError(
-          'تعذر إتمام تسجيل الدخول. تأكد من السماح بالنوافذ المنبثقة.'
+          'تعذر إتمام تسجيل الدخول. إذا كنت تفتح الموقع من داخل تطبيق (مثل واتساب أو تيليجرام)، افتح الرابط في Chrome أو Safari ثم سجّل الدخول.'
         );
       }
     }
@@ -1734,7 +1753,7 @@ export default function App() {
         </div>
       )}
 
-      <main className="flex-1 max-w-[1280px] w-full mx-auto px-4 sm:px-8 py-8">
+      <main className="flex-1 max-w-[1280px] w-full mx-auto px-3 sm:px-8 py-5 sm:py-8 pb-24 lg:pb-10">
         {activeTab === 'overview' && (
           <OverviewView
             user={user}
@@ -2053,6 +2072,48 @@ export default function App() {
       />
 
       <OfflineIndicator />
+
+      {/* Mobile-First Thumb-Friendly Bottom Navigation Bar */}
+      <nav
+        aria-label="التنقل السريع على الهاتف"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 mobile-safe-bottom"
+      >
+        <div className="grid grid-cols-5 max-w-lg mx-auto">
+          {(
+            [
+              { id: 'overview', label: 'الرئيسية', icon: LayoutDashboard },
+              { id: 'courses', label: 'الكورسات', icon: GraduationCap },
+              { id: 'journal', label: 'التلخيص', icon: NotebookPen },
+              { id: 'tasks', label: 'المهام', icon: CheckSquare },
+              { id: 'calendar', label: 'التقويم', icon: CalendarDays },
+            ] as const
+          ).map((item) => {
+            const Icon = item.icon;
+            const active = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  navigateToTab(item.id);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className={`flex flex-col items-center justify-center gap-0.5 py-2 min-h-[54px] text-[10px] font-medium transition-colors cursor-pointer ${
+                  active
+                    ? 'text-[#1E3A5F] font-bold'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <Icon
+                  className={`w-4 h-4 ${active ? 'text-[#1E3A5F]' : 'text-slate-400'}`}
+                  aria-hidden="true"
+                />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }
