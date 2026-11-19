@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { CheckCircle2, Lock, LogIn } from 'lucide-react';
 import CalendarView from './components/CalendarView';
 import ConfirmDialog from './components/ConfirmDialog';
+import CourseDetailPage from './components/CourseDetailPage';
 import CoursesView from './components/CoursesView';
 import DomainsView from './components/DomainsView';
 import Header, { ActiveTab } from './components/Header';
@@ -112,8 +113,49 @@ function formatArabicDateTime(): string {
   }
 }
 
+const VALID_TABS: ActiveTab[] = [
+  'overview',
+  'plan',
+  'domains',
+  'courses',
+  'paths',
+  'library',
+  'tasks',
+  'journal',
+  'calendar',
+];
+
+function parseAppRouteFromLocation(): {
+  tab: ActiveTab;
+  courseId: number | null;
+} {
+  if (typeof window === 'undefined') {
+    return { tab: 'overview', courseId: null };
+  }
+  const rawHash = window.location.hash.replace(/^#\/?/, '').trim();
+  const rawPath = window.location.pathname.replace(/^\/+/, '').trim();
+  const source = rawHash || rawPath;
+
+  const courseMatch = source.match(/^courses\/(\d+)\/?$/i);
+  if (courseMatch) {
+    const id = parseInt(courseMatch[1], 10);
+    if (!Number.isNaN(id) && id > 0) {
+      return { tab: 'courses', courseId: id };
+    }
+  }
+
+  const tabSegment = source.split('/')[0] as ActiveTab;
+  if (VALID_TABS.includes(tabSegment)) {
+    return { tab: tabSegment, courseId: null };
+  }
+
+  return { tab: 'overview', courseId: null };
+}
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
+  const [activeTab, setActiveTab] = useState<ActiveTab>(
+    () => parseAppRouteFromLocation().tab
+  );
   const [quarters, setQuarters] = useState<QuarterInfo[]>(INITIAL_QUARTERS);
   const [months, setMonths] = useState<MonthPlan[]>(INITIAL_MONTHS);
   const [domains, setDomains] = useState<DomainInfo[]>(DOMAINS);
@@ -133,7 +175,9 @@ export default function App() {
     DEFAULT_USER_PREFERENCES
   );
   const [activeBookNoteId, setActiveBookNoteId] = useState<string | null>(null);
-  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
+  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(
+    () => parseAppRouteFromLocation().courseId
+  );
   const [activeHubFilter, setActiveHubFilter] = useState<
     LearningHubId | 'all'
   >('all');
@@ -153,7 +197,46 @@ export default function App() {
 
   const canEdit = Boolean(user);
 
-  const resetToDefaultView = () => {
+  const navigateToTab = (tab: ActiveTab) => {
+    setActiveTab(tab);
+    setSelectedCourseId(null);
+    if (typeof window !== 'undefined') {
+      const targetHash = tab === 'overview' ? '' : `#/${tab}`;
+      if (window.location.hash !== targetHash) {
+        window.history.pushState(null, '', targetHash || '#/');
+      }
+    }
+  };
+
+  const navigateToCourseRoute = (courseId: number) => {
+    setActiveTab('courses');
+    setSelectedCourseId(courseId);
+    if (typeof window !== 'undefined') {
+      const targetHash = `#/courses/${courseId}`;
+      if (window.location.hash !== targetHash) {
+        window.history.pushState(null, '', targetHash);
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  useEffect(() => {
+    const handleRouteSync = () => {
+      const parsed = parseAppRouteFromLocation();
+      if (window.location.hash || parsed.courseId !== null) {
+        setActiveTab(parsed.tab);
+        setSelectedCourseId(parsed.courseId);
+      }
+    };
+    window.addEventListener('hashchange', handleRouteSync);
+    window.addEventListener('popstate', handleRouteSync);
+    return () => {
+      window.removeEventListener('hashchange', handleRouteSync);
+      window.removeEventListener('popstate', handleRouteSync);
+    };
+  }, []);
+
+  const resetToDefaultView = (preserveRoute = false) => {
     setQuarters(INITIAL_QUARTERS);
     setMonths(INITIAL_MONTHS);
     setDomains(DOMAINS);
@@ -169,7 +252,9 @@ export default function App() {
     setUnifiedTasks([]);
     setPreferences(DEFAULT_USER_PREFERENCES);
     setActiveBookNoteId(null);
-    setSelectedCourseId(null);
+    if (!preserveRoute) {
+      setSelectedCourseId(null);
+    }
     setActiveHubFilter('all');
     setActivePdfTarget(null);
     setDomainFilter('all');
@@ -190,7 +275,7 @@ export default function App() {
       }
 
       // Always reset in-memory state first so switching accounts or signing out never bleeds prior account data
-      resetToDefaultView();
+      resetToDefaultView(true);
 
       if (nextUser) {
         setSyncingCloud(true);
@@ -324,7 +409,7 @@ export default function App() {
   const handleJumpToMonth = (monthId: number) => {
     setSelectedMonthId(monthId);
     setDomainFilter('all');
-    setActiveTab('plan');
+    navigateToTab('plan');
   };
 
   const handleFilterByDomain = (domainId: DomainId) => {
@@ -337,7 +422,7 @@ export default function App() {
     if (firstMatch) {
       setSelectedMonthId(firstMatch.id);
     }
-    setActiveTab('plan');
+    navigateToTab('plan');
   };
 
   // --- Preferences CRUD ---
@@ -1052,7 +1137,8 @@ export default function App() {
     lectureTitle?: string;
     categoryLabel?: string;
     initialContent?: string;
-  }) => {
+    stayInCurrentView?: boolean;
+  }): string | void => {
     if (!user) {
       handleRequireAuth();
       return;
@@ -1074,7 +1160,9 @@ export default function App() {
     };
     setBookNotes((prev) => [newNote, ...prev]);
     setActiveBookNoteId(newNote.id);
-    setActiveTab('journal');
+    if (!payload.stayInCurrentView) {
+      navigateToTab('journal');
+    }
     void saveBookNoteDoc(user.uid, newNote);
 
     const typeDesc =
@@ -1091,6 +1179,7 @@ export default function App() {
       targetTab: 'journal',
       targetNoteId: newNote.id,
     });
+    return newNote.id;
   };
 
   const handleAddOrOpenBookNote = (
@@ -1103,7 +1192,7 @@ export default function App() {
     );
     if (existing) {
       setActiveBookNoteId(existing.id);
-      setActiveTab('journal');
+      navigateToTab('journal');
       return;
     }
 
@@ -1134,7 +1223,7 @@ export default function App() {
       : undefined;
     if (existing) {
       setActiveBookNoteId(existing.id);
-      setActiveTab('journal');
+      navigateToTab('journal');
       return;
     }
 
@@ -1160,7 +1249,7 @@ export default function App() {
 
   const handleOpenNoteById = (noteId: string) => {
     setActiveBookNoteId(noteId);
-    setActiveTab('journal');
+    navigateToTab('journal');
   };
 
   const handleUpdateBookNote = (id: string, updates: Partial<BookNote>) => {
@@ -1564,7 +1653,7 @@ export default function App() {
     <div className="min-h-screen flex flex-col bg-[#F7F8FA] text-slate-900">
       <Header
         activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        onSelectTab={navigateToTab}
         user={user}
         authReady={authReady}
         syncingCloud={syncingCloud}
@@ -1667,15 +1756,12 @@ export default function App() {
             history={history}
             reflections={reflections}
             onGoogleSignIn={handleGoogleSignIn}
-            onNavigateTab={setActiveTab}
+            onNavigateTab={navigateToTab}
             onSelectHub={(hub, targetTab) => {
               setActiveHubFilter(hub);
-              setActiveTab(targetTab);
+              navigateToTab(targetTab);
             }}
-            onSelectCourse={(courseId) => {
-              setSelectedCourseId(courseId);
-              setActiveTab('courses');
-            }}
+            onSelectCourse={(courseId) => navigateToCourseRoute(courseId)}
             onJumpToMonth={handleJumpToMonth}
             onFilterByDomain={handleFilterByDomain}
             onOpenNoteById={handleOpenNoteById}
@@ -1734,19 +1820,45 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'courses' && (
-          <CoursesView
+        {activeTab === 'courses' && selectedCourseId !== null && (
+          <CourseDetailPage
             uid={user?.uid}
             canEdit={canEdit}
             onRequireAuth={handleRequireAuth}
-            courses={courses}
-            selectedCourseId={selectedCourseId}
-            onSelectCourse={setSelectedCourseId}
-            activeHubFilter={activeHubFilter}
-            onChangeHubFilter={setActiveHubFilter}
+            course={courses.find((c) => c.id === selectedCourseId) ?? null}
+            requestedCourseId={selectedCourseId}
+            preferences={preferences}
+            onUpdatePreferences={handleUpdatePreferences}
             hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
+            courseNotes={(() => {
+              const target = courses.find((c) => c.id === selectedCourseId);
+              if (!target) return [];
+              return bookNotes.filter(
+                (bn) =>
+                  bn.courseId === target.id ||
+                  (bn.noteType === 'course_lecture' &&
+                    bn.courseTitle === target.title)
+              );
+            })()}
+            linkedProjects={projects.filter(
+              (p) => p.linkedCourseId === selectedCourseId
+            )}
+            linkedUnifiedTasks={(() => {
+              const target = courses.find((c) => c.id === selectedCourseId);
+              if (!target) return [];
+              return unifiedTasks.filter(
+                (t) =>
+                  t.linkedLabel &&
+                  t.linkedLabel.trim().toLowerCase() ===
+                    target.title.trim().toLowerCase()
+              );
+            })()}
+            linkedPaths={learningPaths.filter((p) =>
+              p.linkedCourseIds.includes(selectedCourseId)
+            )}
+            allMonths={months}
+            onBack={() => navigateToTab('courses')}
             onOpenPdf={setActivePdfTarget}
-            onAddCourse={handleAddCourse}
             onUpdateCourse={handleUpdateCourse}
             onDeleteCourse={handleDeleteCourse}
             onToggleCourseTask={handleToggleCourseTask}
@@ -1755,6 +1867,29 @@ export default function App() {
             onAddCourseResource={handleAddCourseResource}
             onDeleteCourseResource={handleDeleteCourseResource}
             onJumpToMonth={handleJumpToMonth}
+            onOpenPaths={() => navigateToTab('paths')}
+            onOpenTasksTab={() => navigateToTab('tasks')}
+            onOpenNoteById={handleOpenNoteById}
+            onAddStructuredNote={handleAddStructuredNote}
+            onUpdateBookNote={handleUpdateBookNote}
+            onDeleteBookNote={handleDeleteBookNote}
+            onUpdateUnifiedTask={handleUpdateUnifiedTask}
+            onAddUnifiedTask={handleAddUnifiedTask}
+          />
+        )}
+
+        {activeTab === 'courses' && selectedCourseId === null && (
+          <CoursesView
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            courses={courses}
+            bookNotes={bookNotes}
+            onSelectCourse={(courseId) => navigateToCourseRoute(courseId)}
+            activeHubFilter={activeHubFilter}
+            onChangeHubFilter={setActiveHubFilter}
+            hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
+            onAddCourse={handleAddCourse}
+            onDeleteCourse={handleDeleteCourse}
             onOpenCourseNote={handleOpenCourseNote}
           />
         )}
@@ -1771,10 +1906,7 @@ export default function App() {
             onAddPath={handleAddLearningPath}
             onUpdatePath={handleUpdateLearningPath}
             onDeletePath={handleDeleteLearningPath}
-            onOpenCourse={(courseId) => {
-              setSelectedCourseId(courseId);
-              setActiveTab('courses');
-            }}
+            onOpenCourse={(courseId) => navigateToCourseRoute(courseId)}
           />
         )}
 
@@ -1814,10 +1946,7 @@ export default function App() {
             onToggleMonthTask={handleToggleMonthTask}
             onToggleCourseTask={handleToggleCourseTask}
             onJumpToMonth={handleJumpToMonth}
-            onOpenCourse={(courseId) => {
-              setSelectedCourseId(courseId);
-              setActiveTab('courses');
-            }}
+            onOpenCourse={(courseId) => navigateToCourseRoute(courseId)}
           />
         )}
 

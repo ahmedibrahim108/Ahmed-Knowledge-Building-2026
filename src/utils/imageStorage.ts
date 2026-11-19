@@ -12,11 +12,18 @@ import {
 } from 'firebase/firestore';
 import {
   deleteObject,
+  getBlob,
   getDownloadURL,
   ref,
   uploadBytes,
 } from 'firebase/storage';
-import { auth, db, storage } from '../firebase';
+import {
+  OperationType,
+  auth,
+  db,
+  handleFirestoreError,
+  storage,
+} from '../firebase';
 
 export interface StoredImageRecord {
   id: string;
@@ -58,6 +65,11 @@ function openImagesDb(): Promise<IDBDatabase> {
 
 function sanitizeImageId(raw: string): string {
   return raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+}
+
+export function isImageFile(file: File): boolean {
+  if (file.type && file.type.startsWith('image/')) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif)$/i.test(file.name);
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -215,6 +227,67 @@ async function getLocalImagesForScope(
   }
 }
 
+async function getLocalImageById(
+  imageId: string
+): Promise<StoredImageRecord | null> {
+  try {
+    const idb = await openImagesDb();
+    const tx = idb.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).get(imageId);
+    const rec = await new Promise<StoredImageRecord | undefined>(
+      (resolve, reject) => {
+        req.onsuccess = () => resolve(req.result as StoredImageRecord | undefined);
+        req.onerror = () => reject(req.error);
+      }
+    );
+    return rec ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveImageFallbackUrl(
+  record: StoredImageRecord
+): Promise<{ url: string; isObjectUrl: boolean } | null> {
+  // 1. Check compressed/cached dataUrl embedded in Firestore document first
+  if (record.dataUrl && record.dataUrl.startsWith('data:')) {
+    return { url: record.dataUrl, isObjectUrl: false };
+  }
+
+  // 2. Check local IndexedDB blob cache
+  const localRec = await getLocalImageById(record.id);
+  if (localRec?.blob) {
+    return { url: URL.createObjectURL(localRec.blob), isObjectUrl: true };
+  }
+  if (localRec?.dataUrl && localRec.dataUrl.startsWith('data:')) {
+    return { url: localRec.dataUrl, isObjectUrl: false };
+  }
+
+  // 3. Fetch directly through authenticated Firebase Storage SDK (`storagePath`)
+  if (record.storagePath) {
+    try {
+      const storageRef = ref(storage, record.storagePath);
+      const blob = await getBlob(storageRef);
+      if (blob) {
+        await putLocalImageRecord({ ...record, blob });
+        return { url: URL.createObjectURL(blob), isObjectUrl: true };
+      }
+    } catch {
+      // Fallback to refreshing download URL
+      try {
+        const freshUrl = await getDownloadURL(ref(storage, record.storagePath));
+        if (freshUrl) {
+          return { url: freshUrl, isObjectUrl: false };
+        }
+      } catch (err) {
+        console.warn('Storage fallback download failed:', err);
+      }
+    }
+  }
+
+  return null;
+}
+
 async function uploadImageRecordToCloud(
   uid: string,
   record: StoredImageRecord,
@@ -232,22 +305,33 @@ async function uploadImageRecordToCloud(
     record.sizeKb = Math.max(1, Math.round(compressed.blob.size / 1024));
   }
 
-  // Try Firebase Storage in addition to Firestore DataURL so large originals stay backed up
+  // Upload to uid-scoped Firebase Storage path: users/{uid}/images/{scope}_{id}/{fileName}
+  // Fallback to users/{uid}/resources/{scope}_{id}/{fileName} if deployed Storage rules only allow /resources/
   if (blob) {
-    try {
-      const safeScope = record.scopeKey
-        .replace(/[^a-zA-Z0-9_-]/g, '_')
-        .slice(0, 64);
-      const path = `users/${uid}/resources/${safeScope}_${safeId}/${record.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80) || 'image.jpg'}`;
-      const storageRef = ref(storage, path);
-      await uploadBytes(storageRef, blob, {
-        contentType: record.mimeType || 'image/jpeg',
-      });
-      const url = await getDownloadURL(storageRef);
-      storagePath = path;
-      downloadUrl = url;
-    } catch {
-      // Storage may not be enabled or CORS restricted — Firestore dataUrl guarantees cross-device sync!
+    const safeScope = record.scopeKey
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 64);
+    const safeFileName =
+      record.name.replace(/[^a-zA-Z0-9._\-\u0600-\u06FF]/g, '_').slice(0, 80) ||
+      'image.jpg';
+    const candidatePaths = [
+      `users/${uid}/images/${safeScope}_${safeId}/${safeFileName}`,
+      `users/${uid}/resources/${safeScope}_${safeId}/${safeFileName}`,
+    ];
+
+    for (const candidatePath of candidatePaths) {
+      try {
+        const storageRef = ref(storage, candidatePath);
+        await uploadBytes(storageRef, blob, {
+          contentType: record.mimeType || 'image/jpeg',
+        });
+        const url = await getDownloadURL(storageRef);
+        storagePath = candidatePath;
+        downloadUrl = url;
+        break;
+      } catch (err) {
+        console.warn(`Firebase Storage upload attempt failed (${candidatePath}):`, err);
+      }
     }
   }
 
@@ -273,7 +357,12 @@ async function uploadImageRecordToCloud(
     payload.downloadUrl = downloadUrl.slice(0, 1200);
   }
 
-  await setDoc(doc(db, 'users', uid, 'images', safeId), payload);
+  const firestorePath = `users/${uid}/images/${safeId}`;
+  try {
+    await setDoc(doc(db, 'users', uid, 'images', safeId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, firestorePath);
+  }
 
   const syncedRecord: StoredImageRecord = {
     ...record,
@@ -292,7 +381,7 @@ export async function compressAndSaveImages(
   files: FileList | File[],
   uidOverride?: string
 ): Promise<StoredImageRecord[]> {
-  const fileArray = Array.from(files).filter((f) => f.type.startsWith('image/'));
+  const fileArray = Array.from(files).filter(isImageFile);
   if (fileArray.length === 0) return [];
 
   const uid = uidOverride || auth.currentUser?.uid;
@@ -318,13 +407,9 @@ export async function compressAndSaveImages(
     await putLocalImageRecord(record);
 
     if (uid) {
-      try {
-        const synced = await uploadImageRecordToCloud(uid, record, blob);
-        saved.push(synced);
-        continue;
-      } catch (err) {
-        console.warn('Firestore image sync failed, retained local copy:', err);
-      }
+      const synced = await uploadImageRecordToCloud(uid, record, blob);
+      saved.push(synced);
+      continue;
     }
     saved.push(record);
   }
@@ -391,7 +476,8 @@ export async function getImagesForScope(
 export function subscribeImagesForScope(
   scopeKey: string,
   uid: string | undefined,
-  onChange: (items: StoredImageRecord[]) => void
+  onChange: (items: StoredImageRecord[]) => void,
+  onError?: (err: Error) => void
 ): () => void {
   if (!uid) {
     void getLocalImagesForScope(scopeKey).then(onChange);
@@ -399,6 +485,7 @@ export function subscribeImagesForScope(
   }
 
   let migratedOnce = false;
+  const imagesPath = `users/${uid}/images`;
   const q = query(
     collection(db, 'users', uid, 'images'),
     where('ownerId', '==', uid),
@@ -453,7 +540,12 @@ export function subscribeImagesForScope(
         )
       );
     },
-    async () => {
+    async (err) => {
+      try {
+        handleFirestoreError(err, OperationType.LIST, imagesPath);
+      } catch (wrapped) {
+        onError?.(wrapped instanceof Error ? wrapped : new Error(String(err)));
+      }
       const localItems = await getLocalImagesForScope(scopeKey);
       onChange(localItems);
     }

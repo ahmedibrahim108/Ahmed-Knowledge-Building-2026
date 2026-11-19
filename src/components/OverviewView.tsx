@@ -304,7 +304,7 @@ export default function OverviewView({
       moodTag: refMood,
     });
     if (createdId) {
-      await moveImagesScope('draft-reflection', `reflection:${createdId}`);
+      await moveImagesScope('draft-reflection', `reflection:${createdId}`, user?.uid);
       setDraftImgRefresh((n) => n + 1);
     }
     setRefTitle('');
@@ -1295,6 +1295,7 @@ export default function OverviewView({
             />
 
             <ImageAttachmentGallery
+              uid={user?.uid}
               scopeKey="draft-reflection"
               title="إرفاق صورة أو أكثر مع الخاطرة"
               canEdit={canEdit}
@@ -1465,6 +1466,7 @@ export default function OverviewView({
                             {refItem.content}
                           </p>
                           <ImageAttachmentGallery
+                            uid={user?.uid}
                             scopeKey={`reflection:${refItem.id}`}
                             title="صور الخاطرة"
                             canEdit={canEdit}

@@ -148,6 +148,7 @@ function buildDraftFromNote(note: BookNote): NoteDraft {
 }
 
 export default function NotesJournalView({
+  uid,
   canEdit,
   onRequireAuth,
   preferences,
@@ -1164,6 +1165,7 @@ export default function NotesJournalView({
             )}
 
             <ImageAttachmentGallery
+              uid={uid}
               scopeKey={`note:${standaloneNote.id}`}
               title="الصور والمخططات المرفقة بهذه الملاحظة (متزامنة عبر حسابك)"
               canEdit={canEdit}

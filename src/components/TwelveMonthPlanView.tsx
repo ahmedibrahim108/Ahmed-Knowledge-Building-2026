@@ -1611,6 +1611,7 @@ export default function TwelveMonthPlanView({
               </div>
 
               <ImageAttachmentGallery
+                uid={uid}
                 scopeKey={`month:${activeMonth.id}`}
                 title="صور ومخططات الوحدة المرفقة (صورة أو أكثر)"
                 canEdit={canEdit}
