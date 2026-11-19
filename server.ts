@@ -252,15 +252,97 @@ async function startServer() {
   const httpServer = http.createServer(app);
 
   if (process.env.NODE_ENV !== 'production') {
+    const disableHmr =
+      process.env.DISABLE_HMR === 'true' ||
+      Boolean(process.env.K_SERVICE) ||
+      Boolean(process.env.APPLET_ID);
+    if (disableHmr) {
+      process.env.DISABLE_HMR = 'true';
+    }
+
     const { createServer: createViteServer } = await import('vite');
-    const disableHmr = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
         hmr: disableHmr ? false : { server: httpServer },
+        ws: disableHmr ? false : { server: httpServer },
+        watch: disableHmr ? null : undefined,
       },
       appType: 'spa',
     });
+
+    if (disableHmr) {
+      app.use((req, res, next) => {
+        if (!req.url.startsWith('/@vite/client')) {
+          next();
+          return;
+        }
+        delete req.headers['accept-encoding'];
+        const chunks: Buffer[] = [];
+        const origWrite = res.write.bind(res);
+        const origEnd = res.end.bind(res);
+
+        res.write = ((
+          chunk: unknown,
+          encoding?: BufferEncoding | ((error: Error | null | undefined) => void),
+          cb?: (error: Error | null | undefined) => void
+        ) => {
+          if (chunk) {
+            chunks.push(
+              Buffer.isBuffer(chunk)
+                ? chunk
+                : Buffer.from(
+                    String(chunk),
+                    typeof encoding === 'string' ? encoding : 'utf8'
+                  )
+            );
+          }
+          if (typeof encoding === 'function') {
+            encoding(null);
+          } else if (typeof cb === 'function') {
+            cb(null);
+          }
+          return true;
+        }) as typeof res.write;
+
+        res.end = ((
+          chunk?: unknown,
+          encoding?: BufferEncoding | (() => void),
+          cb?: () => void
+        ) => {
+          if (chunk && typeof chunk !== 'function') {
+            chunks.push(
+              Buffer.isBuffer(chunk)
+                ? chunk
+                : Buffer.from(
+                    String(chunk),
+                    typeof encoding === 'string' ? encoding : 'utf8'
+                  )
+            );
+          }
+          let body = Buffer.concat(chunks).toString('utf8');
+          body = body.replace(
+            /transport\.connect\(createHMRHandler\(handleMessage\)\);?/g,
+            '/* [vite] HMR WebSocket disabled in preview */'
+          );
+          const outBuf = Buffer.from(body, 'utf8');
+          res.removeHeader('Content-Length');
+          res.setHeader('Content-Length', outBuf.length);
+          res.write = origWrite;
+          res.end = origEnd;
+          if (typeof chunk === 'function') {
+            return origEnd(outBuf, chunk as () => void);
+          }
+          if (typeof encoding === 'function') {
+            return origEnd(outBuf, encoding as () => void);
+          }
+          return typeof cb === 'function' ? origEnd(outBuf, cb) : origEnd(outBuf);
+        }) as typeof res.end;
+
+        next();
+      });
+    }
+
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(__dirname, 'dist');
