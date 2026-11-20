@@ -144,6 +144,11 @@
         "bookAuthor": { "type": "string", "maxLength": 250 },
         "applicationMilestone": { "type": "string", "maxLength": 1000 },
         "completed": { "type": "boolean" },
+        "studyStage": {
+          "type": "string",
+          "enum": ["focus_now", "in_progress", "scheduled_later", "deferred", "heard_before", "completed"]
+        },
+        "scheduledPeriod": { "type": "string", "maxLength": 120 },
         "resources": { "type": "array" },
         "tasks": { "type": "array" },
         "readingModes": { "type": "array" },
@@ -170,6 +175,7 @@
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "hubId": { "type": "string", "enum": ["marketing", "dental_career", "knowledge"] },
         "noteType": { "type": "string", "enum": ["book", "course_lecture", "general"] },
+        "noteColor": { "type": "string", "enum": ["default", "navy", "emerald", "amber", "rose", "violet"] },
         "bookTitle": { "type": "string", "maxLength": 300 },
         "author": { "type": "string", "maxLength": 200 },
         "courseId": { "type": "integer" },
@@ -220,7 +226,7 @@
         "actionType": { "type": "string", "enum": ["note", "voice", "task", "course", "domain", "month"] },
         "title": { "type": "string", "maxLength": 200 },
         "detail": { "type": "string", "maxLength": 400 },
-        "targetTab": { "type": "string", "enum": ["overview", "plan", "domains", "courses", "journal", "calendar", "paths", "library", "tasks"] },
+        "targetTab": { "type": "string", "enum": ["overview", "focus", "plan", "domains", "courses", "journal", "calendar", "paths", "library", "tasks"] },
         "targetNoteId": { "type": "string", "maxLength": 128 },
         "targetMonthId": { "type": "integer" },
         "targetCourseId": { "type": "integer" },
@@ -447,6 +453,28 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "ownerId", "voiceName", "speed", "mimeType", "sizeBytes", "updatedAt"]
+    },
+    "DentalCaseItem": {
+      "title": "DentalCaseItem",
+      "description": "Clinical dental case record with cover photograph, procedure details, and cross-device storage.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 250 },
+        "specialty": { "type": "string", "maxLength": 150 },
+        "patientSummary": { "type": "string", "maxLength": 400 },
+        "procedureDetails": { "type": "string", "maxLength": 20000 },
+        "caseDate": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "enum": ["in_progress", "follow_up", "completed"] },
+        "coverImageUrl": { "type": "string", "maxLength": 1200 },
+        "coverStoragePath": { "type": "string", "maxLength": 400 },
+        "coverDataUrl": { "type": "string", "maxLength": 900000 },
+        "linkedCourseId": { "type": "integer" },
+        "updatedAtLabel": { "type": "string", "maxLength": 100 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "title", "specialty", "status", "updatedAt"]
     }
   },
   "firestore": {
@@ -521,6 +549,10 @@
     "/users/{userId}/audioCache/{cacheId}": {
       "schema": { "$ref": "#/entities/AudioCacheItem" },
       "description": "User's cloud-cached synthesized ReadAloud audio references across devices."
+    },
+    "/users/{userId}/dentalCases/{caseId}": {
+      "schema": { "$ref": "#/entities/DentalCaseItem" },
+      "description": "User's clinical dental cases and procedures with photo attachments."
     }
   }
 }

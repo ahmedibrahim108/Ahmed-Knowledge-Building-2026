@@ -6,20 +6,22 @@
 import { User, onAuthStateChanged } from 'firebase/auth';
 import { useEffect, useState } from 'react';
 import {
+  ArrowRight,
   CalendarDays,
   CheckCircle2,
-  CheckSquare,
   GraduationCap,
   LayoutDashboard,
   Lock,
   LogIn,
   NotebookPen,
+  Target,
 } from 'lucide-react';
 import CalendarView from './components/CalendarView';
 import ConfirmDialog from './components/ConfirmDialog';
 import CourseDetailPage from './components/CourseDetailPage';
 import CoursesView from './components/CoursesView';
 import DomainsView from './components/DomainsView';
+import FocusView from './components/FocusView';
 import Header, { ActiveTab } from './components/Header';
 import LibraryView from './components/LibraryView';
 import NotesJournalView from './components/NotesJournalView';
@@ -33,10 +35,12 @@ import TwelveMonthPlanView from './components/TwelveMonthPlanView';
 import {
   BookNote,
   CalendarEvent,
+  CourseStudyStage,
   CustomCategory,
   DEFAULT_HUB_CATEGORIES,
   DEFAULT_USER_PREFERENCES,
   DOMAINS,
+  DentalCase,
   DomainId,
   DomainInfo,
   INITIAL_BOOK_NOTES,
@@ -61,6 +65,7 @@ import {
   StudyResource,
   UnifiedTask,
   UserPreferences,
+  resolveCourseStudyStage,
 } from './data/curriculumData';
 import {
   auth,
@@ -73,6 +78,7 @@ import {
   deleteCalendarEventDoc,
   deleteCourseDoc,
   deleteCustomCategoryDoc,
+  deleteDentalCaseDoc,
   deleteDomainDoc,
   deleteHistoryEntryDoc,
   deleteLearningPathDoc,
@@ -88,6 +94,7 @@ import {
   saveCalendarEventDoc,
   saveCourseDoc,
   saveCustomCategoryDoc,
+  saveDentalCaseDoc,
   saveDomainDoc,
   saveHistoryEntryDoc,
   saveLearningPathDoc,
@@ -129,6 +136,7 @@ function formatArabicDateTime(): string {
 
 const VALID_TABS: ActiveTab[] = [
   'overview',
+  'focus',
   'plan',
   'domains',
   'courses',
@@ -139,12 +147,35 @@ const VALID_TABS: ActiveTab[] = [
   'calendar',
 ];
 
+const TAB_DISPLAY_LABELS: Record<ActiveTab, string> = {
+  overview: 'لوحة المتابعة',
+  focus: 'التركيز الحالي',
+  plan: 'خطة الـ 12 شهرًا',
+  domains: 'المحاور المعرفية',
+  courses: 'الكورسات',
+  paths: 'المسارات',
+  library: 'المكتبة',
+  tasks: 'المهام والمشاريع',
+  journal: 'دفتر التلخيص',
+  calendar: 'التقويم',
+};
+
+interface NavStepSnapshot {
+  tab: ActiveTab;
+  courseId: number | null;
+  noteId: string | null;
+  hubFilter: LearningHubId | 'all';
+  coursesSection: 'courses' | 'dental_cases';
+  label: string;
+}
+
 function parseAppRouteFromLocation(): {
   tab: ActiveTab;
   courseId: number | null;
+  noteId: string | null;
 } {
   if (typeof window === 'undefined') {
-    return { tab: 'overview', courseId: null };
+    return { tab: 'overview', courseId: null, noteId: null };
   }
   const rawHash = window.location.hash.replace(/^#\/?/, '').trim();
   const rawPath = window.location.pathname.replace(/^\/+/, '').trim();
@@ -154,22 +185,30 @@ function parseAppRouteFromLocation(): {
   if (courseMatch) {
     const id = parseInt(courseMatch[1], 10);
     if (!Number.isNaN(id) && id > 0) {
-      return { tab: 'courses', courseId: id };
+      return { tab: 'courses', courseId: id, noteId: null };
     }
+  }
+
+  const journalMatch = source.match(/^journal\/([^/]+)\/?$/i);
+  if (journalMatch) {
+    return {
+      tab: 'journal',
+      courseId: null,
+      noteId: decodeURIComponent(journalMatch[1]),
+    };
   }
 
   const tabSegment = source.split('/')[0] as ActiveTab;
   if (VALID_TABS.includes(tabSegment)) {
-    return { tab: tabSegment, courseId: null };
+    return { tab: tabSegment, courseId: null, noteId: null };
   }
 
-  return { tab: 'overview', courseId: null };
+  return { tab: 'overview', courseId: null, noteId: null };
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>(
-    () => parseAppRouteFromLocation().tab
-  );
+  const initialRoute = parseAppRouteFromLocation();
+  const [activeTab, setActiveTab] = useState<ActiveTab>(initialRoute.tab);
   const [quarters, setQuarters] = useState<QuarterInfo[]>(INITIAL_QUARTERS);
   const [months, setMonths] = useState<MonthPlan[]>(INITIAL_MONTHS);
   const [domains, setDomains] = useState<DomainInfo[]>(DOMAINS);
@@ -185,16 +224,23 @@ export default function App() {
   const [readingItems, setReadingItems] = useState<ReadingLibraryItem[]>([]);
   const [projects, setProjects] = useState<PracticalProject[]>([]);
   const [unifiedTasks, setUnifiedTasks] = useState<UnifiedTask[]>([]);
+  const [dentalCases, setDentalCases] = useState<DentalCase[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences>(
     DEFAULT_USER_PREFERENCES
   );
-  const [activeBookNoteId, setActiveBookNoteId] = useState<string | null>(null);
+  const [activeBookNoteId, setActiveBookNoteId] = useState<string | null>(
+    initialRoute.noteId
+  );
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(
-    () => parseAppRouteFromLocation().courseId
+    initialRoute.courseId
   );
   const [activeHubFilter, setActiveHubFilter] = useState<
     LearningHubId | 'all'
   >('all');
+  const [coursesSection, setCoursesSection] = useState<
+    'courses' | 'dental_cases'
+  >('courses');
+  const [backStack, setBackStack] = useState<NavStepSnapshot[]>([]);
   const [activePdfTarget, setActivePdfTarget] =
     useState<ActivePdfTarget | null>(null);
   const [confirmResetOpen, setConfirmResetOpen] = useState(false);
@@ -211,25 +257,129 @@ export default function App() {
 
   const canEdit = Boolean(user);
 
-  const navigateToTab = (tab: ActiveTab) => {
-    setActiveTab(tab);
-    setSelectedCourseId(null);
-    if (typeof window !== 'undefined') {
-      const targetHash = tab === 'overview' ? '' : `#/${tab}`;
-      if (window.location.hash !== targetHash) {
-        window.history.pushState(null, '', targetHash || '#/');
+  const buildCurrentSnapshot = (): NavStepSnapshot => {
+    let label = TAB_DISPLAY_LABELS[activeTab] || 'لوحة المتابعة';
+    if (activeTab === 'courses' && selectedCourseId !== null) {
+      const targetCourse = courses.find((c) => c.id === selectedCourseId);
+      label = targetCourse ? `كورس: ${targetCourse.title}` : `كورس #${selectedCourseId}`;
+    } else if (activeTab === 'courses' && coursesSection === 'dental_cases') {
+      label = 'حالات طب الأسنان';
+    } else if (activeTab === 'journal' && activeBookNoteId) {
+      const targetNote = bookNotes.find((bn) => bn.id === activeBookNoteId);
+      label = targetNote ? `تلخيص: ${targetNote.bookTitle}` : 'صفحة التلخيص';
+    }
+    return {
+      tab: activeTab,
+      courseId: selectedCourseId,
+      noteId: activeBookNoteId,
+      hubFilter: activeHubFilter,
+      coursesSection,
+      label,
+    };
+  };
+
+  const pushBackStep = () => {
+    const snap = buildCurrentSnapshot();
+    setBackStack((prev) => {
+      const last = prev[prev.length - 1];
+      if (
+        last &&
+        last.tab === snap.tab &&
+        last.courseId === snap.courseId &&
+        last.noteId === snap.noteId &&
+        last.coursesSection === snap.coursesSection
+      ) {
+        return prev;
       }
+      return [...prev, snap].slice(-15);
+    });
+  };
+
+  const syncLocationHash = (
+    tab: ActiveTab,
+    courseId: number | null,
+    noteId: string | null
+  ) => {
+    if (typeof window === 'undefined') return;
+    let targetHash = tab === 'overview' ? '#/' : `#/${tab}`;
+    if (tab === 'courses' && courseId !== null) {
+      targetHash = `#/courses/${courseId}`;
+    } else if (tab === 'journal' && noteId) {
+      targetHash = `#/journal/${encodeURIComponent(noteId)}`;
+    }
+    if (window.location.hash !== targetHash) {
+      window.history.pushState(null, '', targetHash);
     }
   };
 
-  const navigateToCourseRoute = (courseId: number) => {
-    setActiveTab('courses');
-    setSelectedCourseId(courseId);
-    if (typeof window !== 'undefined') {
-      const targetHash = `#/courses/${courseId}`;
-      if (window.location.hash !== targetHash) {
-        window.history.pushState(null, '', targetHash);
+  const handleStepBack = () => {
+    if (backStack.length === 0) {
+      if (selectedCourseId !== null) {
+        setSelectedCourseId(null);
+        syncLocationHash('courses', null, null);
+      } else {
+        setActiveTab('overview');
+        syncLocationHash('overview', null, null);
       }
+      return;
+    }
+    const prevStep = backStack[backStack.length - 1];
+    setBackStack((prev) => prev.slice(0, -1));
+    setActiveTab(prevStep.tab);
+    setSelectedCourseId(prevStep.courseId);
+    setActiveBookNoteId(prevStep.noteId);
+    setActiveHubFilter(prevStep.hubFilter);
+    setCoursesSection(prevStep.coursesSection);
+    syncLocationHash(prevStep.tab, prevStep.courseId, prevStep.noteId);
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const navigateToTab = (tab: ActiveTab, recordStep = true) => {
+    if (
+      recordStep &&
+      (activeTab !== tab ||
+        selectedCourseId !== null ||
+        (tab !== 'journal' && activeBookNoteId !== null))
+    ) {
+      pushBackStep();
+    }
+    setActiveTab(tab);
+    setSelectedCourseId(null);
+    if (tab !== 'journal') {
+      setActiveBookNoteId(null);
+    } else {
+      // Clicking Journal in main nav opens the notebooks overview unless preserved
+      setActiveBookNoteId(null);
+    }
+    if (tab !== 'courses') {
+      setCoursesSection('courses');
+    }
+    syncLocationHash(tab, null, null);
+  };
+
+  const navigateToCourseRoute = (courseId: number) => {
+    if (!(activeTab === 'courses' && selectedCourseId === courseId)) {
+      pushBackStep();
+    }
+    setActiveTab('courses');
+    setCoursesSection('courses');
+    setSelectedCourseId(courseId);
+    syncLocationHash('courses', courseId, null);
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const handleOpenDentalCases = () => {
+    pushBackStep();
+    setActiveHubFilter('dental_career');
+    setCoursesSection('dental_cases');
+    setSelectedCourseId(null);
+    setActiveTab('courses');
+    syncLocationHash('courses', null, null);
+    if (typeof window !== 'undefined') {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
@@ -237,9 +387,14 @@ export default function App() {
   useEffect(() => {
     const handleRouteSync = () => {
       const parsed = parseAppRouteFromLocation();
-      if (window.location.hash || parsed.courseId !== null) {
+      if (window.location.hash || parsed.courseId !== null || parsed.noteId !== null) {
         setActiveTab(parsed.tab);
         setSelectedCourseId(parsed.courseId);
+        if (parsed.noteId !== null) {
+          setActiveBookNoteId(parsed.noteId);
+        } else if (parsed.tab !== 'journal') {
+          setActiveBookNoteId(null);
+        }
       }
     };
     window.addEventListener('hashchange', handleRouteSync);
@@ -264,10 +419,13 @@ export default function App() {
     setReadingItems([]);
     setProjects([]);
     setUnifiedTasks([]);
+    setDentalCases([]);
     setPreferences(DEFAULT_USER_PREFERENCES);
-    setActiveBookNoteId(null);
     if (!preserveRoute) {
+      setActiveBookNoteId(null);
       setSelectedCourseId(null);
+      setBackStack([]);
+      setCoursesSection('courses');
     }
     setActiveHubFilter('all');
     setActivePdfTarget(null);
@@ -353,6 +511,9 @@ export default function App() {
             },
             onUnifiedTasks: (items) => {
               setUnifiedTasks(items);
+            },
+            onDentalCases: (items) => {
+              setDentalCases(items);
             },
           });
         } catch (err) {
@@ -918,6 +1079,8 @@ export default function App() {
     title: string;
     hubId: LearningHubId;
     category: string;
+    studyStage?: CourseStudyStage;
+    scheduledPeriod?: string;
     instructor?: string;
     platform?: string;
     durationLabel?: string;
@@ -934,24 +1097,27 @@ export default function App() {
       return;
     }
     const nextId = courses.reduce((max, c) => Math.max(max, c.id), 0) + 1;
+    const stage: CourseStudyStage = payload.studyStage ?? 'in_progress';
     const newCourse: PersonalCourse = {
       id: nextId,
       docId: `course-${nextId}-${Date.now()}`,
       title: payload.title,
       hubId: payload.hubId,
       category: payload.category,
+      studyStage: stage,
+      scheduledPeriod: payload.scheduledPeriod ?? '',
       instructor: payload.instructor ?? '',
       platform: payload.platform ?? '',
       durationLabel: payload.durationLabel ?? '',
       startDate: payload.startDate ?? '',
       targetDate: payload.targetDate ?? '',
       notes: payload.notes ?? '',
-      progressPct: 0,
+      progressPct: stage === 'completed' ? 100 : 0,
       linkedMonths: payload.linkedMonths,
       complementaryBook: payload.complementaryBook,
       bookAuthor: payload.bookAuthor,
       applicationMilestone: payload.applicationMilestone,
-      completed: false,
+      completed: stage === 'completed',
       resources: [],
       tasks: [],
     };
@@ -1210,8 +1376,11 @@ export default function App() {
       (bn) => bn.bookTitle.trim() === bookTitle.trim()
     );
     if (existing) {
+      pushBackStep();
       setActiveBookNoteId(existing.id);
-      navigateToTab('journal');
+      setSelectedCourseId(null);
+      setActiveTab('journal');
+      syncLocationHash('journal', null, existing.id);
       return;
     }
 
@@ -1220,6 +1389,7 @@ export default function App() {
       return;
     }
 
+    pushBackStep();
     handleAddStructuredNote({
       hubId: 'knowledge',
       noteType: 'book',
@@ -1241,8 +1411,11 @@ export default function App() {
         )
       : undefined;
     if (existing) {
+      pushBackStep();
       setActiveBookNoteId(existing.id);
-      navigateToTab('journal');
+      setSelectedCourseId(null);
+      setActiveTab('journal');
+      syncLocationHash('journal', null, existing.id);
       return;
     }
 
@@ -1251,6 +1424,7 @@ export default function App() {
       return;
     }
 
+    pushBackStep();
     handleAddStructuredNote({
       hubId: course.hubId || 'knowledge',
       noteType: 'course_lecture',
@@ -1267,8 +1441,14 @@ export default function App() {
   };
 
   const handleOpenNoteById = (noteId: string) => {
+    pushBackStep();
     setActiveBookNoteId(noteId);
-    navigateToTab('journal');
+    setSelectedCourseId(null);
+    setActiveTab('journal');
+    syncLocationHash('journal', null, noteId);
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   const handleUpdateBookNote = (id: string, updates: Partial<BookNote>) => {
@@ -1650,6 +1830,62 @@ export default function App() {
     void deleteUnifiedTaskDoc(user.uid, id);
   };
 
+  // --- Dental Cases CRUD ---
+  const handleAddDentalCase = (
+    payload: Omit<DentalCase, 'id'>
+  ): string | undefined => {
+    if (!user) {
+      handleRequireAuth();
+      return undefined;
+    }
+    const newId = `case-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const newCase: DentalCase = {
+      ...payload,
+      id: newId,
+      updatedAtLabel: formatArabicDate(),
+    };
+    setDentalCases((prev) => [newCase, ...prev]);
+    void saveDentalCaseDoc(user.uid, newCase);
+    recordHistory({
+      actionType: 'course',
+      title: `أضفت حالة أسنان: ${newCase.title}`,
+      detail: newCase.specialty || 'ملف حالات الدنتال',
+      targetTab: 'courses',
+    });
+    return newId;
+  };
+
+  const handleUpdateDentalCase = (
+    id: string,
+    updates: Partial<DentalCase>
+  ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setDentalCases((prev) =>
+      prev.map((dc) => {
+        if (dc.id !== id) return dc;
+        const next: DentalCase = {
+          ...dc,
+          ...updates,
+          updatedAtLabel: formatArabicDate(),
+        };
+        void saveDentalCaseDoc(user.uid, next);
+        return next;
+      })
+    );
+  };
+
+  const handleDeleteDentalCase = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setDentalCases((prev) => prev.filter((dc) => dc.id !== id));
+    void deleteDentalCaseDoc(user.uid, id);
+  };
+
   const handleResetPlan = () => {
     if (!user) {
       handleRequireAuth();
@@ -1678,6 +1914,10 @@ export default function App() {
         syncingCloud={syncingCloud}
         onGoogleSignIn={handleGoogleSignIn}
         onSignOut={handleSignOut}
+        focusCoursesCount={
+          courses.filter((c) => resolveCourseStudyStage(c) === 'focus_now')
+            .length
+        }
         monthsCount={months.length}
         domainsCount={domains.length}
         coursesCount={courses.length}
@@ -1754,6 +1994,28 @@ export default function App() {
       )}
 
       <main className="flex-1 max-w-[1280px] w-full mx-auto px-3 sm:px-8 py-5 sm:py-8 pb-24 lg:pb-10">
+        {backStack.length > 0 && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={handleStepBack}
+              className="inline-flex items-center gap-2 px-3.5 py-2 min-h-[38px] text-xs font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg shadow-2xs transition-colors cursor-pointer"
+            >
+              <ArrowRight className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>رجوع إلى: {backStack[backStack.length - 1].label}</span>
+            </button>
+            {backStack.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setBackStack([])}
+                className="text-[11px] text-slate-500 hover:text-slate-700 cursor-pointer"
+              >
+                مسح مسار الرجوع
+              </button>
+            )}
+          </div>
+        )}
+
         {activeTab === 'overview' && (
           <OverviewView
             user={user}
@@ -1771,6 +2033,7 @@ export default function App() {
             readingItems={readingItems}
             projects={projects}
             unifiedTasks={unifiedTasks}
+            dentalCases={dentalCases}
             customCategories={customCategories}
             history={history}
             reflections={reflections}
@@ -1784,12 +2047,28 @@ export default function App() {
             onJumpToMonth={handleJumpToMonth}
             onFilterByDomain={handleFilterByDomain}
             onOpenNoteById={handleOpenNoteById}
+            onOpenDentalCases={handleOpenDentalCases}
             onAddCustomCategory={handleAddCustomCategory}
             onDeleteCustomCategory={handleDeleteCustomCategory}
             onDeleteHistoryEntry={handleDeleteHistoryEntry}
             onAddReflection={handleAddReflection}
             onUpdateReflection={handleUpdateReflection}
             onDeleteReflection={handleDeleteReflection}
+          />
+        )}
+
+        {activeTab === 'focus' && (
+          <FocusView
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            courses={courses}
+            dentalCases={dentalCases}
+            unifiedTasks={unifiedTasks}
+            onSelectCourse={(courseId) => navigateToCourseRoute(courseId)}
+            onUpdateCourse={handleUpdateCourse}
+            onUpdateUnifiedTask={handleUpdateUnifiedTask}
+            onNavigateTab={navigateToTab}
+            onOpenDentalCases={handleOpenDentalCases}
           />
         )}
 
@@ -1876,7 +2155,7 @@ export default function App() {
               p.linkedCourseIds.includes(selectedCourseId)
             )}
             allMonths={months}
-            onBack={() => navigateToTab('courses')}
+            onBack={handleStepBack}
             onOpenPdf={setActivePdfTarget}
             onUpdateCourse={handleUpdateCourse}
             onDeleteCourse={handleDeleteCourse}
@@ -1899,17 +2178,25 @@ export default function App() {
 
         {activeTab === 'courses' && selectedCourseId === null && (
           <CoursesView
+            uid={user?.uid}
             canEdit={canEdit}
             onRequireAuth={handleRequireAuth}
             courses={courses}
             bookNotes={bookNotes}
+            dentalCases={dentalCases}
             onSelectCourse={(courseId) => navigateToCourseRoute(courseId)}
             activeHubFilter={activeHubFilter}
             onChangeHubFilter={setActiveHubFilter}
             hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
+            activeSection={coursesSection}
+            onChangeSection={setCoursesSection}
             onAddCourse={handleAddCourse}
+            onUpdateCourse={handleUpdateCourse}
             onDeleteCourse={handleDeleteCourse}
             onOpenCourseNote={handleOpenCourseNote}
+            onAddDentalCase={handleAddDentalCase}
+            onUpdateDentalCase={handleUpdateDentalCase}
+            onDeleteDentalCase={handleDeleteDentalCase}
           />
         )}
 
@@ -1981,7 +2268,15 @@ export default function App() {
             customCategories={customCategories}
             bookNotes={bookNotes}
             activeBookNoteId={activeBookNoteId}
-            onSelectBookNote={setActiveBookNoteId}
+            onSelectBookNote={(id) => {
+              if (id) {
+                pushBackStep();
+                syncLocationHash('journal', null, id);
+              } else {
+                syncLocationHash('journal', null, null);
+              }
+              setActiveBookNoteId(id);
+            }}
             activeHubFilter={activeHubFilter}
             onChangeHubFilter={setActiveHubFilter}
             hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
@@ -2082,9 +2377,9 @@ export default function App() {
           {(
             [
               { id: 'overview', label: 'الرئيسية', icon: LayoutDashboard },
+              { id: 'focus', label: 'التركيز', icon: Target },
               { id: 'courses', label: 'الكورسات', icon: GraduationCap },
               { id: 'journal', label: 'التلخيص', icon: NotebookPen },
-              { id: 'tasks', label: 'المهام', icon: CheckSquare },
               { id: 'calendar', label: 'التقويم', icon: CalendarDays },
             ] as const
           ).map((item) => {

@@ -31,7 +31,9 @@ import {
   LEARNING_HUBS,
   LearningHubId,
   MonthPlan,
+  NOTE_COLOR_THEMES,
   NoteCategoryType,
+  NoteColorKey,
   PersonalCourse,
   ReadAloudVoiceName,
   UserPreferences,
@@ -108,6 +110,7 @@ interface NoteDraft {
   bookTitle: string;
   hubId: LearningHubId;
   noteType: NoteCategoryType;
+  noteColor: NoteColorKey;
   categoryLabel: string;
   author: string;
   courseId: number;
@@ -136,6 +139,7 @@ function buildDraftFromNote(note: BookNote): NoteDraft {
     bookTitle: note.bookTitle,
     hubId: note.hubId ?? 'knowledge',
     noteType: note.noteType ?? 'book',
+    noteColor: note.noteColor ?? 'default',
     categoryLabel: note.categoryLabel ?? '',
     author: note.author ?? '',
     courseId: note.courseId ?? 0,
@@ -269,6 +273,9 @@ export default function NotesJournalView({
           setSelectedCourseNotebookId(null);
         }
       }
+    } else if (!activeBookNoteId && prevActiveIdRef.current) {
+      setStandaloneNoteOpen(false);
+      setIsEditingNote(false);
     }
     prevActiveIdRef.current = activeBookNoteId;
   }, [activeBookNoteId, bookNotes]);
@@ -443,6 +450,7 @@ export default function NotesJournalView({
     setIsEditingNote(false);
     setDraftNote(null);
     setSaveFeedback(null);
+    onSelectBookNote(null);
   };
 
   const handleOpenCourseNotebook = (course: PersonalCourse) => {
@@ -672,6 +680,7 @@ export default function NotesJournalView({
       bookTitle: cleanTitle,
       hubId: draftNote.hubId,
       noteType: draftNote.noteType,
+      noteColor: draftNote.noteColor,
       categoryLabel: draftNote.categoryLabel.trim(),
       author: draftNote.author.trim(),
       courseId: draftNote.courseId,
@@ -704,6 +713,11 @@ export default function NotesJournalView({
       isPdfAttachment(r.attachmentName, r.mimeType)
     );
     const activeDraft = draftNote ?? buildDraftFromNote(standaloneNote);
+    const activeColorKey: NoteColorKey = isEditingNote
+      ? activeDraft.noteColor
+      : standaloneNote.noteColor ?? 'default';
+    const activeColorTheme =
+      NOTE_COLOR_THEMES[activeColorKey] ?? NOTE_COLOR_THEMES.default;
 
     return (
       <div className="space-y-6">
@@ -791,9 +805,12 @@ export default function NotesJournalView({
         )}
 
         {/* Standalone Full-Width Note Studio */}
-        <article className="bg-white border border-slate-200 rounded-xl p-4 sm:p-8 space-y-5 sm:space-y-6">
+        <article
+          className={`border rounded-xl p-4 sm:p-8 space-y-5 sm:space-y-6 ${activeColorTheme.cardClass}`}
+        >
           {/* Header & Title */}
           <div className="pb-5 border-b border-slate-200 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span
                 className={`px-2 py-0.5 rounded-md border font-semibold ${activeHubMeta.badgeClass}`}
@@ -827,6 +844,35 @@ export default function NotesJournalView({
               <span className="text-slate-500">
                 آخر تحديث: {standaloneNote.updatedAt}
               </span>
+            </div>
+
+            {canEdit && (
+              <div className="flex items-center gap-1.5" role="group" aria-label="لون بطاقة الملاحظة">
+                <span className="text-[11px] text-slate-500 ml-1">لون النوت:</span>
+                {(Object.keys(NOTE_COLOR_THEMES) as NoteColorKey[]).map((ck) => {
+                  const theme = NOTE_COLOR_THEMES[ck];
+                  const selected = activeColorKey === ck;
+                  return (
+                    <button
+                      key={ck}
+                      type="button"
+                      title={theme.label}
+                      aria-label={`اختيار لون ${theme.label}`}
+                      onClick={() => {
+                        if (isEditingNote && draftNote) {
+                          setDraftNote({ ...draftNote, noteColor: ck });
+                        } else {
+                          onUpdateBookNote(standaloneNote.id, { noteColor: ck });
+                        }
+                      }}
+                      className={`w-5 h-5 rounded-full border-2 transition-transform cursor-pointer ${theme.swatchClass} ${
+                        selected ? 'scale-110 ring-2 ring-offset-1 ring-[#1E3A5F]' : 'opacity-80 hover:opacity-100'
+                      }`}
+                    />
+                  );
+                })}
+              </div>
+            )}
             </div>
 
             {isEditingNote ? (
@@ -1133,9 +1179,9 @@ export default function NotesJournalView({
             ) : (
               <div className="p-4 sm:p-6 bg-slate-50/70 border border-slate-200 rounded-xl min-h-[140px] overflow-x-auto">
                 {richHtmlToPlainText(standaloneNote.content) ? (
-                  <div
-                    dir="rtl"
-                    className="text-sm sm:text-base leading-relaxed text-slate-800 [&_ul]:list-disc [&_ul]:pr-6 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:pr-6 [&_ol]:my-2 [&_li]:my-1 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:border-r-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:pr-3 [&_blockquote]:my-2 [&_blockquote]:text-slate-700 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-right [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white"
+                <div
+                  dir="auto"
+                  className="text-sm sm:text-base leading-relaxed text-slate-800 [&_[dir='ltr']]:text-left [&_[dir='rtl']]:text-right [&_ul]:list-disc [&_ul]:pr-6 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:pr-6 [&_ol]:my-2 [&_li]:my-1 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:border-r-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:pr-3 [&_blockquote]:my-2 [&_blockquote]:text-slate-700 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-right [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white"
                     dangerouslySetInnerHTML={{
                       __html: sanitizeRichHtml(
                         ensureRichHtml(standaloneNote.content)
@@ -1214,8 +1260,8 @@ export default function NotesJournalView({
                 />
               ) : (
                 <div
-                  dir="rtl"
-                  className="p-4 bg-amber-50/40 border border-amber-200 rounded-xl text-sm text-slate-800 leading-relaxed [&_blockquote]:border-r-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:pr-3 [&_mark]:px-1 [&_mark]:rounded-xs [&_strong]:font-bold"
+                  dir="auto"
+                  className="p-4 bg-amber-50/40 border border-amber-200 rounded-xl text-sm text-slate-800 leading-relaxed [&_[dir='ltr']]:text-left [&_[dir='rtl']]:text-right [&_blockquote]:border-r-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:pr-3 [&_mark]:px-1 [&_mark]:rounded-xs [&_strong]:font-bold"
                   dangerouslySetInnerHTML={{
                     __html: sanitizeRichHtml(
                       ensureRichHtml(standaloneNote.quotes)
@@ -2273,11 +2319,14 @@ export default function NotesJournalView({
                       const isDue =
                         Boolean(bn.nextReviewDateKey) &&
                         (bn.nextReviewDateKey ?? '') <= today;
+                      const colorTheme = NOTE_COLOR_THEMES[bn.noteColor ?? 'default'] ?? NOTE_COLOR_THEMES.default;
                       return (
                         <article
                           key={bn.id}
-                          className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-4 hover:border-slate-300 transition-colors"
+                          className={`border rounded-xl overflow-hidden flex flex-col justify-between transition-colors ${colorTheme.cardClass}`}
                         >
+                          <div className={`h-1.5 w-full ${colorTheme.accentBarClass}`} />
+                          <div className="p-5 flex-1 flex flex-col justify-between gap-4">
                           <div className="space-y-2">
                             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
                               <span
@@ -2364,6 +2413,7 @@ export default function NotesJournalView({
                               </button>
                             </div>
                           </div>
+                          </div>
                         </article>
                       );
                     })}
@@ -2389,11 +2439,14 @@ export default function NotesJournalView({
                     {[...generalNotes, ...unlinkedLectureNotes].map((bn) => {
                       const snippet = richHtmlToPlainText(bn.content);
                       const hubMeta = getHubMeta(bn.hubId);
+                      const colorTheme = NOTE_COLOR_THEMES[bn.noteColor ?? 'default'] ?? NOTE_COLOR_THEMES.default;
                       return (
                         <article
                           key={bn.id}
-                          className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-4 hover:border-slate-300 transition-colors"
+                          className={`border rounded-xl overflow-hidden flex flex-col justify-between transition-colors ${colorTheme.cardClass}`}
                         >
+                          <div className={`h-1.5 w-full ${colorTheme.accentBarClass}`} />
+                          <div className="p-5 flex-1 flex flex-col justify-between gap-4">
                           <div className="space-y-2">
                             <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
                               <span
@@ -2443,6 +2496,7 @@ export default function NotesJournalView({
                                 </button>
                               </div>
                             )}
+                          </div>
                           </div>
                         </article>
                       );
@@ -2633,11 +2687,14 @@ export default function NotesJournalView({
                   const noteType = bn.noteType ?? 'book';
                   const hubMeta = getHubMeta(bn.hubId);
                   const snippet = richHtmlToPlainText(bn.content);
+                  const colorTheme = NOTE_COLOR_THEMES[bn.noteColor ?? 'default'] ?? NOTE_COLOR_THEMES.default;
                   return (
                     <article
                       key={bn.id}
-                      className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-3 hover:border-slate-300 transition-colors"
+                      className={`border rounded-xl overflow-hidden flex flex-col justify-between transition-colors ${colorTheme.cardClass}`}
                     >
+                      <div className={`h-1.5 w-full ${colorTheme.accentBarClass}`} />
+                      <div className="p-5 flex-1 flex flex-col justify-between gap-3">
                       <div className="space-y-2">
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -2716,6 +2773,7 @@ export default function NotesJournalView({
                             </button>
                           </div>
                         )}
+                      </div>
                       </div>
                     </article>
                   );

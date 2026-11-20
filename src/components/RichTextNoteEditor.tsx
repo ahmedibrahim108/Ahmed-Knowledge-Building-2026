@@ -6,6 +6,7 @@ import {
   Heading3,
   Highlighter,
   Italic,
+  Languages,
   List,
   ListOrdered,
   Lock,
@@ -80,6 +81,7 @@ export default function RichTextNoteEditor({
   const [tableRows, setTableRows] = useState(3);
   const [tableCols, setTableCols] = useState(3);
   const [insideTable, setInsideTable] = useState(false);
+  const [editorDir, setEditorDir] = useState<'auto' | 'rtl' | 'ltr'>('auto');
   const [activeFormats, setActiveFormats] = useState({
     bold: false,
     italic: false,
@@ -308,6 +310,53 @@ export default function RichTextNoteEditor({
       false,
       blockVal === 'blockquote' ? 'p' : 'blockquote'
     );
+    emitChange();
+  };
+
+  const applyBlockDirection = (targetDir: 'ltr' | 'rtl') => {
+    if (!guardEdit()) return;
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    let node: Node | null = sel.anchorNode;
+    const blockTags = new Set(['P', 'DIV', 'H3', 'H4', 'LI', 'BLOCKQUOTE']);
+    let targetBlock: HTMLElement | null = null;
+    while (node && node !== el) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const tag = (node as HTMLElement).tagName.toUpperCase();
+        if (blockTags.has(tag)) {
+          targetBlock = node as HTMLElement;
+          break;
+        }
+      }
+      node = node.parentNode;
+    }
+    if (targetBlock && targetBlock !== el) {
+      targetBlock.setAttribute('dir', targetDir);
+      emitChange();
+      return;
+    }
+    // Wrap current line or insert a clean directed paragraph
+    const p = document.createElement('p');
+    p.setAttribute('dir', targetDir);
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed) {
+      try {
+        const frag = range.extractContents();
+        p.appendChild(frag);
+        range.insertNode(p);
+        placeCaretInNode(p, false);
+        emitChange();
+        return;
+      } catch {
+        // fallback below
+      }
+    }
+    p.innerHTML = '<br>';
+    el.appendChild(p);
+    placeCaretInNode(p, true);
     emitChange();
   };
 
@@ -788,6 +837,60 @@ export default function RichTextNoteEditor({
               </div>
             )}
           </div>
+
+          <span aria-hidden="true" className="w-px h-4 bg-slate-300 mx-0.5 sm:mx-1" />
+
+          {/* Bilingual Arabic + English Direction Controls */}
+          <div className="inline-flex items-center gap-1 bg-white border border-slate-200 rounded-md p-0.5">
+            <span
+              title="اتجاه المحرر (يدعم العربية والإنجليزية معًا)"
+              className="inline-flex items-center px-1.5 text-slate-500"
+            >
+              <Languages className="w-3.5 h-3.5" aria-hidden="true" />
+            </span>
+            <button
+              type="button"
+              disabled={!canEdit}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setEditorDir((prev) =>
+                  prev === 'auto' ? 'rtl' : prev === 'rtl' ? 'ltr' : 'auto'
+                );
+              }}
+              title="تبديل اتجاه المحرر العام (تلقائي ثنائي اللغة / عربي RTL / إنجليزي LTR)"
+              className="px-2 py-1 min-h-[28px] text-[11px] font-semibold text-slate-700 hover:bg-slate-100 rounded cursor-pointer disabled:opacity-45"
+            >
+              {editorDir === 'auto'
+                ? 'تلقائي AR/EN'
+                : editorDir === 'rtl'
+                ? 'عربي RTL'
+                : 'EN LTR'}
+            </button>
+            <button
+              type="button"
+              disabled={!canEdit}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                applyBlockDirection('ltr');
+              }}
+              title="تحويل الفقرة الحالية للإنجليزية (يسار لليمين LTR)"
+              className="px-1.5 py-1 min-h-[28px] text-[10px] font-bold text-[#1E3A5F] bg-slate-50 hover:bg-[#1E3A5F] hover:text-white border border-slate-200 rounded cursor-pointer disabled:opacity-45"
+            >
+              EN ↳
+            </button>
+            <button
+              type="button"
+              disabled={!canEdit}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                applyBlockDirection('rtl');
+              }}
+              title="تحويل الفقرة الحالية للعربية (يمين لليسار RTL)"
+              className="px-1.5 py-1 min-h-[28px] text-[10px] font-bold text-slate-700 bg-slate-50 hover:bg-slate-200 border border-slate-200 rounded cursor-pointer disabled:opacity-45"
+            >
+              ع ↲
+            </button>
+          </div>
         </div>
 
         {/* Right Controls: Clear / Undo / Redo */}
@@ -930,10 +1033,10 @@ export default function RichTextNoteEditor({
           ref={editorRef}
           contentEditable={canEdit}
           suppressContentEditableWarning
-          dir="rtl"
+          dir={editorDir}
           role="textbox"
           aria-multiline="true"
-          aria-label="محرر الملاحظات المنسّق"
+          aria-label="محرر الملاحظات المنسّق ثنائي اللغة"
           style={{ caretColor: '#1E3A5F' }}
           onInput={() => emitChange(false)}
           onBlur={() => emitChange(true)}
@@ -941,7 +1044,9 @@ export default function RichTextNoteEditor({
           onMouseUp={syncFormatState}
           className={`w-full p-3.5 sm:p-4 ${minHeightClass} ${
             FONT_SIZE_CLASS[preferences.noteFontSize]
-          } text-slate-800 text-right break-words [overflow-wrap:anywhere] focus:outline-none rounded-b-xl touch-manipulation [&_ul]:list-disc [&_ul]:pr-6 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:pr-6 [&_ol]:my-2 [&_li]:my-1 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:border-r-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:pr-3 [&_blockquote]:my-2 [&_blockquote]:text-slate-700 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-right [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white/60 ${
+          } ${
+            editorDir === 'ltr' ? 'text-left' : editorDir === 'rtl' ? 'text-right' : 'text-start'
+          } text-slate-800 break-words [overflow-wrap:anywhere] focus:outline-none rounded-b-xl touch-manipulation [&_[dir="ltr"]]:text-left [&_[dir="rtl"]]:text-right [&_ul]:list-disc [&_ul]:ps-6 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:ps-6 [&_ol]:my-2 [&_li]:my-1 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:border-s-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:ps-3 [&_blockquote]:my-2 [&_blockquote]:text-slate-700 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-start [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white/60 ${
             !canEdit ? 'cursor-not-allowed opacity-85' : ''
           }`}
         />

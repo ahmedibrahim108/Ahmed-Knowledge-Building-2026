@@ -33,6 +33,7 @@ import {
   BookNote,
   CustomCategory,
   DEFAULT_HUB_CATEGORIES,
+  DentalCase,
   DomainId,
   DomainInfo,
   HERO_IMAGE_PATH,
@@ -53,6 +54,7 @@ import {
   WEEKLY_RHYTHM,
   getHubMeta,
   getTodayDateKey,
+  resolveCourseStudyStage,
 } from '../data/curriculumData';
 import { OWNER_ADMIN_EMAIL } from '../firebase';
 import { moveImagesScope } from '../utils/imageStorage';
@@ -78,6 +80,7 @@ interface OverviewViewProps {
   readingItems: ReadingLibraryItem[];
   projects: PracticalProject[];
   unifiedTasks: UnifiedTask[];
+  dentalCases?: DentalCase[];
   customCategories: CustomCategory[];
   history: StudyHistoryEntry[];
   reflections: PersonalReflection[];
@@ -88,6 +91,7 @@ interface OverviewViewProps {
   onJumpToMonth: (monthId: number) => void;
   onFilterByDomain: (domainId: DomainId) => void;
   onOpenNoteById: (noteId: string) => void;
+  onOpenDentalCases?: () => void;
   onAddCustomCategory: (
     title: string,
     description: string,
@@ -132,6 +136,7 @@ export default function OverviewView({
   readingItems,
   projects,
   unifiedTasks,
+  dentalCases = [],
   customCategories,
   history,
   reflections,
@@ -142,6 +147,7 @@ export default function OverviewView({
   onJumpToMonth,
   onFilterByDomain,
   onOpenNoteById,
+  onOpenDentalCases,
   onAddCustomCategory,
   onDeleteCustomCategory,
   onDeleteHistoryEntry,
@@ -472,10 +478,18 @@ export default function OverviewView({
             <div className="flex flex-wrap items-center gap-3 pt-2">
               <button
                 type="button"
-                onClick={() => onNavigateTab('plan')}
+                onClick={() => onNavigateTab('focus')}
                 className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
-                <span>استعراض خطة الدراسة</span>
+                <span>
+                  التركيز الحالي (
+                  {
+                    courses.filter(
+                      (c) => resolveCourseStudyStage(c) === 'focus_now'
+                    ).length
+                  }
+                  )
+                </span>
                 <ArrowLeft className="w-4 h-4" aria-hidden="true" />
               </button>
 
@@ -776,6 +790,16 @@ export default function OverviewView({
                     <ListTodo className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
                     <span>المهام والمشاريع</span>
                   </button>
+                  {hub.id === 'dental_career' && onOpenDentalCases && (
+                    <button
+                      type="button"
+                      onClick={onOpenDentalCases}
+                      className="col-span-2 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-900 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 rounded-lg cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-700" aria-hidden="true" />
+                      <span>ملف حالات طب الأسنان ({dentalCases.length})</span>
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -905,10 +929,10 @@ export default function OverviewView({
             </div>
             <button
               type="button"
-              onClick={() => onNavigateTab('plan')}
+              onClick={() => onNavigateTab('focus')}
               className="px-3.5 py-2 text-xs font-medium text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              تحديث من الخطة ←
+              فتح التركيز الحالي ←
             </button>
           </div>
         </div>
@@ -1012,7 +1036,7 @@ export default function OverviewView({
                         onClick={() => {
                           const target = qMonths[0];
                           if (target) onJumpToMonth(target.id);
-                          else onNavigateTab('plan');
+                          else onNavigateTab('focus');
                         }}
                         className="font-medium text-slate-800 hover:text-[#1E3A5F] truncate text-right cursor-pointer"
                       >

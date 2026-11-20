@@ -674,3 +674,48 @@ export async function moveImagesScope(
     }
   }
 }
+
+export async function uploadDentalCaseCover(
+  caseId: string,
+  file: File,
+  uidOverride?: string
+): Promise<{
+  coverImageUrl: string;
+  coverStoragePath: string;
+  coverDataUrl: string;
+}> {
+  const uid = uidOverride || auth.currentUser?.uid;
+  const compressed = await compressImageFileForCloud(file);
+  let coverStoragePath = '';
+  let coverImageUrl = '';
+
+  if (uid) {
+    const safeId = sanitizeImageId(caseId);
+    const safeName =
+      file.name.replace(/[^a-zA-Z0-9._\-\u0600-\u06FF]/g, '_').slice(0, 80) ||
+      'cover.jpg';
+    const candidatePaths = [
+      `users/${uid}/images/case_cover_${safeId}/${safeName}`,
+      `users/${uid}/resources/case_cover_${safeId}/${safeName}`,
+    ];
+    for (const candidatePath of candidatePaths) {
+      try {
+        const storageRef = ref(storage, candidatePath);
+        await uploadBytes(storageRef, compressed.blob, {
+          contentType: compressed.mimeType || 'image/jpeg',
+        });
+        coverImageUrl = await getDownloadURL(storageRef);
+        coverStoragePath = candidatePath;
+        break;
+      } catch (err) {
+        console.warn(`Dental case cover upload failed (${candidatePath}):`, err);
+      }
+    }
+  }
+
+  return {
+    coverImageUrl,
+    coverStoragePath,
+    coverDataUrl: compressed.dataUrl,
+  };
+}

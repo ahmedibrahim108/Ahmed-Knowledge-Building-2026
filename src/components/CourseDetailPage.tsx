@@ -28,6 +28,8 @@ import {
 } from 'lucide-react';
 import {
   BookNote,
+  COURSE_STUDY_STAGES_META,
+  CourseStudyStage,
   LEARNING_HUBS,
   LearningHubId,
   LearningPath,
@@ -38,7 +40,9 @@ import {
   StudyResource,
   UnifiedTask,
   UserPreferences,
+  getCourseStageMeta,
   getHubMeta,
+  resolveCourseStudyStage,
 } from '../data/curriculumData';
 import { auth } from '../firebase';
 import {
@@ -296,6 +300,8 @@ export default function CourseDetailPage({
       title: course.title,
       hubId: course.hubId ?? 'knowledge',
       category: course.category,
+      studyStage: resolveCourseStudyStage(course),
+      scheduledPeriod: course.scheduledPeriod ?? '',
       instructor: course.instructor ?? '',
       platform: course.platform ?? '',
       durationLabel: course.durationLabel ?? '',
@@ -314,9 +320,12 @@ export default function CourseDetailPage({
     e.preventDefault();
     if (!requireEdit()) return;
     if (!(draftEdit.title ?? '').trim()) return;
+    const nextStage = draftEdit.studyStage ?? resolveCourseStudyStage(course);
     onUpdateCourse(course.id, {
       ...draftEdit,
       title: (draftEdit.title ?? '').trim(),
+      studyStage: nextStage,
+      completed: nextStage === 'completed',
     });
     setIsEditingCourse(false);
   };
@@ -640,6 +649,44 @@ export default function CourseDetailPage({
               </label>
 
               <label className="block text-xs font-medium text-slate-700">
+                تصنيف الحالة والتركيز
+                <select
+                  value={draftEdit.studyStage ?? resolveCourseStudyStage(course)}
+                  onChange={(e) =>
+                    setDraftEdit((p) => ({
+                      ...p,
+                      studyStage: e.target.value as CourseStudyStage,
+                    }))
+                  }
+                  className="mt-1 w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                >
+                  {COURSE_STUDY_STAGES_META.map((st) => (
+                    <option key={st.id} value={st.id}>
+                      {st.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {draftEdit.studyStage === 'scheduled_later' && (
+                <label className="block text-xs font-medium text-slate-700">
+                  الفترة المجدولة خلال السنة
+                  <input
+                    type="text"
+                    value={draftEdit.scheduledPeriod ?? ''}
+                    onChange={(e) =>
+                      setDraftEdit((p) => ({
+                        ...p,
+                        scheduledPeriod: e.target.value,
+                      }))
+                    }
+                    placeholder="مثلاً: الربع الثالث 2026"
+                    className="mt-1 w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                  />
+                </label>
+              )}
+
+              <label className="block text-xs font-medium text-slate-700">
                 المحاضر / المدرب (اختياري)
                 <input
                   type="text"
@@ -855,12 +902,14 @@ export default function CourseDetailPage({
               <button
                 type="button"
                 disabled={!canEdit}
-                onClick={() =>
+                onClick={() => {
+                  const nextDone = !course.completed;
                   onUpdateCourse(course.id, {
-                    completed: !course.completed,
-                    progressPct: !course.completed ? 100 : coursePct,
-                  })
-                }
+                    completed: nextDone,
+                    studyStage: nextDone ? 'completed' : 'in_progress',
+                    progressPct: nextDone ? 100 : coursePct,
+                  });
+                }}
                 className={`inline-flex items-center gap-1.5 px-4 py-2 min-h-[40px] text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
                   course.completed
                     ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
@@ -881,6 +930,77 @@ export default function CourseDetailPage({
                 <span>{course.completed ? 'كورس مكتمل' : 'تحديد كمكتمل'}</span>
               </button>
             </div>
+
+            {/* Study Stage & Focus Triage Controls */}
+            {(() => {
+              const currentStage = resolveCourseStudyStage(course);
+              const currentMeta = getCourseStageMeta(currentStage);
+              return (
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="font-semibold text-slate-700">
+                        تصنيف وتركيز الكورس:
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 text-[11px] font-bold rounded border ${currentMeta.badgeClass}`}
+                      >
+                        {currentMeta.label}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-500">
+                      حدّد أولوية هذا الكورس لتظهر في «التركيز الحالي» دون تشتّت
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {COURSE_STUDY_STAGES_META.map((st) => {
+                      const active = currentStage === st.id;
+                      return (
+                        <button
+                          key={st.id}
+                          type="button"
+                          disabled={!canEdit}
+                          onClick={() =>
+                            onUpdateCourse(course.id, {
+                              studyStage: st.id,
+                              completed: st.id === 'completed',
+                            })
+                          }
+                          className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border transition-colors cursor-pointer disabled:opacity-50 ${
+                            active
+                              ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {st.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {currentStage === 'scheduled_later' && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <span className="text-xs font-medium text-slate-700">
+                        الفترة المجدولة:
+                      </span>
+                      <input
+                        type="text"
+                        readOnly={!canEdit}
+                        value={course.scheduledPeriod ?? ''}
+                        onChange={(e) =>
+                          onUpdateCourse(course.id, {
+                            scheduledPeriod: e.target.value,
+                          })
+                        }
+                        placeholder="مثلاً: الربع الثالث 2026 / شهر سبتمبر..."
+                        className="flex-1 min-w-[200px] px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* 4-Column Summary Strip + Progress Slider */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-100">
@@ -1761,14 +1881,22 @@ export default function CourseDetailPage({
                   const isSelected = activeNote?.id === bn.id;
                   const snippet = richHtmlToPlainText(bn.content).slice(0, 90);
                   return (
-                    <button
+                    <div
                       key={bn.id}
-                      type="button"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => {
                         setActiveNoteId(bn.id);
                         setIsEditingNote(false);
                       }}
-                      className={`w-full text-right p-3.5 rounded-xl border transition-colors cursor-pointer space-y-1 ${
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setActiveNoteId(bn.id);
+                          setIsEditingNote(false);
+                        }
+                      }}
+                      className={`w-full text-right p-3.5 rounded-xl border transition-colors cursor-pointer space-y-1.5 ${
                         isSelected
                           ? 'bg-[#1E3A5F]/5 border-[#1E3A5F]'
                           : 'bg-slate-50/70 border-slate-200 hover:bg-slate-100/70'
@@ -1790,7 +1918,23 @@ export default function CourseDetailPage({
                           {snippet}
                         </p>
                       )}
-                    </button>
+                      <div className="pt-1 flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-slate-400">
+                          {isSelected ? 'معروض بالجانب' : 'اضغط للمعاينة'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenNoteById(bn.id);
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-[#1E3A5F] bg-white border border-[#1E3A5F]/25 hover:bg-[#1E3A5F] hover:text-white rounded-md transition-colors cursor-pointer shrink-0"
+                        >
+                          <span>فتح صفحة التلخيص</span>
+                          <ExternalLink className="w-2.5 h-2.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                    </div>
                   );
                 })}
               </div>
@@ -1825,11 +1969,11 @@ export default function CourseDetailPage({
                     <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                       <ReadAloudButton
                         uid={uid}
-                        text={`${activeNote.bookTitle}. ${richHtmlToPlainText(
-                          activeNote.content
-                        )}`}
+                        text={richHtmlToPlainText(activeNote.content)}
                         voiceName={preferences.readAloudVoice}
                         speed={preferences.readAloudSpeed}
+                        cacheOnlyMode={true}
+                        onJumpToCreateAudio={() => onOpenNoteById(activeNote.id)}
                         disabled={!canEdit}
                         onRequireAuth={onRequireAuth}
                       />
@@ -1839,7 +1983,7 @@ export default function CourseDetailPage({
                         onClick={() => onOpenNoteById(activeNote.id)}
                         className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer"
                       >
-                        <span>عرض في التلخيص الكامل</span>
+                        <span>فتح صفحة التلخيص ↗</span>
                       </button>
 
                       {canEdit && !isEditingNote && (
@@ -1978,8 +2122,8 @@ export default function CourseDetailPage({
                       {richHtmlToPlainText(activeNote.content) ? (
                         <div className="p-4 bg-white border border-slate-200 rounded-xl overflow-x-auto">
                           <div
-                            dir="rtl"
-                            className="text-sm text-slate-800 leading-relaxed [&_ul]:list-disc [&_ul]:pr-6 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:pr-6 [&_ol]:my-2 [&_li]:my-1 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:border-r-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:pr-3 [&_blockquote]:my-2 [&_blockquote]:text-slate-700 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-right [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white"
+                            dir="auto"
+                            className="text-sm text-slate-800 leading-relaxed [&_[dir='ltr']]:text-left [&_[dir='rtl']]:text-right [&_ul]:list-disc [&_ul]:pr-6 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:pr-6 [&_ol]:my-2 [&_li]:my-1 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:border-r-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:pr-3 [&_blockquote]:my-2 [&_blockquote]:text-slate-700 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-right [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white"
                             dangerouslySetInnerHTML={{
                               __html: sanitizeRichHtml(
                                 ensureRichHtml(activeNote.content)

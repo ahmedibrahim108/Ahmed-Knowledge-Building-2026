@@ -18,15 +18,19 @@ import {
   CalendarCategory,
   CalendarColor,
   CalendarEvent,
+  CourseStudyStage,
   CustomCategory,
   DEFAULT_HUB_CATEGORIES,
   DEFAULT_USER_PREFERENCES,
+  DentalCase,
+  DentalCaseStatus,
   DomainInfo,
   LearningHubId,
   LearningPath,
   LearningPathStage,
   LearningPathStatus,
   MonthPlan,
+  NoteColorKey,
   PersonalCourse,
   PersonalReflection,
   PracticalProject,
@@ -58,6 +62,38 @@ export function sanitizeId(raw: string): string {
 
 const VALID_HUB_IDS: LearningHubId[] = ['marketing', 'dental_career', 'knowledge'];
 const VALID_READING_MODES: ReadingMode[] = READING_MODES_META.map((m) => m.id);
+const VALID_STUDY_STAGES: CourseStudyStage[] = [
+  'focus_now',
+  'in_progress',
+  'scheduled_later',
+  'deferred',
+  'heard_before',
+  'completed',
+];
+const VALID_NOTE_COLORS: NoteColorKey[] = [
+  'default',
+  'navy',
+  'emerald',
+  'amber',
+  'rose',
+  'violet',
+];
+
+function sanitizeCourseStudyStage(
+  raw: unknown,
+  completed?: boolean
+): CourseStudyStage {
+  if (VALID_STUDY_STAGES.includes(raw as CourseStudyStage)) {
+    return raw as CourseStudyStage;
+  }
+  return completed ? 'completed' : 'in_progress';
+}
+
+function sanitizeNoteColor(raw: unknown): NoteColorKey {
+  return VALID_NOTE_COLORS.includes(raw as NoteColorKey)
+    ? (raw as NoteColorKey)
+    : 'default';
+}
 
 function sanitizeHubId(raw: unknown): LearningHubId {
   if (raw === 'marketing' || raw === 'dental_career' || raw === 'knowledge') {
@@ -208,6 +244,8 @@ function buildCoursePayload(uid: string, c: PersonalCourse) {
     bookAuthor: clip(c.bookAuthor || '', 250),
     applicationMilestone: clip(c.applicationMilestone || '', 1000),
     completed: Boolean(c.completed),
+    studyStage: sanitizeCourseStudyStage(c.studyStage, Boolean(c.completed)),
+    scheduledPeriod: clip(c.scheduledPeriod, 120),
     resources: sanitizeResourceList(c.resources || []),
     tasks: (c.tasks || []).slice(0, 50),
     readingModes: sanitizeReadingModes(c.readingModes),
@@ -232,6 +270,7 @@ function buildBookNotePayload(uid: string, bn: BookNote) {
     ownerId: uid,
     hubId: sanitizeHubId(bn.hubId),
     noteType,
+    noteColor: sanitizeNoteColor(bn.noteColor),
     bookTitle: clip(bn.bookTitle || 'ملاحظة بدون عنوان', 300),
     author: clip(bn.author || '', 200),
     courseId: Math.max(0, Math.min(1000, Math.round(bn.courseId ?? 0))),
@@ -279,6 +318,7 @@ function buildHistoryPayload(uid: string, entry: StudyHistoryEntry) {
   const id = sanitizeId(entry.id);
   const allowedTabs: StudyHistoryEntry['targetTab'][] = [
     'overview',
+    'focus',
     'plan',
     'domains',
     'courses',
@@ -570,6 +610,33 @@ function buildUnifiedTaskPayload(uid: string, t: UnifiedTask) {
   };
 }
 
+function buildDentalCasePayload(uid: string, dc: DentalCase) {
+  const id = sanitizeId(dc.id);
+  const status: DentalCaseStatus =
+    dc.status === 'follow_up' || dc.status === 'completed'
+      ? dc.status
+      : 'in_progress';
+  return {
+    id,
+    ownerId: uid,
+    title: clip(dc.title || 'حالة إكلينيكية', 250),
+    specialty: clip(dc.specialty || 'علاج الجذور / تحفظي', 150),
+    patientSummary: clip(dc.patientSummary, 400),
+    procedureDetails: clip(dc.procedureDetails, 20000),
+    caseDate: clip(dc.caseDate, 20),
+    status,
+    coverImageUrl: clip(dc.coverImageUrl, 1200),
+    coverStoragePath: clip(dc.coverStoragePath, 400),
+    coverDataUrl: clip(dc.coverDataUrl, 895000),
+    linkedCourseId: Math.max(
+      0,
+      Math.min(1000, Math.round(dc.linkedCourseId ?? 0))
+    ),
+    updatedAtLabel: clip(dc.updatedAtLabel, 100),
+    updatedAt: serverTimestamp(),
+  };
+}
+
 export async function ensureUserDocumentAndSeed(
   user: User,
   seedData: {
@@ -703,6 +770,7 @@ export function subscribeUserWorkspace(
     onReadingItems?: (items: ReadingLibraryItem[]) => void;
     onProjects?: (items: PracticalProject[]) => void;
     onUnifiedTasks?: (items: UnifiedTask[]) => void;
+    onDentalCases?: (items: DentalCase[]) => void;
   }
 ): () => void {
   const unsubQuarters = onSnapshot(
@@ -778,6 +846,8 @@ export function subscribeUserWorkspace(
                 ? 100
                 : 0,
             notes: raw.notes ?? '',
+            studyStage: sanitizeCourseStudyStage(raw.studyStage, raw.completed),
+            scheduledPeriod: raw.scheduledPeriod ?? '',
             readingModes: sanitizeReadingModes(raw.readingModes),
             learningMethods: sanitizeLearningMethods(raw.learningMethods),
             reviewCount: Number(raw.reviewCount ?? 0),
@@ -807,6 +877,7 @@ export function subscribeUserWorkspace(
           id: String(raw.id ?? d.id),
           hubId: sanitizeHubId(raw.hubId),
           noteType,
+          noteColor: sanitizeNoteColor(raw.noteColor),
           bookTitle: String(raw.bookTitle ?? ''),
           author: String(raw.author ?? ''),
           courseId: Number(raw.courseId ?? 0),
@@ -1137,6 +1208,46 @@ export function subscribeUserWorkspace(
       handleFirestoreError(err, OperationType.LIST, `users/${uid}/unifiedTasks`)
   );
 
+  const unsubDentalCases = onSnapshot(
+    query(collection(db, 'users', uid, 'dentalCases'), where('ownerId', '==', uid)),
+    (snap) => {
+      if (!callbacks.onDentalCases) return;
+      const list = snap.docs
+        .map((d) => {
+          const raw = d.data() as Record<string, unknown>;
+          const status: DentalCaseStatus =
+            raw.status === 'follow_up' || raw.status === 'completed'
+              ? raw.status
+              : 'in_progress';
+          return {
+            id: String(raw.id ?? d.id),
+            title: String(raw.title ?? ''),
+            specialty: String(raw.specialty ?? ''),
+            patientSummary: String(raw.patientSummary ?? ''),
+            procedureDetails: String(raw.procedureDetails ?? ''),
+            caseDate: String(raw.caseDate ?? ''),
+            status,
+            coverImageUrl: raw.coverImageUrl ? String(raw.coverImageUrl) : undefined,
+            coverStoragePath: raw.coverStoragePath
+              ? String(raw.coverStoragePath)
+              : undefined,
+            coverDataUrl: raw.coverDataUrl ? String(raw.coverDataUrl) : undefined,
+            linkedCourseId:
+              typeof raw.linkedCourseId === 'number' && raw.linkedCourseId > 0
+                ? raw.linkedCourseId
+                : undefined,
+            updatedAtLabel: raw.updatedAtLabel
+              ? String(raw.updatedAtLabel)
+              : undefined,
+          } satisfies DentalCase;
+        })
+        .sort((a, b) => (b.caseDate || '').localeCompare(a.caseDate || ''));
+      callbacks.onDentalCases(list);
+    },
+    (err) =>
+      handleFirestoreError(err, OperationType.LIST, `users/${uid}/dentalCases`)
+  );
+
   return () => {
     unsubQuarters();
     unsubMonths();
@@ -1152,6 +1263,7 @@ export function subscribeUserWorkspace(
     unsubReading();
     unsubProjects();
     unsubUnifiedTasks();
+    unsubDentalCases();
   };
 }
 
@@ -1475,6 +1587,32 @@ export async function deleteUnifiedTaskDoc(
   const path = `users/${uid}/unifiedTasks/${id}`;
   try {
     await deleteDoc(doc(db, 'users', uid, 'unifiedTasks', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function saveDentalCaseDoc(
+  uid: string,
+  dentalCase: DentalCase
+): Promise<void> {
+  const p = buildDentalCasePayload(uid, dentalCase);
+  const path = `users/${uid}/dentalCases/${p.id}`;
+  try {
+    await setDoc(doc(db, 'users', uid, 'dentalCases', p.id), p);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteDentalCaseDoc(
+  uid: string,
+  caseId: string
+): Promise<void> {
+  const id = sanitizeId(caseId);
+  const path = `users/${uid}/dentalCases/${id}`;
+  try {
+    await deleteDoc(doc(db, 'users', uid, 'dentalCases', id));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }

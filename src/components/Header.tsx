@@ -12,6 +12,7 @@ import BrandMark from './BrandMark';
 
 export type ActiveTab =
   | 'overview'
+  | 'focus'
   | 'plan'
   | 'domains'
   | 'courses'
@@ -29,7 +30,8 @@ interface HeaderProps {
   syncingCloud: boolean;
   onGoogleSignIn: () => void;
   onSignOut: () => void;
-  monthsCount: number;
+  focusCoursesCount?: number;
+  monthsCount?: number;
   domainsCount: number;
   coursesCount: number;
   pathsCount?: number;
@@ -46,7 +48,7 @@ export default function Header({
   syncingCloud,
   onGoogleSignIn,
   onSignOut,
-  monthsCount,
+  focusCoursesCount = 0,
   domainsCount,
   coursesCount,
   pathsCount = 0,
@@ -56,12 +58,12 @@ export default function Header({
 }: HeaderProps) {
   const navItems: Array<{ id: ActiveTab; label: string }> = [
     { id: 'overview', label: 'لوحة المتابعة' },
+    { id: 'focus', label: `التركيز الحالي (${focusCoursesCount})` },
     { id: 'courses', label: `الكورسات (${coursesCount})` },
     { id: 'paths', label: `المسارات (${pathsCount})` },
     { id: 'library', label: `المكتبة (${libraryCount})` },
     { id: 'tasks', label: `المهام والمشاريع (${tasksCount})` },
     { id: 'journal', label: `التلخيص (${notesCount})` },
-    { id: 'plan', label: `الخطة (${monthsCount})` },
     { id: 'domains', label: `المحاور (${domainsCount})` },
     { id: 'calendar', label: 'التقويم' },
   ];
@@ -190,6 +192,17 @@ export default function Header({
                     >
                       <LayoutDashboard className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
                       <span>لوحة المتابعة والمحاور الثلاثة</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onSelectTab('focus');
+                        setMenuOpen(false);
+                      }}
+                      className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                    >
+                      <LayoutDashboard className="w-3.5 h-3.5 text-emerald-700" aria-hidden="true" />
+                      <span>التركيز الحالي ({focusCoursesCount})</span>
                     </button>
                     <button
                       type="button"

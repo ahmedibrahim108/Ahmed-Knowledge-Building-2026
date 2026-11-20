@@ -23,8 +23,13 @@ interface ReadAloudButtonProps {
   speed: 'normal' | 'calm';
   uid?: string | null;
   disabled?: boolean;
+  cacheOnlyMode?: boolean;
+  onJumpToCreateAudio?: () => void;
   onRequireAuth?: () => void;
 }
+
+const PLAYBACK_RATES = [1, 1.25, 1.5, 2] as const;
+type PlaybackRateValue = (typeof PLAYBACK_RATES)[number];
 
 type PlayerStatus = 'idle' | 'ready' | 'loading' | 'playing' | 'paused';
 
@@ -42,6 +47,8 @@ export default function ReadAloudButton({
   speed,
   uid,
   disabled = false,
+  cacheOnlyMode = false,
+  onJumpToCreateAudio,
   onRequireAuth,
 }: ReadAloudButtonProps) {
   const effectiveUid = uid ?? auth.currentUser?.uid ?? null;
@@ -52,6 +59,7 @@ export default function ReadAloudButton({
   const [cacheSource, setCacheSource] = useState<'local' | 'cloud' | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState<PlaybackRateValue>(1);
   const [usingSpeechFallback, setUsingSpeechFallback] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -126,10 +134,12 @@ export default function ReadAloudButton({
     objectUrlRef.current = url;
 
     const audio = new Audio(url);
+    audio.playbackRate = playbackRate;
     audioRef.current = audio;
     setUsingSpeechFallback(false);
 
     audio.onloadedmetadata = () => {
+      audio.playbackRate = playbackRate;
       if (Number.isFinite(audio.duration)) {
         setDuration(audio.duration);
       }
@@ -162,6 +172,21 @@ export default function ReadAloudButton({
     setStatus('playing');
   };
 
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.playbackRate = playbackRate;
+    }
+  }, [playbackRate]);
+
+  const handleCyclePlaybackRate = () => {
+    const idx = PLAYBACK_RATES.indexOf(playbackRate);
+    const next = PLAYBACK_RATES[(idx + 1) % PLAYBACK_RATES.length];
+    setPlaybackRate(next);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = next;
+    }
+  };
+
   const playBrowserSpeechFallback = (textToSpeak: string): boolean => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       return false;
@@ -170,7 +195,7 @@ export default function ReadAloudButton({
       cleanupAudioElement();
       const utterance = new SpeechSynthesisUtterance(textToSpeak);
       utterance.lang = 'ar-EG';
-      utterance.rate = speed === 'calm' ? 0.85 : 1.0;
+      utterance.rate = (speed === 'calm' ? 0.85 : 1.0) * playbackRate;
       utterance.onend = () => {
         setUsingSpeechFallback(false);
         setStatus(hasCachedAudio ? 'ready' : 'idle');
@@ -232,7 +257,13 @@ export default function ReadAloudButton({
       }
     }
 
-    // 2. Call /api/tts ONLY if not cached yet (or explicitly refreshing)
+    // 2. If cacheOnlyMode (e.g. inside CourseDetailPage), never trigger API generation
+    if (cacheOnlyMode) {
+      setErrorMsg('لم يتم إنشاء صوت لهذا التلخيص بعد — يمكنك إنشاؤه من صفحة التلخيص.');
+      return;
+    }
+
+    // 3. Call /api/tts ONLY if not cached yet (or explicitly refreshing)
     setStatus('loading');
     try {
       const res = await fetch('/api/tts', {
@@ -351,36 +382,61 @@ export default function ReadAloudButton({
   return (
     <div className="inline-flex flex-col items-stretch sm:items-end gap-1.5 max-w-full">
       <div className="flex flex-wrap items-center gap-1.5">
-        {/* Primary Create / Replay Saved button */}
-        {(status === 'idle' || status === 'ready') && (
+        {/* Primary Create / Replay Saved button OR Cache-Only Jump Button */}
+        {(status === 'idle' || status === 'ready') &&
+          (cacheOnlyMode && !hasCachedAudio ? (
+            onJumpToCreateAudio ? (
+              <button
+                type="button"
+                onClick={onJumpToCreateAudio}
+                title="افتح صفحة التلخيص لإنشاء الصوت مرة واحدة ثم اسمعه هنا تلقائيًا"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Volume2 className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>أنشئ الصوت من صفحة التلخيص</span>
+              </button>
+            ) : null
+          ) : (
+            <button
+              type="button"
+              onClick={() => void generateOrLoadAndPlay(false, false)}
+              disabled={disabled}
+              title={
+                disabled
+                  ? 'سجّل الدخول لتفعيل الاستماع الصوتي'
+                  : hasCachedAudio
+                  ? 'تكرار الاستماع من النسخة المحفوظة في قاعدة البيانات بدون استهلاك جديد'
+                  : 'إنشاء وتشغيل القراءة الصوتية وحفظها للتكرار لاحقًا'
+              }
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                hasCachedAudio
+                  ? 'text-white bg-emerald-700 hover:bg-emerald-800'
+                  : 'text-slate-700 bg-slate-100 hover:bg-slate-200'
+              }`}
+            >
+              {hasCachedAudio ? (
+                <>
+                  <Play className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
+                  <span>تكرار الاستماع (محفوظ)</span>
+                </>
+              ) : (
+                <>
+                  <Volume2 className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                  <span>إنشاء وتشغيل الصوت</span>
+                </>
+              )}
+            </button>
+          ))}
+
+        {/* Quick Playback Speed Pill when cached audio is ready */}
+        {hasCachedAudio && (status === 'idle' || status === 'ready') && (
           <button
             type="button"
-            onClick={() => void generateOrLoadAndPlay(false, false)}
-            disabled={disabled}
-            title={
-              disabled
-                ? 'سجّل الدخول لتفعيل الاستماع الصوتي'
-                : hasCachedAudio
-                ? 'تكرار الاستماع من النسخة المحفوظة في قاعدة البيانات بدون استهلاك جديد'
-                : 'إنشاء وتشغيل القراءة الصوتية وحفظها للتكرار لاحقًا'
-            }
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-              hasCachedAudio
-                ? 'text-white bg-emerald-700 hover:bg-emerald-800'
-                : 'text-slate-700 bg-slate-100 hover:bg-slate-200'
-            }`}
+            onClick={handleCyclePlaybackRate}
+            title="سرعة التشغيل"
+            className="px-2.5 py-1.5 min-h-[36px] text-xs font-bold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg tabular-nums cursor-pointer"
           >
-            {hasCachedAudio ? (
-              <>
-                <Play className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
-                <span>تكرار الاستماع (محفوظ)</span>
-              </>
-            ) : (
-              <>
-                <Volume2 className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-                <span>إنشاء وتشغيل الصوت</span>
-              </>
-            )}
+            {playbackRate}x
           </button>
         )}
 
@@ -391,7 +447,7 @@ export default function ReadAloudButton({
           </span>
         )}
 
-        {/* Active Player Controls: Pause/Resume right beside Create/Replay + Seek ±10s + Restart + Stop */}
+        {/* Active Player Controls: Pause/Resume right beside Create/Replay + Seek ±10s + Speed + Restart + Stop */}
         {(status === 'playing' || status === 'paused') && (
           <div className="flex flex-wrap items-center gap-1.5 bg-slate-100/90 border border-slate-200 rounded-xl p-1">
             {/* Pause / Resume button (keeps position!) */}
@@ -439,6 +495,17 @@ export default function ReadAloudButton({
                   <RotateCw className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
                 </button>
 
+                {/* Playback Speed Control (1x, 1.25x, 1.5x, 2x) */}
+                <button
+                  type="button"
+                  onClick={handleCyclePlaybackRate}
+                  title="تغيير سرعة التشغيل (1x / 1.25x / 1.5x / 2x)"
+                  aria-label="سرعة التشغيل"
+                  className="px-2.5 py-1.5 min-h-[34px] text-xs font-bold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-100 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer tabular-nums"
+                >
+                  {playbackRate}x
+                </button>
+
                 {/* Replay from start using saved DB audio */}
                 <button
                   type="button"
@@ -466,8 +533,8 @@ export default function ReadAloudButton({
           </div>
         )}
 
-        {/* Regenerate from API only when explicitly clicked */}
-        {hasCachedAudio && status !== 'loading' && (
+        {/* Regenerate from API only when explicitly clicked (never in cacheOnlyMode) */}
+        {!cacheOnlyMode && hasCachedAudio && status !== 'loading' && (
           <button
             type="button"
             onClick={() => void generateOrLoadAndPlay(true, true)}

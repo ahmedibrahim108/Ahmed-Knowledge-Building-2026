@@ -182,7 +182,23 @@ export function sanitizeRichHtml(dirtyHtml: string): string {
     const lower = tag.toLowerCase();
     if (lower === 'b') return `<strong>${childrenHtml}</strong>`;
     if (lower === 'i') return `<em>${childrenHtml}</em>`;
-    return `<${lower}>${childrenHtml}</${lower}>`;
+
+    const rawDir = (el.getAttribute('dir') || '').toLowerCase();
+    const dirAttr =
+      (rawDir === 'ltr' || rawDir === 'rtl' || rawDir === 'auto') &&
+      (tag === 'P' ||
+        tag === 'DIV' ||
+        tag === 'H3' ||
+        tag === 'H4' ||
+        tag === 'UL' ||
+        tag === 'OL' ||
+        tag === 'LI' ||
+        tag === 'BLOCKQUOTE' ||
+        tag === 'TABLE')
+        ? ` dir="${rawDir}"`
+        : '';
+
+    return `<${lower}${dirAttr}>${childrenHtml}</${lower}>`;
   };
 
   return walk(root).trim();

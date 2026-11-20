@@ -9,6 +9,152 @@ export type ReadingMode =
   | 'applied'
   | 'breakdown';
 
+export type CourseStudyStage =
+  | 'focus_now'
+  | 'in_progress'
+  | 'scheduled_later'
+  | 'deferred'
+  | 'heard_before'
+  | 'completed';
+
+export const COURSE_STUDY_STAGES_META: Array<{
+  id: CourseStudyStage;
+  label: string;
+  shortLabel: string;
+  description: string;
+  badgeClass: string;
+}> = [
+  {
+    id: 'focus_now',
+    label: 'أركّز عليه الآن',
+    shortLabel: 'تركيز الآن',
+    description: 'ضمن الكورسات المحددة للتركيز المكثف هذا الشهر.',
+    badgeClass: 'bg-[#1E3A5F] text-white border-[#1E3A5F]',
+  },
+  {
+    id: 'in_progress',
+    label: 'قيد الدراسة',
+    shortLabel: 'قيد الدراسة',
+    description: 'كورس نشط ومفتوح للتعلم المتدرج.',
+    badgeClass: 'bg-sky-50 text-sky-900 border-sky-200',
+  },
+  {
+    id: 'scheduled_later',
+    label: 'مجدول لوقت آخر',
+    shortLabel: 'مجدول لاحقًا',
+    description: 'مخطط لدراسته في فترة قادمة بدون استعجال الآن.',
+    badgeClass: 'bg-slate-100 text-slate-700 border-slate-300',
+  },
+  {
+    id: 'deferred',
+    label: 'مؤجّل حاليًا',
+    shortLabel: 'مؤجّل',
+    description: 'مؤقتًا على الرف حتى تفرغ الأولويات الحالية.',
+    badgeClass: 'bg-amber-50 text-amber-900 border-amber-200',
+  },
+  {
+    id: 'heard_before',
+    label: 'تم سماعه سابقًا',
+    shortLabel: 'مسموع سابقًا',
+    description: 'مررت عليه من قبل وجاهز للمراجعة أو الاستخلاص.',
+    badgeClass: 'bg-violet-50 text-violet-900 border-violet-200',
+  },
+  {
+    id: 'completed',
+    label: 'مكتمل',
+    shortLabel: 'مكتمل',
+    description: 'أتممت دراسته وتطبيقه العملي.',
+    badgeClass: 'bg-emerald-50 text-emerald-900 border-emerald-200',
+  },
+];
+
+export function resolveCourseStudyStage(c: {
+  studyStage?: CourseStudyStage;
+  completed?: boolean;
+}): CourseStudyStage {
+  if (c.studyStage) return c.studyStage;
+  return c.completed ? 'completed' : 'in_progress';
+}
+
+export function getCourseStageMeta(stage: CourseStudyStage) {
+  return (
+    COURSE_STUDY_STAGES_META.find((s) => s.id === stage) ??
+    COURSE_STUDY_STAGES_META[1]
+  );
+}
+
+export type NoteColorKey =
+  | 'default'
+  | 'navy'
+  | 'emerald'
+  | 'amber'
+  | 'rose'
+  | 'violet';
+
+export const NOTE_COLOR_THEMES: Record<
+  NoteColorKey,
+  {
+    label: string;
+    cardClass: string;
+    accentBarClass: string;
+    swatchClass: string;
+  }
+> = {
+  default: {
+    label: 'افتراضي',
+    cardClass: 'bg-white border-slate-200',
+    accentBarClass: 'bg-slate-200',
+    swatchClass: 'bg-white border-slate-300',
+  },
+  navy: {
+    label: 'أزرق داكن',
+    cardClass: 'bg-[#F4F7FB] border-[#1E3A5F]/25',
+    accentBarClass: 'bg-[#1E3A5F]',
+    swatchClass: 'bg-[#1E3A5F] border-[#1E3A5F]',
+  },
+  emerald: {
+    label: 'زمردي',
+    cardClass: 'bg-emerald-50/45 border-emerald-200',
+    accentBarClass: 'bg-emerald-600',
+    swatchClass: 'bg-emerald-600 border-emerald-700',
+  },
+  amber: {
+    label: 'عنبري',
+    cardClass: 'bg-amber-50/55 border-amber-200',
+    accentBarClass: 'bg-amber-500',
+    swatchClass: 'bg-amber-400 border-amber-500',
+  },
+  rose: {
+    label: 'وردي',
+    cardClass: 'bg-rose-50/50 border-rose-200',
+    accentBarClass: 'bg-rose-500',
+    swatchClass: 'bg-rose-500 border-rose-600',
+  },
+  violet: {
+    label: 'بنفسجي',
+    cardClass: 'bg-violet-50/50 border-violet-200',
+    accentBarClass: 'bg-violet-600',
+    swatchClass: 'bg-violet-600 border-violet-700',
+  },
+};
+
+export type DentalCaseStatus = 'in_progress' | 'follow_up' | 'completed';
+
+export interface DentalCase {
+  id: string;
+  title: string;
+  specialty: string;
+  patientSummary: string;
+  procedureDetails: string;
+  caseDate: string;
+  status: DentalCaseStatus;
+  coverImageUrl?: string;
+  coverStoragePath?: string;
+  coverDataUrl?: string;
+  linkedCourseId?: number;
+  updatedAtLabel?: string;
+}
+
 export interface LearningHubMeta {
   id: LearningHubId;
   title: string;
@@ -278,6 +424,8 @@ export interface PersonalCourse {
   bookAuthor: string;
   applicationMilestone: string;
   completed: boolean;
+  studyStage?: CourseStudyStage;
+  scheduledPeriod?: string;
   resources: StudyResource[];
   tasks: SmallTask[];
   readingModes?: ReadingMode[];
@@ -295,6 +443,7 @@ export interface BookNote {
   id: string;
   hubId?: LearningHubId;
   noteType?: NoteCategoryType;
+  noteColor?: NoteColorKey;
   bookTitle: string;
   author: string;
   courseId?: number;
@@ -429,6 +578,7 @@ export interface StudyHistoryEntry {
   detail: string;
   targetTab:
     | 'overview'
+    | 'focus'
     | 'plan'
     | 'domains'
     | 'courses'
