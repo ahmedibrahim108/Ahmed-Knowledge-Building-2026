@@ -53,7 +53,7 @@ function ImageAttachmentGalleryInner({
   refreshToken = 0,
 }: ImageAttachmentGalleryProps) {
   const [authUid, setAuthUid] = useState<string | undefined>(
-    () => auth.currentUser?.uid
+    () => auth?.currentUser?.uid
   );
   const effectiveUid = propUid || authUid;
 
@@ -76,6 +76,7 @@ function ImageAttachmentGalleryInner({
   const activeObjectUrlsRef = useRef<string[]>([]);
 
   useEffect(() => {
+    if (!auth) return;
     const unsubAuth = onAuthStateChanged(auth, (u) => {
       setAuthUid(u?.uid);
     });

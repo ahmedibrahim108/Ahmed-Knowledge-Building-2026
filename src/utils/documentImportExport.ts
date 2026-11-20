@@ -288,7 +288,7 @@ export async function getPdfBlobForViewing(options: {
     if (local?.blob) return local.blob;
   }
 
-  const uid = auth.currentUser?.uid;
+  const uid = auth?.currentUser?.uid;
   if (uid && options.resourceId) {
     try {
       const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
@@ -363,7 +363,7 @@ export async function downloadResourceAttachment(options: {
     }
   }
 
-  const uid = auth.currentUser?.uid;
+  const uid = auth?.currentUser?.uid;
   if (uid && options.resourceId) {
     try {
       const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);

@@ -384,7 +384,7 @@ export async function compressAndSaveImages(
   const fileArray = Array.from(files).filter(isImageFile);
   if (fileArray.length === 0) return [];
 
-  const uid = uidOverride || auth.currentUser?.uid;
+  const uid = uidOverride || auth?.currentUser?.uid;
   const saved: StoredImageRecord[] = [];
   const baseNow = Date.now();
 
@@ -421,7 +421,7 @@ export async function getImagesForScope(
   scopeKey: string,
   uidOverride?: string
 ): Promise<StoredImageRecord[]> {
-  const uid = uidOverride || auth.currentUser?.uid;
+  const uid = uidOverride || auth?.currentUser?.uid;
   const localItems = await getLocalImagesForScope(scopeKey);
   if (!uid) return localItems;
 
@@ -559,7 +559,7 @@ export async function deleteStoredImage(
   uidOverride?: string
 ): Promise<void> {
   const imageId = image.id;
-  const uid = uidOverride || auth.currentUser?.uid;
+  const uid = uidOverride || auth?.currentUser?.uid;
 
   try {
     const idb = await openImagesDb();
@@ -595,7 +595,7 @@ export async function updateStoredImageCaption(
   uidOverride?: string
 ): Promise<void> {
   const trimmed = caption.slice(0, 500);
-  const uid = uidOverride || auth.currentUser?.uid;
+  const uid = uidOverride || auth?.currentUser?.uid;
 
   try {
     const idb = await openImagesDb();
@@ -634,7 +634,7 @@ export async function moveImagesScope(
   toScope: string,
   uidOverride?: string
 ): Promise<void> {
-  const uid = uidOverride || auth.currentUser?.uid;
+  const uid = uidOverride || auth?.currentUser?.uid;
 
   try {
     const existing = await getLocalImagesForScope(fromScope);
@@ -684,7 +684,7 @@ export async function uploadDentalCaseCover(
   coverStoragePath: string;
   coverDataUrl: string;
 }> {
-  const uid = uidOverride || auth.currentUser?.uid;
+  const uid = uidOverride || auth?.currentUser?.uid;
   const compressed = await compressImageFileForCloud(file);
   let coverStoragePath = '';
   let coverImageUrl = '';

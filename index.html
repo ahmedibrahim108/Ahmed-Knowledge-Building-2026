@@ -21,6 +21,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <script>
       window.__pwaInstallPrompt = null;
+      window.__mizanAppMounted = false;
       window.addEventListener('beforeinstallprompt', function (e) {
         e.preventDefault();
         window.__pwaInstallPrompt = e;
@@ -29,7 +30,142 @@
   </head>
   <body class="bg-[#F7F8FA] text-slate-900 antialiased selection:bg-[#1E3A5F]/15 selection:text-[#1E3A5F]">
     <div id="root"></div>
+    <noscript>
+      <div dir="rtl" style="padding:24px;font-family:system-ui,sans-serif;text-align:center;color:#0f172a;">
+        <h1 style="font-size:20px;font-weight:700;margin-bottom:8px;">ميزان المعرفة</h1>
+        <p style="font-size:14px;color:#475569;">يرجى تفعيل JavaScript في المتصفح لتشغيل المنصة.</p>
+      </div>
+    </noscript>
+    <script>
+      (function () {
+        var RECOVER_KEY = 'mizan_boot_recover_once';
+        var bootShown = false;
+
+        function clearSwAndCaches() {
+          var tasks = [];
+          try {
+            if ('serviceWorker' in navigator && navigator.serviceWorker.getRegistrations) {
+              tasks.push(
+                navigator.serviceWorker.getRegistrations().then(function (regs) {
+                  return Promise.all(
+                    regs.map(function (r) {
+                      return r.unregister().catch(function () {});
+                    })
+                  );
+                }).catch(function () {})
+              );
+            }
+          } catch (_) {}
+          try {
+            if ('caches' in window && window.caches && caches.keys) {
+              tasks.push(
+                caches.keys().then(function (keys) {
+                  return Promise.all(
+                    keys.map(function (k) {
+                      return caches.delete(k).catch(function () {});
+                    })
+                  );
+                }).catch(function () {})
+              );
+            }
+          } catch (_) {}
+          return Promise.all(tasks);
+        }
+
+        function showRecoveryUI(detail) {
+          if (bootShown || window.__mizanAppMounted) return;
+          var root = document.getElementById('root');
+          if (!root || root.childElementCount > 0) return;
+          bootShown = true;
+
+          var box = document.createElement('div');
+          box.setAttribute('dir', 'rtl');
+          box.style.cssText = 'min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#F7F8FA;font-family:system-ui,-apple-system,sans-serif;color:#0f172a;';
+          box.innerHTML =
+            '<div style="max-width:460px;width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:24px;text-align:right;box-shadow:0 4px 20px rgba(15,23,42,0.06);">' +
+              '<h1 style="margin:0 0 8px;font-size:20px;font-weight:700;color:#1E3A5F;">تعذّر فتح التطبيق على هذا المتصفح</h1>' +
+              '<p style="margin:0 0 14px;font-size:13px;line-height:1.7;color:#475569;">قد يكون السبب نسخة مخزنة قديمة في الذاكرة المؤقتة أو فتح الرابط داخل متصفح داخلي لتطبيق آخر.</p>' +
+              '<div id="mizan-boot-err" style="display:none;margin:0 0 14px;padding:10px;border-radius:8px;background:#f8fafc;border:1px solid #e2e8f0;font-size:11px;color:#64748b;word-break:break-word;"></div>' +
+              '<div style="display:flex;flex-wrap:wrap;gap:8px;">' +
+                '<button id="mizan-boot-retry" type="button" style="padding:10px 16px;border:none;border-radius:10px;background:#1E3A5F;color:#fff;font-size:13px;font-weight:600;cursor:pointer;">تحديث ومسح الكاش</button>' +
+                '<button id="mizan-boot-reload" type="button" style="padding:10px 14px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;color:#334155;font-size:13px;font-weight:500;cursor:pointer;">إعادة المحاولة</button>' +
+              '</div>' +
+            '</div>';
+          root.appendChild(box);
+          if (detail) {
+            var errEl = document.getElementById('mizan-boot-err');
+            if (errEl) {
+              errEl.style.display = 'block';
+              errEl.textContent = String(detail);
+            }
+          }
+          var retryBtn = document.getElementById('mizan-boot-retry');
+          if (retryBtn) {
+            retryBtn.onclick = function () {
+              clearSwAndCaches().finally(function () {
+                window.location.reload();
+              });
+            };
+          }
+          var reloadBtn = document.getElementById('mizan-boot-reload');
+          if (reloadBtn) {
+            reloadBtn.onclick = function () {
+              window.location.reload();
+            };
+          }
+        }
+
+        function attemptAutoRecovery(reason) {
+          if (window.__mizanAppMounted) return;
+          var alreadyTried = false;
+          try {
+            alreadyTried = sessionStorage.getItem(RECOVER_KEY) === '1';
+            if (!alreadyTried) sessionStorage.setItem(RECOVER_KEY, '1');
+          } catch (_) {}
+
+          if (!alreadyTried) {
+            clearSwAndCaches().finally(function () {
+              window.location.reload();
+            });
+          } else {
+            showRecoveryUI(reason);
+          }
+        }
+
+        window.addEventListener('error', function (ev) {
+          if (window.__mizanAppMounted) return;
+          var target = ev && ev.target;
+          if (target && (target.tagName === 'SCRIPT' || target.tagName === 'LINK')) {
+            var src = target.src || target.href || '';
+            if (src.indexOf('fonts.googleapis.com') !== -1 || src.indexOf('fonts.gstatic.com') !== -1) {
+              return;
+            }
+            attemptAutoRecovery('فشل تحميل ملف التطبيق: ' + src);
+            return;
+          }
+          if (ev && ev.message) {
+            showRecoveryUI(ev.message);
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function (ev) {
+          if (window.__mizanAppMounted) return;
+          var msg = ev && ev.reason ? (ev.reason.message || String(ev.reason)) : '';
+          if (msg && msg.toLowerCase().indexOf('dynamically imported module') !== -1) {
+            attemptAutoRecovery(msg);
+          }
+        });
+
+        window.__mizanBootTimer = window.setTimeout(function () {
+          if (!window.__mizanAppMounted) {
+            var root = document.getElementById('root');
+            if (!root || root.childElementCount === 0) {
+              showRecoveryUI('استغرق تحميل الواجهة وقتًا طويلاً على الشبكة الحالية.');
+            }
+          }
+        }, 12000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

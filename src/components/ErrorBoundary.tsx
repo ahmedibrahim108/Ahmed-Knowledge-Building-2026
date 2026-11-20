@@ -23,10 +23,16 @@ export default class ErrorBoundary extends Component<
     this.state = { hasError: false, errorMessage: '' };
   }
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    const msg =
+      error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+        ? error
+        : 'حدث خطأ غير متوقع في التطبيق.';
     return {
       hasError: true,
-      errorMessage: error.message || 'حدث خطأ غير متوقع في التطبيق.',
+      errorMessage: msg || 'حدث خطأ غير متوقع في التطبيق.',
     };
   }
 
@@ -37,6 +43,33 @@ export default class ErrorBoundary extends Component<
   private handleReset = () => {
     this.setState({ hasError: false, errorMessage: '' });
     this.props.onReset?.();
+  };
+
+  private handleClearCacheAndReload = () => {
+    const tasks: Promise<unknown>[] = [];
+    try {
+      if ('serviceWorker' in navigator && navigator.serviceWorker.getRegistrations) {
+        tasks.push(
+          navigator.serviceWorker
+            .getRegistrations()
+            .then((regs) => Promise.all(regs.map((r) => r.unregister().catch(() => {}))))
+            .catch(() => {})
+        );
+      }
+      if ('caches' in window && caches.keys) {
+        tasks.push(
+          caches
+            .keys()
+            .then((keys) => Promise.all(keys.map((k) => caches.delete(k).catch(() => {}))))
+            .catch(() => {})
+        );
+      }
+    } catch {
+      // ignore
+    }
+    Promise.all(tasks).finally(() => {
+      window.location.reload();
+    });
   };
 
   render() {
@@ -87,24 +120,33 @@ export default class ErrorBoundary extends Component<
           dir="rtl"
           className="min-h-screen bg-[#F7F8FA] flex items-center justify-center p-6"
         >
-          <div className="max-w-lg w-full bg-white border border-slate-200 rounded-xl p-8 space-y-4">
+          <div className="max-w-lg w-full bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-4">
             <h1 className="font-editorial text-2xl font-bold text-slate-900">
               {this.props.fallbackTitle || 'تعذّر إتمام العملية مؤقتًا'}
             </h1>
             <p className="text-sm text-slate-600 leading-relaxed">
               {this.props.fallbackMessage ||
-                'واجه التطبيق خطأً أثناء المزامنة أو العرض. يمكنك إعادة تحميل الصفحة للمتابعة بأمان.'}
+                'واجه التطبيق خطأً أثناء المزامنة أو العرض. يمكنك إعادة تحميل الصفحة أو تحديث الذاكرة المؤقتة للمتابعة بأمان.'}
             </p>
             <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-3 break-words">
               {this.state.errorMessage}
             </p>
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] cursor-pointer"
-            >
-              إعادة تحميل الصفحة
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 text-xs font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] cursor-pointer"
+              >
+                إعادة تحميل الصفحة
+              </button>
+              <button
+                type="button"
+                onClick={this.handleClearCacheAndReload}
+                className="px-4 py-2 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 cursor-pointer"
+              >
+                تحديث ومسح الكاش
+              </button>
+            </div>
           </div>
         </div>
       );

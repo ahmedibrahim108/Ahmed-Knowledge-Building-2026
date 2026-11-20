@@ -65,7 +65,7 @@ import {
 } from '../utils/richText';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
-import { ActivePdfTarget } from './PDFViewerModal';
+import type { ActivePdfTarget } from './PDFViewerModal';
 import ReadAloudButton from './ReadAloudButton';
 import RichTextNoteEditor from './RichTextNoteEditor';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';

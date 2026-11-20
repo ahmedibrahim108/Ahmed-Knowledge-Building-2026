@@ -44,7 +44,7 @@ import {
 } from '../utils/documentImportExport';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
-import { ActivePdfTarget } from './PDFViewerModal';
+import type { ActivePdfTarget } from './PDFViewerModal';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
 import VoiceRecorderButton from './VoiceRecorderButton';
 

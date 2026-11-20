@@ -17,8 +17,26 @@ import {
   downloadResourceAttachment,
   getPdfBlobForViewing,
 } from '../utils/documentImportExport';
+import ErrorBoundary from './ErrorBoundary';
 
-pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+// Safe runtime shim for older Android Chrome / WebViews when PDF modal is opened
+if (typeof Promise !== 'undefined' && typeof (Promise as unknown as { withResolvers?: unknown }).withResolvers !== 'function') {
+  (Promise as unknown as { withResolvers: <T>() => { promise: Promise<T>; resolve: (v: T) => void; reject: (r?: unknown) => void } }).withResolvers = function <T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  };
+}
+
+try {
+  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+} catch {
+  // Fallback handled cleanly by ErrorBoundary / download option
+}
 
 export interface ActivePdfTarget {
   title: string;
@@ -309,43 +327,49 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
           )}
 
           {!loadingBlob && !loadError && pdfUrl && (
-            <Document
-              file={pdfUrl}
-              loading={
-                <div className="flex items-center gap-2 text-slate-200 py-12 text-sm">
-                  <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
-                  <span>جاري تحميل الصفحات...</span>
-                </div>
-              }
-              error={
-                <div className="bg-white rounded-xl p-5 text-xs text-red-700">
-                  تعذر قراءة هذا المستند بصيغة PDF. يمكنك تجربة زر «تنزيل PDF».
-                </div>
-              }
-              onLoadSuccess={({ numPages: total }) => {
-                setNumPages(total);
-                setCurrentPage(1);
-              }}
+            <ErrorBoundary
+              inline
+              fallbackTitle="تعذّر عرض ملف الـ PDF داخل المتصفح الحالي"
+              fallbackMessage="قد لا يدعم متصفح الهاتف الحالي عارض الـ PDF المدمج. يمكنك استخدام زر «تنزيل PDF» بالأسفل أو بالأعلى لفتح الملف مباشرة."
             >
-              <div className="flex flex-col items-center gap-4">
-                {renderedPages.map((pageNumber) => (
-                  <div
-                    key={pageNumber}
-                    ref={(el) => {
-                      pageRefs.current[pageNumber] = el;
-                    }}
-                    className="bg-white shadow-xl rounded-sm overflow-hidden"
-                  >
-                    <Page
-                      pageNumber={pageNumber}
-                      width={pageRenderWidth}
-                      renderTextLayer
-                      renderAnnotationLayer
-                    />
+              <Document
+                file={pdfUrl}
+                loading={
+                  <div className="flex items-center gap-2 text-slate-200 py-12 text-sm">
+                    <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
+                    <span>جاري تحميل الصفحات...</span>
                   </div>
-                ))}
-              </div>
-            </Document>
+                }
+                error={
+                  <div className="bg-white rounded-xl p-5 text-xs text-red-700 space-y-2 text-center">
+                    <p>تعذر قراءة هذا المستند بصيغة PDF. يمكنك تجربة زر «تنزيل PDF».</p>
+                  </div>
+                }
+                onLoadSuccess={({ numPages: total }) => {
+                  setNumPages(total);
+                  setCurrentPage(1);
+                }}
+              >
+                <div className="flex flex-col items-center gap-4">
+                  {renderedPages.map((pageNumber) => (
+                    <div
+                      key={pageNumber}
+                      ref={(el) => {
+                        pageRefs.current[pageNumber] = el;
+                      }}
+                      className="bg-white shadow-xl rounded-sm overflow-hidden"
+                    >
+                      <Page
+                        pageNumber={pageNumber}
+                        width={pageRenderWidth}
+                        renderTextLayer
+                        renderAnnotationLayer
+                      />
+                    </div>
+                  ))}
+                </div>
+              </Document>
+            </ErrorBoundary>
           )}
         </div>
       </div>

@@ -27,7 +27,7 @@ import {
   uploadResourceAttachment,
 } from '../utils/documentImportExport';
 import ConfirmDialog from './ConfirmDialog';
-import { ActivePdfTarget } from './PDFViewerModal';
+import type { ActivePdfTarget } from './PDFViewerModal';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
 
 interface LibraryViewProps {

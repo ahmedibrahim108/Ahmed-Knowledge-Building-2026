@@ -1,5 +1,6 @@
-import { initializeApp } from 'firebase/app';
+import { FirebaseApp, initializeApp } from 'firebase/app';
 import {
+  Auth,
   GoogleAuthProvider,
   getAuth,
   getRedirectResult,
@@ -7,22 +8,44 @@ import {
   signInWithRedirect,
   signOut,
 } from 'firebase/auth';
-import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
+import {
+  Firestore,
+  doc,
+  getDocFromServer,
+  getFirestore,
+} from 'firebase/firestore';
+import { FirebaseStorage, getStorage } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
 
 export const OWNER_ADMIN_EMAIL = 'farrag34567@gmail.com';
 
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
-export const storage = getStorage(app);
+let appInstance: FirebaseApp | null = null;
+let dbInstance: Firestore | null = null;
+let authInstance: Auth | null = null;
+let storageInstance: FirebaseStorage | null = null;
+export let firebaseInitError: string | null = null;
+
+try {
+  appInstance = initializeApp(firebaseConfig);
+  dbInstance = getFirestore(appInstance, firebaseConfig.firestoreDatabaseId);
+  authInstance = getAuth(appInstance);
+  storageInstance = getStorage(appInstance);
+} catch (err) {
+  firebaseInitError =
+    err instanceof Error ? err.message : 'تعذر تهيئة الاتصال السحابي.';
+  console.error('Firebase initialization failed:', err);
+}
+
+export const db = dbInstance as Firestore;
+export const auth = authInstance as Auth;
+export const storage = storageInstance as FirebaseStorage;
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export async function completeGoogleRedirectIfAny() {
+  if (!authInstance) return null;
   try {
-    return await getRedirectResult(auth);
+    return await getRedirectResult(authInstance);
   } catch (err) {
     console.warn('Redirect sign-in check:', err);
     return null;
@@ -30,10 +53,13 @@ export async function completeGoogleRedirectIfAny() {
 }
 
 export async function signInWithGoogle() {
+  if (!authInstance) {
+    throw new Error(firebaseInitError || 'تعذرت تهيئة تسجيل الدخول السحابي.');
+  }
   const isTopWindow =
     typeof window !== 'undefined' && window.self === window.top;
   try {
-    return await signInWithPopup(auth, googleProvider);
+    return await signInWithPopup(authInstance, googleProvider);
   } catch (err) {
     const code =
       (err as { code?: string } | null)?.code ||
@@ -45,7 +71,7 @@ export async function signInWithGoogle() {
 
     // On real mobile browsers/PWAs (top-level window), seamlessly fall back to full-page redirect login
     if (isTopWindow && popupBlockedOrUnsupported) {
-      await signInWithRedirect(auth, googleProvider);
+      await signInWithRedirect(authInstance, googleProvider);
       return null;
     }
     throw err;
@@ -53,7 +79,8 @@ export async function signInWithGoogle() {
 }
 
 export async function signOutUser() {
-  return signOut(auth);
+  if (!authInstance) return;
+  return signOut(authInstance);
 }
 
 export enum OperationType {
@@ -87,16 +114,17 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null
 ): never {
+  const currentUser = authInstance?.currentUser;
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
+      userId: currentUser?.uid,
+      email: currentUser?.email,
+      emailVerified: currentUser?.emailVerified,
+      isAnonymous: currentUser?.isAnonymous,
+      tenantId: currentUser?.tenantId,
       providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
+        currentUser?.providerData?.map((provider) => ({
           providerId: provider.providerId,
           email: provider.email,
         })) || [],
@@ -109,8 +137,9 @@ export function handleFirestoreError(
 }
 
 async function testConnection() {
+  if (!dbInstance) return;
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    await getDocFromServer(doc(dbInstance, 'test', 'connection'));
   } catch (error) {
     if (
       error instanceof Error &&
@@ -121,4 +150,6 @@ async function testConnection() {
   }
 }
 
-testConnection();
+if (dbInstance) {
+  void testConnection();
+}

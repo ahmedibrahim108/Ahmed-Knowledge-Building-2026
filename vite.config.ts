@@ -58,16 +58,17 @@ export default defineConfig(() => {
           cleanupOutdatedCaches: true,
           skipWaiting: true,
           clientsClaim: true,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          globPatterns: ['**/*.{js,css,ico,png,svg,woff,woff2}'],
+          globIgnores: ['**/pdf.worker*'],
           maximumFileSizeToCacheInBytes: 12 * 1024 * 1024,
-          navigateFallbackDenylist: [/^\/api\//],
+          navigateFallback: null as unknown as string,
           runtimeCaching: [
             {
               urlPattern: ({ request }) => request.mode === 'navigate',
               handler: 'NetworkFirst',
               options: {
                 cacheName: 'pages-cache',
-                networkTimeoutSeconds: 4,
+                networkTimeoutSeconds: 3,
               },
             },
             {
@@ -124,6 +125,31 @@ export default defineConfig(() => {
         },
       },
     ],
+    build: {
+      target: ['es2020', 'chrome87', 'safari14'],
+      chunkSizeWarningLimit: 2000,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            const normalized = id.replace(/\\/g, '/');
+            if (normalized.includes('/node_modules/')) {
+              if (
+                normalized.includes('/node_modules/firebase/') ||
+                normalized.includes('/node_modules/@firebase/')
+              ) {
+                return 'vendor-firebase';
+              }
+              if (normalized.includes('/node_modules/xlsx/')) {
+                return 'vendor-xlsx';
+              }
+              if (normalized.includes('/node_modules/mammoth/')) {
+                return 'vendor-mammoth';
+              }
+            }
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

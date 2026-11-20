@@ -51,7 +51,7 @@ export default function ReadAloudButton({
   onJumpToCreateAudio,
   onRequireAuth,
 }: ReadAloudButtonProps) {
-  const effectiveUid = uid ?? auth.currentUser?.uid ?? null;
+  const effectiveUid = uid ?? auth?.currentUser?.uid ?? null;
   const cleanText = text.trim();
 
   const [status, setStatus] = useState<PlayerStatus>('idle');

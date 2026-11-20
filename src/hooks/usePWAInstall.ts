@@ -22,18 +22,26 @@ export function usePWAInstall() {
   const [isInIframe, setIsInIframe] = useState(false);
 
   useEffect(() => {
-    const isStandalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as unknown as { standalone?: boolean }).standalone ===
-        true;
-    setIsInstalled(isStandalone);
+    try {
+      const standaloneMedia =
+        typeof window.matchMedia === 'function'
+          ? window.matchMedia('(display-mode: standalone)').matches
+          : false;
+      const isStandalone =
+        standaloneMedia ||
+        (window.navigator as unknown as { standalone?: boolean }).standalone ===
+          true;
+      setIsInstalled(isStandalone);
 
-    const ua = window.navigator.userAgent.toLowerCase();
-    setIsIOS(
-      /iphone|ipad|ipod/.test(ua) ||
-        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-    );
-    setIsAndroid(/android/.test(ua));
+      const ua = (window.navigator?.userAgent || '').toLowerCase();
+      setIsIOS(
+        /iphone|ipad|ipod/.test(ua) ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+      );
+      setIsAndroid(/android/.test(ua));
+    } catch {
+      // Ignore browser API quirks in restricted mobile WebViews
+    }
 
     try {
       setIsInIframe(window.self !== window.top);

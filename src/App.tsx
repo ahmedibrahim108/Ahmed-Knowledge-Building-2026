@@ -4,7 +4,7 @@
  */
 
 import { User, onAuthStateChanged } from 'firebase/auth';
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import {
   ArrowRight,
   CalendarDays,
@@ -21,6 +21,7 @@ import ConfirmDialog from './components/ConfirmDialog';
 import CourseDetailPage from './components/CourseDetailPage';
 import CoursesView from './components/CoursesView';
 import DomainsView from './components/DomainsView';
+import ErrorBoundary from './components/ErrorBoundary';
 import FocusView from './components/FocusView';
 import Header, { ActiveTab } from './components/Header';
 import LibraryView from './components/LibraryView';
@@ -28,10 +29,12 @@ import NotesJournalView from './components/NotesJournalView';
 import OfflineIndicator from './components/OfflineIndicator';
 import OverviewView from './components/OverviewView';
 import PathsView from './components/PathsView';
-import PDFViewerModal, { ActivePdfTarget } from './components/PDFViewerModal';
+import type { ActivePdfTarget } from './components/PDFViewerModal';
 import PWAInstallButton from './components/PWAInstallButton';
 import TasksProjectsView from './components/TasksProjectsView';
 import TwelveMonthPlanView from './components/TwelveMonthPlanView';
+
+const PDFViewerModal = lazy(() => import('./components/PDFViewerModal'));
 import {
   BookNote,
   CalendarEvent,
@@ -70,6 +73,7 @@ import {
 import {
   auth,
   completeGoogleRedirectIfAny,
+  firebaseInitError,
   signInWithGoogle,
   signOutUser,
 } from './firebase';
@@ -191,10 +195,16 @@ function parseAppRouteFromLocation(): {
 
   const journalMatch = source.match(/^journal\/([^/]+)\/?$/i);
   if (journalMatch) {
+    let decodedNoteId = journalMatch[1];
+    try {
+      decodedNoteId = decodeURIComponent(journalMatch[1]);
+    } catch {
+      decodedNoteId = journalMatch[1];
+    }
     return {
       tab: 'journal',
       courseId: null,
-      noteId: decodeURIComponent(journalMatch[1]),
+      noteId: decodedNoteId,
     };
   }
 
@@ -204,6 +214,19 @@ function parseAppRouteFromLocation(): {
   }
 
   return { tab: 'overview', courseId: null, noteId: null };
+}
+
+function safeScrollToTop() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } catch {
+    try {
+      window.scrollTo(0, 0);
+    } catch {
+      // Ignore in restricted mobile webviews
+    }
+  }
 }
 
 export default function App() {
@@ -308,7 +331,15 @@ export default function App() {
       targetHash = `#/journal/${encodeURIComponent(noteId)}`;
     }
     if (window.location.hash !== targetHash) {
-      window.history.pushState(null, '', targetHash);
+      try {
+        window.history.pushState(null, '', targetHash);
+      } catch {
+        try {
+          window.location.hash = targetHash;
+        } catch {
+          // Ignore in restricted history contexts
+        }
+      }
     }
   };
 
@@ -331,9 +362,7 @@ export default function App() {
     setActiveHubFilter(prevStep.hubFilter);
     setCoursesSection(prevStep.coursesSection);
     syncLocationHash(prevStep.tab, prevStep.courseId, prevStep.noteId);
-    if (typeof window !== 'undefined') {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
+    safeScrollToTop();
   };
 
   const navigateToTab = (tab: ActiveTab, recordStep = true) => {
@@ -367,9 +396,7 @@ export default function App() {
     setCoursesSection('courses');
     setSelectedCourseId(courseId);
     syncLocationHash('courses', courseId, null);
-    if (typeof window !== 'undefined') {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
+    safeScrollToTop();
   };
 
   const handleOpenDentalCases = () => {
@@ -379,9 +406,7 @@ export default function App() {
     setSelectedCourseId(null);
     setActiveTab('courses');
     syncLocationHash('courses', null, null);
-    if (typeof window !== 'undefined') {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
+    safeScrollToTop();
   };
 
   useEffect(() => {
@@ -440,6 +465,14 @@ export default function App() {
 
   // Listen to Firebase Auth state & attach strict per-user Firestore workspace listeners ONLY when authenticated
   useEffect(() => {
+    if (!auth) {
+      setAuthReady(true);
+      if (firebaseInitError) {
+        setAuthError(firebaseInitError);
+      }
+      return;
+    }
+
     let unsubWorkspace: (() => void) | null = null;
 
     const unsubAuth = onAuthStateChanged(auth, async (nextUser) => {
@@ -559,7 +592,7 @@ export default function App() {
     setAuthPromptNotice(
       'أنت تتصفح بوضع القراءة فقط. سجّل الدخول بحساب Google لإجراء التعديلات وحفظها في مساحتك الشخصية دون التأثير على حسابات الآخرين.'
     );
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    safeScrollToTop();
   };
 
   const handleExportExcel = () => {
@@ -2016,6 +2049,12 @@ export default function App() {
           </div>
         )}
 
+        <ErrorBoundary
+          inline
+          key={`${activeTab}-${selectedCourseId ?? ''}`}
+          fallbackTitle="تعذّر عرض هذه الصفحة مؤقتًا"
+          onReset={() => navigateToTab('overview', false)}
+        >
         {activeTab === 'overview' && (
           <OverviewView
             user={user}
@@ -2311,6 +2350,7 @@ export default function App() {
             onJumpToMonth={handleJumpToMonth}
           />
         )}
+        </ErrorBoundary>
       </main>
 
       <footer className="border-t border-slate-200 bg-white mt-auto">
@@ -2361,10 +2401,16 @@ export default function App() {
         }}
       />
 
-      <PDFViewerModal
-        target={activePdfTarget}
-        onClose={() => setActivePdfTarget(null)}
-      />
+      {activePdfTarget && (
+        <ErrorBoundary inline onReset={() => setActivePdfTarget(null)}>
+          <Suspense fallback={null}>
+            <PDFViewerModal
+              target={activePdfTarget}
+              onClose={() => setActivePdfTarget(null)}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      )}
 
       <OfflineIndicator />
 
@@ -2391,7 +2437,7 @@ export default function App() {
                 type="button"
                 onClick={() => {
                   navigateToTab(item.id);
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                  safeScrollToTop();
                 }}
                 className={`flex flex-col items-center justify-center gap-0.5 py-2 min-h-[54px] text-[10px] font-medium transition-colors cursor-pointer ${
                   active
