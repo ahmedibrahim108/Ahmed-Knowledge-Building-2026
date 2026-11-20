@@ -12,11 +12,26 @@
     scroll-behavior: smooth;
     overflow-x: clip;
     -webkit-text-size-adjust: 100%;
+    direction: rtl;
+    unicode-bidi: plaintext;
   }
 
   body {
     overflow-x: clip;
     -webkit-tap-highlight-color: transparent;
+    direction: rtl;
+    text-align: right;
+    unicode-bidi: plaintext;
+  }
+
+  p, span, div, li, label, button, h1, h2, h3, h4, h5, h6 {
+    unicode-bidi: plaintext;
+  }
+
+  input, textarea, select {
+    unicode-bidi: plaintext;
+    text-align: start;
+    direction: auto;
   }
 
   h1, h2, .font-editorial {
@@ -24,6 +39,27 @@
     text-wrap: balance;
   }
 }
+
+.bidi-auto {
+  unicode-bidi: plaintext;
+}
+
+.bidi-isolate {
+  unicode-bidi: isolate;
+}
+
+.bidi-ltr {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: isolate;
+}
+
+.bidi-rtl {
+  direction: rtl;
+  text-align: right;
+  unicode-bidi: plaintext;
+}
+
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
