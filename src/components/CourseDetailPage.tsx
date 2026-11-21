@@ -1969,6 +1969,9 @@ export default function CourseDetailPage({
                     <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                       <ReadAloudButton
                         uid={uid}
+                        entityType={activeNote.noteType === 'course_lecture' ? 'course' : 'note'}
+                        entityId={activeNote.id}
+                        title={activeNote.bookTitle}
                         text={richHtmlToPlainText(activeNote.content)}
                         voiceName={preferences.readAloudVoice}
                         speed={preferences.readAloudSpeed}

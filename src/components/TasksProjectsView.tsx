@@ -1,12 +1,18 @@
 import { useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   Briefcase,
+  Calendar,
   CheckCircle2,
   CheckSquare,
+  Clock,
+  Edit3,
   ListTodo,
   Plus,
+  Save,
   Square,
   Trash2,
+  X,
 } from 'lucide-react';
 import {
   LEARNING_HUBS,
@@ -18,7 +24,9 @@ import {
   TaskPriority,
   UnifiedTask,
   UnifiedTaskStatus,
+  computeEndTimeFromMinutes,
   getHubMeta,
+  getTodayDateKey,
 } from '../data/curriculumData';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -42,6 +50,7 @@ interface TasksProjectsViewProps {
   onToggleCourseTask: (courseId: number, taskId: string) => void;
   onJumpToMonth: (monthId: number) => void;
   onOpenCourse: (courseId: number) => void;
+  onOpenCalendar?: () => void;
 }
 
 const PRIORITY_AR: Record<TaskPriority, string> = {
@@ -82,11 +91,15 @@ export default function TasksProjectsView({
   onToggleCourseTask,
   onJumpToMonth,
   onOpenCourse,
+  onOpenCalendar,
 }: TasksProjectsViewProps) {
+  const todayKey = useMemo(() => getTodayDateKey(), []);
   const [subTab, setSubTab] = useState<'tasks' | 'projects'>('tasks');
-  const [statusFilter, setStatusFilter] = useState<UnifiedTaskStatus | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<
+    UnifiedTaskStatus | 'all' | 'unscheduled' | 'scheduled' | 'overdue'
+  >('all');
 
-  // New Task Form (only title required)
+  // New Task Form (title required, scheduling optional!)
   const [showAddTask, setShowAddTask] = useState(false);
   const [taskTitle, setTaskTitle] = useState('');
   const [taskHub, setTaskHub] = useState<LearningHubId>(
@@ -94,11 +107,32 @@ export default function TasksProjectsView({
   );
   const [taskCat, setTaskCat] = useState('');
   const [taskPriority, setTaskPriority] = useState<TaskPriority>('medium');
-  const [taskDueDate, setTaskDueDate] = useState('');
+  const [taskScheduledDate, setTaskScheduledDate] = useState('');
+  const [taskStartTime, setTaskStartTime] = useState('');
+  const [taskDuration, setTaskDuration] = useState(60);
+  const [taskDeadline, setTaskDeadline] = useState('');
+  const [taskProjectId, setTaskProjectId] = useState('');
   const [taskDesc, setTaskDesc] = useState('');
+
+  // Inline Edit Task state
+  const [editingTask, setEditingTask] = useState<UnifiedTask | null>(null);
+  const [editDraft, setEditDraft] = useState<{
+    title: string;
+    hubId: LearningHubId;
+    priority: TaskPriority;
+    status: UnifiedTaskStatus;
+    categoryLabel: string;
+    scheduledDate: string;
+    startTime: string;
+    durationMinutes: number;
+    deadline: string;
+    projectId: string;
+    description: string;
+  } | null>(null);
+
   const [confirmDeleteTask, setConfirmDeleteTask] = useState<UnifiedTask | null>(null);
 
-  // New Project Form (only title required)
+  // New Project Form
   const [showAddProject, setShowAddProject] = useState(false);
   const [projTitle, setProjTitle] = useState('');
   const [projHub, setProjHub] = useState<LearningHubId>(
@@ -110,13 +144,29 @@ export default function TasksProjectsView({
   const [projCourseId, setProjCourseId] = useState<string>('');
   const [confirmDeleteProj, setConfirmDeleteProj] = useState<PracticalProject | null>(null);
 
+  const isTaskOverdue = (t: UnifiedTask) => {
+    if (t.status === 'done') return false;
+    const dl = t.deadline || t.dueDate;
+    const sched = t.scheduledDate;
+    return Boolean((dl && dl < todayKey) || (sched && sched < todayKey));
+  };
+
   const filteredTasks = useMemo(() => {
     return unifiedTasks.filter((t) => {
       if (activeHubFilter !== 'all' && t.hubId !== activeHubFilter) return false;
+      if (statusFilter === 'unscheduled') return !t.scheduledDate && t.status !== 'done';
+      if (statusFilter === 'scheduled') return Boolean(t.scheduledDate) && t.status !== 'done';
+      if (statusFilter === 'overdue') return isTaskOverdue(t);
       if (statusFilter !== 'all' && t.status !== statusFilter) return false;
       return true;
     });
-  }, [unifiedTasks, activeHubFilter, statusFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unifiedTasks, activeHubFilter, statusFilter, todayKey]);
+
+  const unscheduledCount = useMemo(
+    () => unifiedTasks.filter((t) => !t.scheduledDate && t.status !== 'done').length,
+    [unifiedTasks]
+  );
 
   const filteredProjects = useMemo(() => {
     if (activeHubFilter === 'all') return projects;
@@ -155,6 +205,9 @@ export default function TasksProjectsView({
     }
     const clean = taskTitle.trim();
     if (!clean) return;
+    const endTime = taskStartTime
+      ? computeEndTimeFromMinutes(taskStartTime, taskDuration)
+      : '';
     onAddUnifiedTask({
       title: clean,
       description: taskDesc.trim(),
@@ -162,13 +215,68 @@ export default function TasksProjectsView({
       categoryLabel: taskCat.trim(),
       priority: taskPriority,
       status: 'todo',
-      dueDate: taskDueDate,
+      dueDate: taskDeadline || taskScheduledDate || '',
+      scheduledDate: taskScheduledDate || '',
+      startTime: taskStartTime || '',
+      endTime,
+      durationMinutes: taskStartTime || taskScheduledDate ? taskDuration : 0,
+      deadline: taskDeadline || '',
+      projectId: taskProjectId || '',
     });
     setTaskTitle('');
     setTaskDesc('');
     setTaskCat('');
-    setTaskDueDate('');
+    setTaskScheduledDate('');
+    setTaskStartTime('');
+    setTaskDuration(60);
+    setTaskDeadline('');
+    setTaskProjectId('');
     setShowAddTask(false);
+  };
+
+  const openEditModal = (t: UnifiedTask) => {
+    setEditingTask(t);
+    setEditDraft({
+      title: t.title,
+      hubId: t.hubId,
+      priority: t.priority,
+      status: t.status,
+      categoryLabel: t.categoryLabel || '',
+      scheduledDate: t.scheduledDate || '',
+      startTime: t.startTime || '',
+      durationMinutes: t.durationMinutes || 60,
+      deadline: t.deadline || t.dueDate || '',
+      projectId: t.projectId || '',
+      description: t.description || '',
+    });
+  };
+
+  const handleSaveTaskEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask || !editDraft) return;
+    const clean = editDraft.title.trim();
+    if (!clean) return;
+    const endTime = editDraft.startTime
+      ? computeEndTimeFromMinutes(editDraft.startTime, editDraft.durationMinutes)
+      : '';
+    onUpdateUnifiedTask(editingTask.id, {
+      title: clean,
+      hubId: editDraft.hubId,
+      priority: editDraft.priority,
+      status: editDraft.status,
+      categoryLabel: editDraft.categoryLabel.trim(),
+      scheduledDate: editDraft.scheduledDate,
+      startTime: editDraft.startTime,
+      endTime,
+      durationMinutes:
+        editDraft.scheduledDate || editDraft.startTime ? editDraft.durationMinutes : 0,
+      deadline: editDraft.deadline,
+      dueDate: editDraft.deadline || editDraft.scheduledDate || '',
+      projectId: editDraft.projectId,
+      description: editDraft.description.trim(),
+    });
+    setEditingTask(null);
+    setEditDraft(null);
   };
 
   const handleCreateProject = (e: React.FormEvent) => {
@@ -206,17 +314,27 @@ export default function TasksProjectsView({
       <div className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div className="space-y-2 max-w-3xl">
           <p className="text-xs text-slate-500">
-            التنفيذ والتطبيق العملي · مهام الكورسات والخطة والمشاريع المهنية
+            التنفيذ والتطبيق العملي · المهام المجدولة وغير المجدولة والمشاريع المهنية
           </p>
           <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900">
             المهام الموحدة والمشاريع التطبيقية
           </h1>
           <p className="text-sm text-slate-600 leading-relaxed">
-            اجمع مهامك الشخصية ومهام الكورسات ووحدات الخطة في مكان واحد، وتابع مشاريعك التطبيقية في الماركتينج والدنتال والثقافة.
+            أضف مهامك مع أو بدون تاريخ جدولة، وحدد مدتها وموعدها النهائي، أو اسحبها مباشرة إلى التقويم التفاعلي.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {onOpenCalendar && (
+            <button
+              type="button"
+              onClick={onOpenCalendar}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+            >
+              <Calendar className="w-4 h-4" aria-hidden="true" />
+              <span>جدولة بالسحب في التقويم ←</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setSubTab('tasks')}
@@ -277,18 +395,28 @@ export default function TasksProjectsView({
         <div className="space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
-              {(['all', 'todo', 'in_progress', 'done'] as const).map((st) => (
+              {(
+                [
+                  { id: 'all', label: 'الكل' },
+                  { id: 'unscheduled', label: `غير مجدولة (${unscheduledCount})` },
+                  { id: 'scheduled', label: 'مجدولة في التقويم' },
+                  { id: 'overdue', label: 'متأخرة' },
+                  { id: 'todo', label: TASK_STATUS_AR.todo },
+                  { id: 'in_progress', label: TASK_STATUS_AR.in_progress },
+                  { id: 'done', label: TASK_STATUS_AR.done },
+                ] as const
+              ).map((st) => (
                 <button
-                  key={st}
+                  key={st.id}
                   type="button"
-                  onClick={() => setStatusFilter(st)}
+                  onClick={() => setStatusFilter(st.id)}
                   className={`px-3 py-1.5 text-xs font-medium rounded-lg border cursor-pointer ${
-                    statusFilter === st
+                    statusFilter === st.id
                       ? 'bg-slate-900 text-white border-slate-900'
-                      : 'bg-white text-slate-600 border-slate-200'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                   }`}
                 >
-                  {st === 'all' ? 'الكل' : TASK_STATUS_AR[st]}
+                  {st.label}
                 </button>
               ))}
             </div>
@@ -314,8 +442,8 @@ export default function TasksProjectsView({
               onSubmit={handleCreateTask}
               className="bg-white border border-slate-200 rounded-xl p-5 space-y-4"
             >
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <label className="block text-xs font-medium text-slate-700">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <label className="block text-xs font-medium text-slate-700 sm:col-span-2 lg:col-span-1">
                   عنوان المهمة (مطلوب)
                   <input
                     type="text"
@@ -352,16 +480,52 @@ export default function TasksProjectsView({
                     <option value="low">منخفضة</option>
                   </select>
                 </label>
+
                 <label className="block text-xs font-medium text-slate-700">
-                  موعد الاستحقاق (اختياري)
+                  تاريخ الجدولة (اتركه فارغًا لتبقى غير مجدولة)
                   <input
                     type="date"
-                    value={taskDueDate}
-                    onChange={(e) => setTaskDueDate(e.target.value)}
+                    value={taskScheduledDate}
+                    onChange={(e) => setTaskScheduledDate(e.target.value)}
                     className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
                   />
                 </label>
-                <label className="block text-xs font-medium text-slate-700 sm:col-span-2">
+                <label className="block text-xs font-medium text-slate-700">
+                  وقت البدء (اختياري)
+                  <input
+                    type="time"
+                    value={taskStartTime}
+                    onChange={(e) => setTaskStartTime(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
+                  />
+                </label>
+                <label className="block text-xs font-medium text-slate-700">
+                  المدة المقدرة (بالدقائق)
+                  <select
+                    value={taskDuration}
+                    onChange={(e) => setTaskDuration(Number(e.target.value))}
+                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
+                  >
+                    <option value={15}>15 دقيقة</option>
+                    <option value={30}>30 دقيقة</option>
+                    <option value={45}>45 دقيقة</option>
+                    <option value={60}>60 دقيقة</option>
+                    <option value={90}>90 دقيقة</option>
+                    <option value={120}>120 دقيقة</option>
+                    <option value={180}>180 دقيقة</option>
+                  </select>
+                </label>
+
+                <label className="block text-xs font-medium text-slate-700">
+                  الموعد النهائي / Deadline (اختياري)
+                  <input
+                    type="date"
+                    value={taskDeadline}
+                    onChange={(e) => setTaskDeadline(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
+                  />
+                </label>
+                <label className="block text-xs font-medium text-slate-700">
                   التصنيف الفرعي (اختياري)
                   <input
                     type="text"
@@ -375,6 +539,21 @@ export default function TasksProjectsView({
                       <option key={c} value={c} />
                     ))}
                   </datalist>
+                </label>
+                <label className="block text-xs font-medium text-slate-700">
+                  ربط بمشروع (اختياري)
+                  <select
+                    value={taskProjectId}
+                    onChange={(e) => setTaskProjectId(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
+                  >
+                    <option value="">بدون ربط</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.title}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </div>
               <label className="block text-xs font-medium text-slate-700">
@@ -401,11 +580,13 @@ export default function TasksProjectsView({
           <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-200">
             {filteredTasks.length === 0 ? (
               <p className="p-6 text-xs text-slate-500 text-center">
-                لا توجد مهام مستقلة هنا بعد — اضغط «إضافة مهمة جديدة».
+                لا توجد مهام مطابقة للتصفية الحالية — اضغط «إضافة مهمة جديدة».
               </p>
             ) : (
               filteredTasks.map((t) => {
                 const hubMeta = getHubMeta(t.hubId);
+                const overdue = isTaskOverdue(t);
+                const linkedProj = projects.find((p) => p.id === t.projectId);
                 return (
                   <div
                     key={t.id}
@@ -429,15 +610,23 @@ export default function TasksProjectsView({
                         )}
                       </button>
                       <div className="space-y-1">
-                        <p
-                          className={`text-sm font-semibold ${
-                            t.status === 'done'
-                              ? 'line-through text-slate-400'
-                              : 'text-slate-900'
-                          }`}
-                        >
-                          {t.title}
-                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p
+                            className={`text-sm font-semibold ${
+                              t.status === 'done'
+                                ? 'line-through text-slate-400'
+                                : 'text-slate-900'
+                            }`}
+                          >
+                            {t.title}
+                          </p>
+                          {overdue && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold bg-rose-50 text-rose-800 border border-rose-200 rounded">
+                              <AlertTriangle className="w-3 h-3" aria-hidden="true" />
+                              <span>متأخرة</span>
+                            </span>
+                          )}
+                        </div>
                         <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                           <span
                             className={`px-1.5 py-0.5 border rounded ${hubMeta.badgeClass}`}
@@ -445,7 +634,23 @@ export default function TasksProjectsView({
                             {hubMeta.shortTitle}
                           </span>
                           <span>الأولوية: {PRIORITY_AR[t.priority]}</span>
-                          {t.dueDate && <span>· الاستحقاق: {t.dueDate}</span>}
+                          {t.scheduledDate ? (
+                            <span className="inline-flex items-center gap-1 text-[#1E3A5F] font-medium tabular-nums">
+                              <Calendar className="w-3 h-3" aria-hidden="true" />
+                              {t.scheduledDate}
+                              {t.startTime ? ` · ${t.startTime}` : ''}
+                              {t.durationMinutes ? ` (${t.durationMinutes} د)` : ''}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">· غير مجدولة بعد</span>
+                          )}
+                          {(t.deadline || t.dueDate) && (
+                            <span className="inline-flex items-center gap-1 tabular-nums">
+                              <Clock className="w-3 h-3" aria-hidden="true" />
+                              الموعد النهائي: {t.deadline || t.dueDate}
+                            </span>
+                          )}
+                          {linkedProj && <span>· مشروع: {linkedProj.title}</span>}
                           {t.categoryLabel && <span>· {t.categoryLabel}</span>}
                         </div>
                         {t.description && (
@@ -469,6 +674,14 @@ export default function TasksProjectsView({
                           <option value="in_progress">قيد التنفيذ</option>
                           <option value="done">مكتملة</option>
                         </select>
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(t)}
+                          aria-label="تعديل وجدولة المهمة"
+                          className="p-1.5 text-slate-500 hover:text-[#1E3A5F] cursor-pointer"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
                         <button
                           type="button"
                           onClick={() => setConfirmDeleteTask(t)}
@@ -815,6 +1028,188 @@ export default function TasksProjectsView({
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Edit Task Modal */}
+      {editingTask && editDraft && (
+        <div
+          className="fixed inset-0 z-[75] bg-slate-950/60 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => {
+            setEditingTask(null);
+            setEditDraft(null);
+          }}
+        >
+          <form
+            onSubmit={handleSaveTaskEdit}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-2xl p-5 space-y-4"
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+              <h3 className="text-sm font-bold text-slate-900">
+                تعديل المهمة وجدولتها
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingTask(null);
+                  setEditDraft(null);
+                }}
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <label className="block font-medium text-slate-700 sm:col-span-2">
+                عنوان المهمة
+                <input
+                  type="text"
+                  required
+                  value={editDraft.title}
+                  onChange={(e) =>
+                    setEditDraft((d) => (d ? { ...d, title: e.target.value } : d))
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                />
+              </label>
+
+              <label className="block font-medium text-slate-700">
+                الأولوية
+                <select
+                  value={editDraft.priority}
+                  onChange={(e) =>
+                    setEditDraft((d) =>
+                      d ? { ...d, priority: e.target.value as TaskPriority } : d
+                    )
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                >
+                  <option value="high">عالية</option>
+                  <option value="medium">متوسطة</option>
+                  <option value="low">منخفضة</option>
+                </select>
+              </label>
+
+              <label className="block font-medium text-slate-700">
+                الحالة
+                <select
+                  value={editDraft.status}
+                  onChange={(e) =>
+                    setEditDraft((d) =>
+                      d ? { ...d, status: e.target.value as UnifiedTaskStatus } : d
+                    )
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                >
+                  <option value="todo">قيد الانتظار</option>
+                  <option value="in_progress">قيد التنفيذ</option>
+                  <option value="done">مكتملة</option>
+                </select>
+              </label>
+
+              <label className="block font-medium text-slate-700">
+                تاريخ الجدولة في التقويم
+                <input
+                  type="date"
+                  value={editDraft.scheduledDate}
+                  onChange={(e) =>
+                    setEditDraft((d) =>
+                      d ? { ...d, scheduledDate: e.target.value } : d
+                    )
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                />
+              </label>
+
+              <label className="block font-medium text-slate-700">
+                وقت البدء
+                <input
+                  type="time"
+                  value={editDraft.startTime}
+                  onChange={(e) =>
+                    setEditDraft((d) =>
+                      d ? { ...d, startTime: e.target.value } : d
+                    )
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                />
+              </label>
+
+              <label className="block font-medium text-slate-700">
+                المدة (بالدقائق)
+                <input
+                  type="number"
+                  min={15}
+                  max={720}
+                  step={15}
+                  value={editDraft.durationMinutes}
+                  onChange={(e) =>
+                    setEditDraft((d) =>
+                      d
+                        ? { ...d, durationMinutes: Number(e.target.value) || 60 }
+                        : d
+                    )
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                />
+              </label>
+
+              <label className="block font-medium text-slate-700">
+                الموعد النهائي (Deadline)
+                <input
+                  type="date"
+                  value={editDraft.deadline}
+                  onChange={(e) =>
+                    setEditDraft((d) => (d ? { ...d, deadline: e.target.value } : d))
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                />
+              </label>
+
+              <label className="block font-medium text-slate-700 sm:col-span-2">
+                ملاحظات وتفاصيل
+                <textarea
+                  rows={2}
+                  value={editDraft.description}
+                  onChange={(e) =>
+                    setEditDraft((d) =>
+                      d ? { ...d, description: e.target.value } : d
+                    )
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                />
+              </label>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200">
+              {editDraft.scheduledDate ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEditDraft((d) =>
+                      d ? { ...d, scheduledDate: '', startTime: '' } : d
+                    )
+                  }
+                  className="text-xs text-slate-600 underline cursor-pointer"
+                >
+                  إلغاء الجدولة وإعادتها لقائمة المهام غير المجدولة
+                </button>
+              ) : (
+                <span />
+              )}
+              <button
+                type="submit"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+              >
+                <Save className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>حفظ التعديلات</span>
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

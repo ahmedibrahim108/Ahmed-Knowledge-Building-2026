@@ -264,6 +264,7 @@ async function startServer() {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
+        allowedHosts: true,
         hmr: disableHmr ? false : { server: httpServer },
         ws: disableHmr ? false : { server: httpServer },
         watch: disableHmr ? null : undefined,

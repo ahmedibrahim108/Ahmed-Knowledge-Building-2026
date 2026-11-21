@@ -39,6 +39,9 @@ service cloud.firestore {
     function isValidOptionalDateKey(val) {
       return val is string && (val.size() == 0 || val.matches('^\\d{4}-\\d{2}-\\d{2}$'));
     }
+    function isValidOptionalTimeSlot(val) {
+      return val is string && (val.size() == 0 || val.matches('^\\d{1,2}:\\d{2}$'));
+    }
     function userExists(userId) {
       return exists(/databases/$(database)/documents/users/$(userId));
     }
@@ -290,7 +293,8 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'id', 'ownerId', 'noteFontSize', 'noteHighlightColor', 'notePaperTone',
           'autoAddTimestampOnVoice', 'voiceDialect', 'voiceInsertMode',
-          'readAloudVoice', 'readAloudSpeed', 'showExcelExport', 'hubCategories', 'updatedAt'
+          'readAloudVoice', 'readAloudSpeed', 'showExcelExport', 'hubCategories',
+          'calendarPrefs', 'updatedAt'
         ])
         && data.id == prefId
         && isValidId(data.id)
@@ -305,7 +309,8 @@ service cloud.firestore {
         && data.readAloudVoice in ['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr']
         && data.readAloudSpeed in ['normal', 'calm']
         && (!('showExcelExport' in data) || data.showExcelExport is bool)
-        && (!('hubCategories' in data) || data.hubCategories is map)
+        && (!('hubCategories' in data) || (data.hubCategories is map && data.hubCategories.keys().size() <= 10))
+        && (!('calendarPrefs' in data) || (data.calendarPrefs is map && data.calendarPrefs.keys().size() <= 16))
         && data.updatedAt is timestamp;
     }
 
@@ -337,8 +342,9 @@ service cloud.firestore {
           'notes', 'category', 'color', 'done', 'linkedTaskText', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'id', 'ownerId', 'dateKey', 'timeSlot', 'title',
-          'notes', 'category', 'color', 'done', 'linkedTaskText', 'updatedAt'
+          'id', 'ownerId', 'dateKey', 'timeSlot', 'endTime', 'durationMinutes',
+          'title', 'notes', 'category', 'color', 'done',
+          'linkedTaskText', 'linkedTaskId', 'updatedAt'
         ])
         && data.id == eventId
         && isValidId(data.id)
@@ -348,12 +354,15 @@ service cloud.firestore {
         && data.dateKey.size() == 10
         && data.dateKey.matches('^\\d{4}-\\d{2}-\\d{2}$')
         && isValidStr(data.timeSlot, 0, 20)
+        && (!('endTime' in data) || isValidOptionalTimeSlot(data.endTime))
+        && (!('durationMinutes' in data) || (data.durationMinutes is int && data.durationMinutes >= 0 && data.durationMinutes <= 1440))
         && isValidStr(data.title, 1, 200)
         && isValidStr(data.notes, 0, 2000)
         && data.category in ['شخصي', 'دراسة', 'موعد', 'مراجعة', 'قراءة']
         && data.color in ['navy', 'emerald', 'amber', 'rose']
         && data.done is bool
         && isValidStr(data.linkedTaskText, 0, 300)
+        && (!('linkedTaskId' in data) || isValidStr(data.linkedTaskId, 0, 128))
         && data.updatedAt is timestamp;
     }
 
@@ -465,7 +474,8 @@ service cloud.firestore {
       return data.keys().hasAll(['id', 'ownerId', 'title', 'hubId', 'priority', 'status', 'updatedAt'])
         && data.keys().hasOnly([
           'id', 'ownerId', 'title', 'description', 'hubId', 'categoryLabel',
-          'priority', 'status', 'dueDate', 'linkedLabel', 'updatedAt'
+          'priority', 'status', 'dueDate', 'scheduledDate', 'startTime',
+          'endTime', 'durationMinutes', 'deadline', 'projectId', 'linkedLabel', 'updatedAt'
         ])
         && data.id == taskId
         && isValidId(data.id)
@@ -478,6 +488,12 @@ service cloud.firestore {
         && data.priority in ['low', 'medium', 'high']
         && data.status in ['todo', 'in_progress', 'done']
         && (!('dueDate' in data) || isValidOptionalDateKey(data.dueDate))
+        && (!('scheduledDate' in data) || isValidOptionalDateKey(data.scheduledDate))
+        && (!('startTime' in data) || isValidOptionalTimeSlot(data.startTime))
+        && (!('endTime' in data) || isValidOptionalTimeSlot(data.endTime))
+        && (!('durationMinutes' in data) || (data.durationMinutes is int && data.durationMinutes >= 0 && data.durationMinutes <= 1440))
+        && (!('deadline' in data) || isValidOptionalDateKey(data.deadline))
+        && (!('projectId' in data) || isValidStr(data.projectId, 0, 128))
         && (!('linkedLabel' in data) || isValidStr(data.linkedLabel, 0, 200))
         && data.updatedAt is timestamp;
     }
@@ -509,10 +525,10 @@ service cloud.firestore {
 
     function isValidFileAttachment(data, userId, attachmentId) {
       return data.keys().hasAll([
-          'id', 'ownerId', 'fileName', 'mimeType', 'sizeBytes', 'dataUrl', 'updatedAt'
+          'id', 'ownerId', 'fileName', 'mimeType', 'sizeBytes', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'id', 'ownerId', 'fileName', 'mimeType', 'sizeBytes', 'dataUrl', 'updatedAt'
+          'id', 'ownerId', 'fileName', 'mimeType', 'sizeBytes', 'dataUrl', 'chunkCount', 'updatedAt'
         ])
         && data.id == attachmentId
         && isValidId(data.id)
@@ -520,8 +536,26 @@ service cloud.firestore {
         && data.ownerId == request.auth.uid
         && isValidStr(data.fileName, 1, 200)
         && isValidStr(data.mimeType, 1, 120)
-        && data.sizeBytes is int && data.sizeBytes >= 0 && data.sizeBytes <= 900000
-        && isValidStr(data.dataUrl, 1, 900000)
+        && data.sizeBytes is int && data.sizeBytes >= 0 && data.sizeBytes <= 10000000
+        && (!('dataUrl' in data) || isValidStr(data.dataUrl, 0, 900000))
+        && (!('chunkCount' in data) || (data.chunkCount is int && data.chunkCount >= 0 && data.chunkCount <= 60))
+        && (('dataUrl' in data && data.dataUrl.size() > 0) || ('chunkCount' in data && data.chunkCount >= 1))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBinaryChunk(data, userId, chunkId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'chunkIndex', 'data', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'chunkIndex', 'data', 'updatedAt'
+        ])
+        && data.id == chunkId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.chunkIndex is int && data.chunkIndex >= 0 && data.chunkIndex <= 200
+        && isValidStr(data.data, 1, 750000)
         && data.updatedAt is timestamp;
     }
 
@@ -531,7 +565,10 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'id', 'ownerId', 'voiceName', 'speed', 'mimeType', 'sizeBytes',
-          'storagePath', 'downloadUrl', 'inlineDataUrl', 'previewText', 'updatedAt'
+          'storagePath', 'downloadUrl', 'inlineDataUrl', 'previewText',
+          'entityType', 'entityId', 'title', 'contentHash',
+          'durationSeconds', 'lastPositionSeconds', 'playbackRate', 'chunkCount',
+          'updatedAt'
         ])
         && data.id == cacheId
         && isValidId(data.id)
@@ -545,6 +582,52 @@ service cloud.firestore {
         && (!('downloadUrl' in data) || isValidStr(data.downloadUrl, 0, 1200))
         && (!('inlineDataUrl' in data) || isValidStr(data.inlineDataUrl, 0, 800000))
         && (!('previewText' in data) || isValidStr(data.previewText, 0, 160))
+        && (!('entityType' in data) || data.entityType in ['note', 'month', 'course', 'summary', 'other'])
+        && (!('entityId' in data) || isValidStr(data.entityId, 0, 128))
+        && (!('title' in data) || isValidStr(data.title, 0, 200))
+        && (!('contentHash' in data) || isValidStr(data.contentHash, 0, 64))
+        && (!('durationSeconds' in data) || (data.durationSeconds is number && data.durationSeconds >= 0 && data.durationSeconds <= 86400))
+        && (!('lastPositionSeconds' in data) || (data.lastPositionSeconds is number && data.lastPositionSeconds >= 0 && data.lastPositionSeconds <= 86400))
+        && (!('playbackRate' in data) || (data.playbackRate is number && data.playbackRate >= 0.5 && data.playbackRate <= 3.0))
+        && (!('chunkCount' in data) || (data.chunkCount is int && data.chunkCount >= 0 && data.chunkCount <= 100))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWeeklyMeeting(data, userId, meetingId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'title', 'hubId', 'startDate', 'dayOfWeek',
+          'startTime', 'endTime', 'durationMinutes', 'isRecurringWeekly',
+          'color', 'status', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'title', 'description', 'hubId',
+          'startDate', 'dayOfWeek', 'startTime', 'endTime', 'durationMinutes',
+          'isRecurringWeekly', 'recurrenceEndDate', 'color', 'status',
+          'completedDates', 'attendanceByDate', 'notesByDate', 'followUps',
+          'linkedTaskIds', 'exceptions', 'updatedAt'
+        ])
+        && data.id == meetingId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && isValidStr(data.title, 1, 250)
+        && (!('description' in data) || isValidStr(data.description, 0, 2000))
+        && isValidHubId(data.hubId)
+        && data.startDate is string && data.startDate.size() == 10 && data.startDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.dayOfWeek is int && data.dayOfWeek >= 0 && data.dayOfWeek <= 6
+        && data.startTime is string && data.startTime.matches('^\\d{1,2}:\\d{2}$')
+        && data.endTime is string && data.endTime.matches('^\\d{1,2}:\\d{2}$')
+        && data.durationMinutes is int && data.durationMinutes >= 15 && data.durationMinutes <= 720
+        && data.isRecurringWeekly is bool
+        && (!('recurrenceEndDate' in data) || isValidOptionalDateKey(data.recurrenceEndDate))
+        && data.color in ['navy', 'emerald', 'amber', 'rose']
+        && data.status in ['scheduled', 'completed', 'cancelled']
+        && (!('completedDates' in data) || (data.completedDates is list && data.completedDates.size() <= 200))
+        && (!('attendanceByDate' in data) || (data.attendanceByDate is map && data.attendanceByDate.keys().size() <= 200))
+        && (!('notesByDate' in data) || (data.notesByDate is map && data.notesByDate.keys().size() <= 200))
+        && (!('followUps' in data) || (data.followUps is list && data.followUps.size() <= 80))
+        && (!('linkedTaskIds' in data) || (data.linkedTaskIds is list && data.linkedTaskIds.size() <= 80))
+        && (!('exceptions' in data) || (data.exceptions is map && data.exceptions.keys().size() <= 200))
         && data.updatedAt is timestamp;
     }
 
@@ -774,7 +857,8 @@ service cloud.firestore {
           && incoming().diff(existing()).affectedKeys().hasOnly([
             'noteFontSize', 'noteHighlightColor', 'notePaperTone',
             'autoAddTimestampOnVoice', 'voiceDialect', 'voiceInsertMode',
-            'readAloudVoice', 'readAloudSpeed', 'showExcelExport', 'hubCategories', 'updatedAt'
+            'readAloudVoice', 'readAloudSpeed', 'showExcelExport', 'hubCategories',
+            'calendarPrefs', 'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(prefId) && isOwner(userId) && isVerifiedUser();
       }
@@ -816,8 +900,8 @@ service cloud.firestore {
           && incoming().ownerId == existing().ownerId
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly([
-            'dateKey', 'timeSlot', 'title', 'notes', 'category',
-            'color', 'done', 'linkedTaskText', 'updatedAt'
+            'dateKey', 'timeSlot', 'endTime', 'durationMinutes', 'title', 'notes', 'category',
+            'color', 'done', 'linkedTaskText', 'linkedTaskId', 'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(eventId) && isOwner(userId) && isVerifiedUser();
       }
@@ -912,7 +996,8 @@ service cloud.firestore {
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly([
             'title', 'description', 'hubId', 'categoryLabel', 'priority',
-            'status', 'dueDate', 'linkedLabel', 'updatedAt'
+            'status', 'dueDate', 'scheduledDate', 'startTime', 'endTime',
+            'durationMinutes', 'deadline', 'projectId', 'linkedLabel', 'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(taskId) && isOwner(userId) && isVerifiedUser();
       }
@@ -955,9 +1040,27 @@ service cloud.firestore {
           && incoming().ownerId == existing().ownerId
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly([
-            'fileName', 'mimeType', 'sizeBytes', 'dataUrl', 'updatedAt'
+            'fileName', 'mimeType', 'sizeBytes', 'dataUrl', 'chunkCount', 'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(attachmentId) && isOwner(userId) && isVerifiedUser();
+
+        match /chunks/{chunkId} {
+          allow get: if isValidId(userId) && isValidId(attachmentId) && isValidId(chunkId) && isOwner(userId) && isVerifiedUser();
+          allow list: if isValidId(userId) && isValidId(attachmentId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+          allow create: if isValidId(userId) && isValidId(attachmentId) && isValidId(chunkId)
+            && isOwner(userId) && isVerifiedUser()
+            && isValidBinaryChunk(incoming(), userId, chunkId)
+            && incoming().updatedAt == request.time
+            && userExists(userId);
+          allow update: if isValidId(userId) && isValidId(attachmentId) && isValidId(chunkId)
+            && isOwner(userId) && isVerifiedUser()
+            && isValidBinaryChunk(incoming(), userId, chunkId)
+            && incoming().id == existing().id
+            && incoming().ownerId == existing().ownerId
+            && incoming().updatedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['chunkIndex', 'data', 'updatedAt']);
+          allow delete: if isValidId(userId) && isValidId(attachmentId) && isValidId(chunkId) && isOwner(userId) && isVerifiedUser();
+        }
       }
 
       // --- Cloud-Cached ReadAloud Audio Clips ---
@@ -977,9 +1080,55 @@ service cloud.firestore {
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly([
             'voiceName', 'speed', 'mimeType', 'sizeBytes',
-            'storagePath', 'downloadUrl', 'inlineDataUrl', 'previewText', 'updatedAt'
+            'storagePath', 'downloadUrl', 'inlineDataUrl', 'previewText',
+            'entityType', 'entityId', 'title', 'contentHash',
+            'durationSeconds', 'lastPositionSeconds', 'playbackRate', 'chunkCount',
+            'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(cacheId) && isOwner(userId) && isVerifiedUser();
+
+        match /chunks/{chunkId} {
+          allow get: if isValidId(userId) && isValidId(cacheId) && isValidId(chunkId) && isOwner(userId) && isVerifiedUser();
+          allow list: if isValidId(userId) && isValidId(cacheId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+          allow create: if isValidId(userId) && isValidId(cacheId) && isValidId(chunkId)
+            && isOwner(userId) && isVerifiedUser()
+            && isValidBinaryChunk(incoming(), userId, chunkId)
+            && incoming().updatedAt == request.time
+            && userExists(userId);
+          allow update: if isValidId(userId) && isValidId(cacheId) && isValidId(chunkId)
+            && isOwner(userId) && isVerifiedUser()
+            && isValidBinaryChunk(incoming(), userId, chunkId)
+            && incoming().id == existing().id
+            && incoming().ownerId == existing().ownerId
+            && incoming().updatedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['chunkIndex', 'data', 'updatedAt']);
+          allow delete: if isValidId(userId) && isValidId(cacheId) && isValidId(chunkId) && isOwner(userId) && isVerifiedUser();
+        }
+      }
+
+      // --- Interactive Weekly Meetings ---
+      match /weeklyMeetings/{meetingId} {
+        allow get: if isValidId(userId) && isValidId(meetingId) && isOwner(userId) && isVerifiedUser();
+        allow list: if isValidId(userId) && isOwner(userId) && isVerifiedUser() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(userId) && isValidId(meetingId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidWeeklyMeeting(incoming(), userId, meetingId)
+          && incoming().updatedAt == request.time
+          && userExists(userId);
+        allow update: if isValidId(userId) && isValidId(meetingId)
+          && isOwner(userId) && isVerifiedUser()
+          && isValidWeeklyMeeting(incoming(), userId, meetingId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'title', 'description', 'hubId', 'startDate', 'dayOfWeek',
+            'startTime', 'endTime', 'durationMinutes', 'isRecurringWeekly',
+            'recurrenceEndDate', 'color', 'status', 'completedDates',
+            'attendanceByDate', 'notesByDate', 'followUps', 'linkedTaskIds',
+            'exceptions', 'updatedAt'
+          ]);
+        allow delete: if isValidId(userId) && isValidId(meetingId) && isOwner(userId) && isVerifiedUser();
       }
 
       // --- Clinical Dental Cases ---

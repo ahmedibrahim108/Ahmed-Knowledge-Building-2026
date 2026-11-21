@@ -1,5 +1,15 @@
 import mammoth from 'mammoth';
-import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+  writeBatch,
+} from 'firebase/firestore';
 import { getBlob, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { BookNote } from '../data/curriculumData';
 import { auth, db, storage } from '../firebase';
@@ -62,7 +72,6 @@ export async function parseDocumentFile(
 
   if (lower.endsWith('.doc') || lower.endsWith('.html') || lower.endsWith('.htm')) {
     const raw = await file.text();
-    // Many .doc files are HTML/MIME Word docs or UTF-8 text
     if (raw.includes('<body') || raw.includes('<p') || raw.includes('<div')) {
       const bodyMatch = raw.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
       const htmlContent = bodyMatch ? bodyMatch[1] : raw;
@@ -85,7 +94,6 @@ export async function parseDocumentFile(
     };
   }
 
-  // Binary PDF or other file formats — attach metadata cleanly
   return {
     title: baseTitle,
     html: `<p><strong>مستند مرفق:</strong> ${escapeHtml(file.name)} (${Math.max(1, Math.round(file.size / 1024))} كيلوبايت)</p>`,
@@ -97,6 +105,7 @@ export async function parseDocumentFile(
 // --- Lightweight IndexedDB cache for locally attached files (PDF / Word / Docs) ---
 const IDB_NAME = 'mizan_attachments_db';
 const IDB_STORE = 'files';
+const PDF_CHUNK_CHAR_SIZE = 550_000;
 
 function openAttachmentsDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -106,9 +115,9 @@ function openAttachmentsDb(): Promise<IDBDatabase> {
     }
     const req = indexedDB.open(IDB_NAME, 1);
     req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(IDB_STORE)) {
-        db.createObjectStore(IDB_STORE);
+      const database = req.result;
+      if (!database.objectStoreNames.contains(IDB_STORE)) {
+        database.createObjectStore(IDB_STORE);
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -122,12 +131,12 @@ export async function saveLocalAttachment(
   fileName?: string
 ): Promise<void> {
   try {
-    const db = await openAttachmentsDb();
-    const tx = db.transaction(IDB_STORE, 'readwrite');
+    const database = await openAttachmentsDb();
+    const tx = database.transaction(IDB_STORE, 'readwrite');
     const resolvedName =
       file instanceof File ? file.name : fileName || 'document.pdf';
     tx.objectStore(IDB_STORE).put(
-      { blob: file, name: resolvedName, type: file.type },
+      { blob: file, name: resolvedName, type: file.type || 'application/pdf' },
       resourceId
     );
     await new Promise<void>((resolve, reject) => {
@@ -143,8 +152,8 @@ export async function getLocalAttachmentBlob(
   resourceId: string
 ): Promise<{ blob: Blob; name?: string; type?: string } | null> {
   try {
-    const db = await openAttachmentsDb();
-    const tx = db.transaction(IDB_STORE, 'readonly');
+    const database = await openAttachmentsDb();
+    const tx = database.transaction(IDB_STORE, 'readonly');
     const req = tx.objectStore(IDB_STORE).get(resourceId);
     const record = await new Promise<
       { blob: Blob; name?: string; type?: string } | undefined
@@ -176,7 +185,7 @@ export async function downloadLocalAttachment(
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     return true;
   } catch {
     return false;
@@ -200,13 +209,40 @@ function fileToDataUrl(file: Blob): Promise<string> {
   });
 }
 
-async function dataUrlToBlob(dataUrl: string): Promise<Blob | null> {
+function decodeDataUrlToBytes(dataUrl: string): Uint8Array | null {
   try {
-    const res = await fetch(dataUrl);
-    return await res.blob();
+    const commaIdx = dataUrl.indexOf(',');
+    if (commaIdx === -1) return null;
+    const base64 = dataUrl.slice(commaIdx + 1);
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) {
+      bytes[i] = bin.charCodeAt(i);
+    }
+    return bytes;
   } catch {
     return null;
   }
+}
+
+function normalizePdfBytes(raw: Uint8Array): { valid: boolean; bytes: Uint8Array; blob: Blob } {
+  const bytes = new Uint8Array(raw);
+  // Check for "%PDF-" within first 1024 bytes (handles BOM/leading whitespace)
+  let hasPdfMagic = false;
+  const checkLimit = Math.min(bytes.length - 4, 1024);
+  for (let i = 0; i <= checkLimit; i++) {
+    if (
+      bytes[i] === 0x25 && // %
+      bytes[i + 1] === 0x50 && // P
+      bytes[i + 2] === 0x44 && // D
+      bytes[i + 3] === 0x46 // F
+    ) {
+      hasPdfMagic = true;
+      break;
+    }
+  }
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  return { valid: hasPdfMagic && bytes.length > 32, bytes, blob };
 }
 
 export async function uploadResourceAttachment(
@@ -218,7 +254,6 @@ export async function uploadResourceAttachment(
     file.type ||
     (isPdfAttachment(file.name) ? 'application/pdf' : 'application/octet-stream');
 
-  // Always persist locally in IndexedDB for instant offline/in-app PDF viewing
   await saveLocalAttachment(resourceId, file, file.name);
 
   if (!uid) {
@@ -248,11 +283,12 @@ export async function uploadResourceAttachment(
     storagePath = undefined;
   }
 
-  // Also save smaller PDFs/docs directly in Firestore `attachments` for instant cross-device reliability
-  if (file.size <= 640 * 1024) {
+  // Persist PDFs <= 4.5MB directly in Firestore (single doc <= 640KB or chunked subcollection)
+  // so mobile Android Chrome never fails due to Storage CORS or blocked blob fetches.
+  if (file.size <= 4.5 * 1024 * 1024) {
     try {
       const dataUrl = await fileToDataUrl(file);
-      if (dataUrl.length <= 899_000) {
+      if (dataUrl.length <= 850_000) {
         await setDoc(doc(db, 'users', uid, 'attachments', safeId), {
           id: safeId,
           ownerId: uid,
@@ -260,8 +296,38 @@ export async function uploadResourceAttachment(
           mimeType: mimeType.slice(0, 120),
           sizeBytes: file.size,
           dataUrl,
+          chunkCount: 0,
           updatedAt: serverTimestamp(),
         });
+        uploadedToCloud = true;
+      } else if (dataUrl.length <= 8_000_000) {
+        const chunkCount = Math.ceil(dataUrl.length / PDF_CHUNK_CHAR_SIZE);
+        await setDoc(doc(db, 'users', uid, 'attachments', safeId), {
+          id: safeId,
+          ownerId: uid,
+          fileName: file.name.slice(0, 200),
+          mimeType: mimeType.slice(0, 120),
+          sizeBytes: file.size,
+          dataUrl: '',
+          chunkCount,
+          updatedAt: serverTimestamp(),
+        });
+        const batch = writeBatch(db);
+        for (let i = 0; i < chunkCount; i++) {
+          const chunkId = `chunk_${String(i).padStart(4, '0')}`;
+          const slice = dataUrl.slice(
+            i * PDF_CHUNK_CHAR_SIZE,
+            (i + 1) * PDF_CHUNK_CHAR_SIZE
+          );
+          batch.set(doc(db, 'users', uid, 'attachments', safeId, 'chunks', chunkId), {
+            id: chunkId,
+            ownerId: uid,
+            chunkIndex: i,
+            data: slice,
+            updatedAt: serverTimestamp(),
+          });
+        }
+        await batch.commit();
         uploadedToCloud = true;
       }
     } catch (err) {
@@ -278,28 +344,93 @@ export async function uploadResourceAttachment(
   };
 }
 
-export async function getPdfBlobForViewing(options: {
+export type PdfLoadResult =
+  | {
+      ok: true;
+      data: Uint8Array;
+      blob: Blob;
+      mimeType: string;
+      source: 'local' | 'firestore' | 'storage' | 'url';
+      sizeBytes: number;
+    }
+  | {
+      ok: false;
+      errorCode: 'NOT_FOUND' | 'INVALID_PDF' | 'NETWORK_OR_CORS' | 'PERMISSION';
+      message: string;
+      fallbackUrl?: string;
+    };
+
+/**
+ * Loads raw PDF bytes safely across Desktop & Android Chrome without relying on ephemeral blob URLs.
+ * Enforces application/pdf MIME, verifies %PDF magic bytes, and provides diagnostic error codes.
+ */
+export async function loadPdfBytesForViewing(options: {
   resourceId?: string;
   storagePath?: string;
   downloadUrl?: string;
-}): Promise<Blob | null> {
+}): Promise<PdfLoadResult> {
+  // 1. Local IndexedDB cache (fastest, offline-safe)
   if (options.resourceId) {
     const local = await getLocalAttachmentBlob(options.resourceId);
-    if (local?.blob) return local.blob;
+    if (local?.blob) {
+      const ab = await local.blob.arrayBuffer();
+      const norm = normalizePdfBytes(new Uint8Array(ab));
+      if (norm.valid) {
+        return {
+          ok: true,
+          data: norm.bytes,
+          blob: norm.blob,
+          mimeType: 'application/pdf',
+          source: 'local',
+          sizeBytes: norm.bytes.byteLength,
+        };
+      }
+    }
   }
 
+  // 2. Firestore attachments doc + chunks (completely bypasses Storage CORS on mobile browsers)
   const uid = auth?.currentUser?.uid;
   if (uid && options.resourceId) {
     try {
       const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
       const snap = await getDoc(doc(db, 'users', uid, 'attachments', safeId));
       if (snap.exists()) {
-        const raw = snap.data() as { dataUrl?: string; fileName?: string };
-        if (raw.dataUrl) {
-          const blob = await dataUrlToBlob(raw.dataUrl);
-          if (blob) {
-            await saveLocalAttachment(options.resourceId, blob, raw.fileName);
-            return blob;
+        const raw = snap.data() as {
+          dataUrl?: string;
+          chunkCount?: number;
+          fileName?: string;
+        };
+        let combinedDataUrl = raw.dataUrl || '';
+        if (!combinedDataUrl && raw.chunkCount && raw.chunkCount > 0) {
+          const chunksSnap = await getDocs(
+            query(
+              collection(db, 'users', uid, 'attachments', safeId, 'chunks'),
+              where('ownerId', '==', uid)
+            )
+          );
+          if (!chunksSnap.empty) {
+            combinedDataUrl = chunksSnap.docs
+              .map((d) => d.data() as { chunkIndex: number; data: string })
+              .sort((a, b) => a.chunkIndex - b.chunkIndex)
+              .map((c) => c.data)
+              .join('');
+          }
+        }
+        if (combinedDataUrl) {
+          const rawBytes = decodeDataUrlToBytes(combinedDataUrl);
+          if (rawBytes) {
+            const norm = normalizePdfBytes(rawBytes);
+            if (norm.valid) {
+              await saveLocalAttachment(options.resourceId, norm.blob, raw.fileName);
+              return {
+                ok: true,
+                data: norm.bytes,
+                blob: norm.blob,
+                mimeType: 'application/pdf',
+                source: 'firestore',
+                sizeBytes: norm.bytes.byteLength,
+              };
+            }
           }
         }
       }
@@ -308,34 +439,125 @@ export async function getPdfBlobForViewing(options: {
     }
   }
 
+  // 3. Firebase Storage SDK
+  let hadNetworkOrCorsError = false;
+  let hadPermissionError = false;
+
   if (options.storagePath) {
     try {
       const blob = await getBlob(ref(storage, options.storagePath));
-      if (options.resourceId && blob) {
-        await saveLocalAttachment(options.resourceId, blob);
+      const ab = await blob.arrayBuffer();
+      const norm = normalizePdfBytes(new Uint8Array(ab));
+      if (norm.valid) {
+        if (options.resourceId) {
+          await saveLocalAttachment(options.resourceId, norm.blob);
+        }
+        return {
+          ok: true,
+          data: norm.bytes,
+          blob: norm.blob,
+          mimeType: 'application/pdf',
+          source: 'storage',
+          sizeBytes: norm.bytes.byteLength,
+        };
       }
-      return blob;
+      return {
+        ok: false,
+        errorCode: 'INVALID_PDF',
+        message: 'الملف المسترجع من التخزين لا يبدو كملف PDF صالح.',
+        fallbackUrl: options.downloadUrl,
+      };
     } catch (err) {
+      const msg = err instanceof Error ? err.message.toLowerCase() : '';
+      if (msg.includes('unauthorized') || msg.includes('permission')) {
+        hadPermissionError = true;
+      } else {
+        hadNetworkOrCorsError = true;
+      }
       console.warn('Failed reading PDF via Storage SDK:', err);
     }
   }
 
+  // 4. Direct downloadUrl / external / local public asset URL
   if (options.downloadUrl) {
     try {
-      const res = await fetch(options.downloadUrl);
-      if (res.ok) {
-        const blob = await res.blob();
-        if (options.resourceId && blob) {
-          await saveLocalAttachment(options.resourceId, blob);
-        }
-        return blob;
+      const res = await fetch(options.downloadUrl, {
+        credentials: options.downloadUrl.startsWith('/') ? 'same-origin' : 'omit',
+      });
+      if (!res.ok) {
+        return {
+          ok: false,
+          errorCode: res.status === 401 || res.status === 403 ? 'PERMISSION' : 'NETWORK_OR_CORS',
+          message:
+            res.status === 401 || res.status === 403
+              ? 'ليست لديك صلاحية قراءة هذا الملف مباشرة عبر الرابط.'
+              : `تعذّر تحميل الملف من الخادم (رمز ${res.status}).`,
+          fallbackUrl: options.downloadUrl,
+        };
       }
+      const ab = await res.arrayBuffer();
+      const norm = normalizePdfBytes(new Uint8Array(ab));
+      if (!norm.valid) {
+        return {
+          ok: false,
+          errorCode: 'INVALID_PDF',
+          message:
+            'الرابط المرفق لم يرجع ملف PDF صالحًا (قد يكون صفحة ويب أو رابطًا يتطلب فتحه خارجيًا).',
+          fallbackUrl: options.downloadUrl,
+        };
+      }
+      if (options.resourceId) {
+        await saveLocalAttachment(options.resourceId, norm.blob);
+      }
+      return {
+        ok: true,
+        data: norm.bytes,
+        blob: norm.blob,
+        mimeType: 'application/pdf',
+        source: 'url',
+        sizeBytes: norm.bytes.byteLength,
+      };
     } catch (err) {
+      hadNetworkOrCorsError = true;
       console.warn('Failed fetching PDF URL:', err);
     }
   }
 
-  return null;
+  if (hadPermissionError) {
+    return {
+      ok: false,
+      errorCode: 'PERMISSION',
+      message: 'تعذّر الوصول للملف بسبب صلاحيات التخزين. تأكد من تسجيل الدخول بنفس الحساب المالك.',
+      fallbackUrl: options.downloadUrl,
+    };
+  }
+
+  if (hadNetworkOrCorsError) {
+    return {
+      ok: false,
+      errorCode: 'NETWORK_OR_CORS',
+      message:
+        'منع المتصفح تحميل الملف مباشرة عبر الشبكة (CORS أو انقطاع الاتصال). يمكنك تنزيله أو فتح الرابط الأصلي أدناه.',
+      fallbackUrl: options.downloadUrl,
+    };
+  }
+
+  return {
+    ok: false,
+    errorCode: 'NOT_FOUND',
+    message:
+      'تعذّر العثور على ملف PDF على هذا الجهاز أو في السحابة. إذا رُفع الملف على جهاز آخر قبل المزامنة، أعد رفعه أو تأكد من الاتصال.',
+    fallbackUrl: options.downloadUrl,
+  };
+}
+
+export async function getPdfBlobForViewing(options: {
+  resourceId?: string;
+  storagePath?: string;
+  downloadUrl?: string;
+}): Promise<Blob | null> {
+  const res = await loadPdfBytesForViewing(options);
+  return res.ok ? res.blob : null;
 }
 
 export async function downloadResourceAttachment(options: {
@@ -352,65 +574,29 @@ export async function downloadResourceAttachment(options: {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
   };
 
-  if (options.resourceId) {
-    const local = await getLocalAttachmentBlob(options.resourceId);
-    if (local?.blob) {
-      triggerBlobDownload(local.blob);
-      return true;
-    }
-  }
-
-  const uid = auth?.currentUser?.uid;
-  if (uid && options.resourceId) {
-    try {
-      const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
-      const snap = await getDoc(doc(db, 'users', uid, 'attachments', safeId));
-      if (snap.exists()) {
-        const raw = snap.data() as { dataUrl?: string };
-        if (raw.dataUrl) {
-          const blob = await dataUrlToBlob(raw.dataUrl);
-          if (blob) {
-            triggerBlobDownload(blob);
-            return true;
-          }
-        }
-      }
-    } catch {
-      // Fall through
-    }
-  }
-
-  if (options.storagePath) {
-    try {
-      const blob = await getBlob(ref(storage, options.storagePath));
-      triggerBlobDownload(blob);
-      return true;
-    } catch {
-      // Fall through to downloadUrl
-    }
+  const loaded = await loadPdfBytesForViewing({
+    resourceId: options.resourceId,
+    storagePath: options.storagePath,
+    downloadUrl: options.downloadUrl,
+  });
+  if (loaded.ok) {
+    triggerBlobDownload(loaded.blob);
+    return true;
   }
 
   if (options.downloadUrl) {
-    try {
-      const res = await fetch(options.downloadUrl);
-      if (res.ok) {
-        const blob = await res.blob();
-        triggerBlobDownload(blob);
-        return true;
-      }
-    } catch {
-      const a = document.createElement('a');
-      a.href = options.downloadUrl;
-      a.download = options.fileName || 'document.pdf';
-      a.rel = 'noopener noreferrer';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      return true;
-    }
+    const a = document.createElement('a');
+    a.href = options.downloadUrl;
+    a.download = options.fileName || 'document.pdf';
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    return true;
   }
 
   return false;
@@ -451,7 +637,7 @@ function triggerWordDownload(fileName: string, htmlDocument: string) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export function exportSingleBookNoteAsWord(note: BookNote): void {

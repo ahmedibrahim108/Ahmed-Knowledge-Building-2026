@@ -18,8 +18,10 @@ import {
   CalendarCategory,
   CalendarColor,
   CalendarEvent,
+  CalendarPreferences,
   CourseStudyStage,
   CustomCategory,
+  DEFAULT_CALENDAR_PREFERENCES,
   DEFAULT_HUB_CATEGORIES,
   DEFAULT_USER_PREFERENCES,
   DentalCase,
@@ -29,6 +31,7 @@ import {
   LearningPath,
   LearningPathStage,
   LearningPathStatus,
+  MeetingAttendanceStatus,
   MonthPlan,
   NoteColorKey,
   PersonalCourse,
@@ -48,6 +51,10 @@ import {
   UnifiedTask,
   UnifiedTaskStatus,
   UserPreferences,
+  WeeklyMeeting,
+  WeeklyMeetingException,
+  WeeklyMeetingFollowUp,
+  computeEndTimeFromMinutes,
 } from '../data/curriculumData';
 import { OperationType, db, handleFirestoreError } from '../firebase';
 
@@ -122,6 +129,57 @@ function sanitizeLearningMethods(raw: unknown): string[] {
 function sanitizeDateKeyOrEmpty(raw: unknown): string {
   if (typeof raw !== 'string') return '';
   return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : '';
+}
+
+function sanitizeTimeSlotOrEmpty(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  return /^\d{1,2}:\d{2}$/.test(trimmed) ? trimmed : '';
+}
+
+function sanitizeCalendarPrefs(raw?: Partial<CalendarPreferences>): CalendarPreferences {
+  const defaultView =
+    raw?.defaultView === 'day' ||
+    raw?.defaultView === 'week' ||
+    raw?.defaultView === 'month' ||
+    raw?.defaultView === 'year'
+      ? raw.defaultView
+      : DEFAULT_CALENDAR_PREFERENCES.defaultView;
+  const density =
+    raw?.density === 'compact' || raw?.density === 'expanded'
+      ? raw.density
+      : DEFAULT_CALENDAR_PREFERENCES.density;
+  const weekStartDay =
+    raw?.weekStartDay === 0 || raw?.weekStartDay === 1 || raw?.weekStartDay === 6
+      ? raw.weekStartDay
+      : DEFAULT_CALENDAR_PREFERENCES.weekStartDay;
+  const filterHub =
+    raw &&
+    (raw.filterHub === 'all' ||
+      VALID_HUB_IDS.includes(raw.filterHub as LearningHubId))
+      ? (raw.filterHub as LearningHubId | 'all')
+      : 'all';
+  const filterPriority =
+    raw?.filterPriority === 'low' ||
+    raw?.filterPriority === 'medium' ||
+    raw?.filterPriority === 'high'
+      ? raw.filterPriority
+      : 'all';
+  const filterStatus =
+    raw?.filterStatus === 'pending' || raw?.filterStatus === 'done'
+      ? raw.filterStatus
+      : 'all';
+
+  return {
+    defaultView,
+    density,
+    showCompleted: raw?.showCompleted !== false,
+    showWeekends: raw?.showWeekends !== false,
+    weekStartDay,
+    filterHub,
+    filterPriority,
+    filterStatus,
+  };
 }
 
 function buildQuarterPayload(uid: string, q: QuarterInfo) {
@@ -391,18 +449,31 @@ function buildCalendarEventPayload(uid: string, ev: CalendarEvent) {
   const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(ev.dateKey || '')
     ? ev.dateKey
     : new Date().toISOString().slice(0, 10);
+  const timeSlot = clip(ev.timeSlot || '', 20);
+  const durationMinutes =
+    typeof ev.durationMinutes === 'number' && ev.durationMinutes > 0
+      ? Math.max(15, Math.min(1440, Math.round(ev.durationMinutes)))
+      : timeSlot
+      ? 60
+      : 0;
+  const endTime =
+    sanitizeTimeSlotOrEmpty(ev.endTime) ||
+    (timeSlot && durationMinutes > 0 ? computeEndTimeFromMinutes(timeSlot, durationMinutes) : '');
 
   return {
     id,
     ownerId: uid,
     dateKey,
-    timeSlot: clip(ev.timeSlot || '', 20),
+    timeSlot,
+    endTime,
+    durationMinutes,
     title: clip(ev.title || 'موعد', 200),
     notes: clip(ev.notes || '', 2000),
     category,
     color,
     done: Boolean(ev.done),
     linkedTaskText: clip(ev.linkedTaskText || '', 300),
+    linkedTaskId: clip(ev.linkedTaskId || '', 128),
     updatedAt: serverTimestamp(),
   };
 }
@@ -474,6 +545,7 @@ function buildUserPreferencesPayload(uid: string, prefs: UserPreferences) {
     readAloudSpeed,
     showExcelExport: prefs.showExcelExport !== false,
     hubCategories: sanitizeHubCategories(prefs.hubCategories),
+    calendarPrefs: sanitizeCalendarPrefs(prefs.calendarPrefs),
     updatedAt: serverTimestamp(),
   };
 }
@@ -595,6 +667,22 @@ function buildUnifiedTaskPayload(uid: string, t: UnifiedTask) {
     t.priority === 'low' || t.priority === 'high' ? t.priority : 'medium';
   const status: UnifiedTaskStatus =
     t.status === 'in_progress' || t.status === 'done' ? t.status : 'todo';
+  const scheduledDate = sanitizeDateKeyOrEmpty(t.scheduledDate ?? '');
+  const startTime = sanitizeTimeSlotOrEmpty(t.startTime ?? '');
+  const durationMinutes =
+    typeof t.durationMinutes === 'number' && t.durationMinutes > 0
+      ? Math.max(15, Math.min(1440, Math.round(t.durationMinutes)))
+      : startTime
+      ? 60
+      : 0;
+  const endTime =
+    sanitizeTimeSlotOrEmpty(t.endTime ?? '') ||
+    (startTime && durationMinutes > 0
+      ? computeEndTimeFromMinutes(startTime, durationMinutes)
+      : '');
+  const deadline = sanitizeDateKeyOrEmpty(t.deadline ?? t.dueDate ?? '');
+  const dueDate = sanitizeDateKeyOrEmpty(t.dueDate || deadline || scheduledDate || '');
+
   return {
     id,
     ownerId: uid,
@@ -604,8 +692,127 @@ function buildUnifiedTaskPayload(uid: string, t: UnifiedTask) {
     categoryLabel: clip(t.categoryLabel, 120),
     priority,
     status,
-    dueDate: sanitizeDateKeyOrEmpty(t.dueDate),
+    dueDate,
+    scheduledDate,
+    startTime,
+    endTime,
+    durationMinutes,
+    deadline,
+    projectId: clip(t.projectId || '', 128),
     linkedLabel: clip(t.linkedLabel, 200),
+    updatedAt: serverTimestamp(),
+  };
+}
+
+function buildWeeklyMeetingPayload(uid: string, m: WeeklyMeeting) {
+  const id = sanitizeId(m.id);
+  const startDate = /^\d{4}-\d{2}-\d{2}$/.test(m.startDate || '')
+    ? m.startDate
+    : new Date().toISOString().slice(0, 10);
+  const parsedStart = new Date(`${startDate}T00:00:00`);
+  const dayOfWeek =
+    typeof m.dayOfWeek === 'number' && m.dayOfWeek >= 0 && m.dayOfWeek <= 6
+      ? Math.round(m.dayOfWeek)
+      : Number.isNaN(parsedStart.getTime())
+      ? 6
+      : parsedStart.getDay();
+  const startTime = sanitizeTimeSlotOrEmpty(m.startTime) || '18:00';
+  const durationMinutes = Math.max(15, Math.min(720, Math.round(m.durationMinutes || 60)));
+  const endTime =
+    sanitizeTimeSlotOrEmpty(m.endTime) ||
+    computeEndTimeFromMinutes(startTime, durationMinutes);
+  const color: CalendarColor =
+    m.color === 'emerald' || m.color === 'amber' || m.color === 'rose'
+      ? m.color
+      : 'navy';
+  const status: WeeklyMeeting['status'] =
+    m.status === 'completed' || m.status === 'cancelled' ? m.status : 'scheduled';
+
+  const completedDates = Array.from(
+    new Set((m.completedDates || []).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))
+  ).slice(0, 200);
+
+  const attendanceByDate: Record<string, MeetingAttendanceStatus> = {};
+  Object.entries(m.attendanceByDate || {})
+    .slice(0, 200)
+    .forEach(([k, v]) => {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(k)) {
+        attendanceByDate[k] =
+          v === 'attended' || v === 'missed' || v === 'excused' ? v : 'pending';
+      }
+    });
+
+  const notesByDate: Record<string, string> = {};
+  Object.entries(m.notesByDate || {})
+    .slice(0, 200)
+    .forEach(([k, v]) => {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(k) && typeof v === 'string') {
+        notesByDate[k] = clip(v, 3000);
+      }
+    });
+
+  const followUps: WeeklyMeetingFollowUp[] = (m.followUps || [])
+    .slice(0, 80)
+    .map((f) => ({
+      id: clip(f.id || `fu-${Date.now()}`, 64),
+      text: clip(f.text || '', 300),
+      done: Boolean(f.done),
+      ...(f.occurrenceDate && /^\d{4}-\d{2}-\d{2}$/.test(f.occurrenceDate)
+        ? { occurrenceDate: f.occurrenceDate }
+        : {}),
+      ...(f.linkedTaskId ? { linkedTaskId: clip(f.linkedTaskId, 128) } : {}),
+    }))
+    .filter((f) => f.text.length > 0);
+
+  const linkedTaskIds = Array.from(
+    new Set((m.linkedTaskIds || []).map((idVal) => clip(idVal, 128)).filter(Boolean))
+  ).slice(0, 80);
+
+  const exceptions: Record<string, WeeklyMeetingException> = {};
+  Object.entries(m.exceptions || {})
+    .slice(0, 200)
+    .forEach(([k, ex]) => {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(k) && ex && typeof ex === 'object') {
+        exceptions[k] = {
+          ...(typeof ex.cancelled === 'boolean' ? { cancelled: ex.cancelled } : {}),
+          ...(ex.movedDateKey && /^\d{4}-\d{2}-\d{2}$/.test(ex.movedDateKey)
+            ? { movedDateKey: ex.movedDateKey }
+            : {}),
+          ...(ex.startTime && /^\d{1,2}:\d{2}$/.test(ex.startTime)
+            ? { startTime: ex.startTime }
+            : {}),
+          ...(ex.endTime && /^\d{1,2}:\d{2}$/.test(ex.endTime)
+            ? { endTime: ex.endTime }
+            : {}),
+          ...(typeof ex.durationMinutes === 'number' && ex.durationMinutes >= 15
+            ? { durationMinutes: Math.min(720, Math.round(ex.durationMinutes)) }
+            : {}),
+          ...(ex.title ? { title: clip(ex.title, 250) } : {}),
+        };
+      }
+    });
+
+  return {
+    id,
+    ownerId: uid,
+    title: clip(m.title || 'اجتماع أسبوعي', 250),
+    description: clip(m.description || '', 2000),
+    hubId: sanitizeHubId(m.hubId),
+    startDate,
+    dayOfWeek,
+    startTime,
+    endTime,
+    durationMinutes,
+    isRecurringWeekly: Boolean(m.isRecurringWeekly),
+    recurrenceEndDate: sanitizeDateKeyOrEmpty(m.recurrenceEndDate ?? ''),
+    color,
+    status,
+    completedDates,
+    attendanceByDate,
+    notesByDate,
+    followUps,
+    linkedTaskIds,
+    exceptions,
     updatedAt: serverTimestamp(),
   };
 }
@@ -771,6 +978,7 @@ export function subscribeUserWorkspace(
     onProjects?: (items: PracticalProject[]) => void;
     onUnifiedTasks?: (items: UnifiedTask[]) => void;
     onDentalCases?: (items: DentalCase[]) => void;
+    onWeeklyMeetings?: (items: WeeklyMeeting[]) => void;
   }
 ): () => void {
   const unsubQuarters = onSnapshot(
@@ -979,6 +1187,7 @@ export function subscribeUserWorkspace(
         ...raw,
         showExcelExport: raw.showExcelExport !== false,
         hubCategories: sanitizeHubCategories(raw.hubCategories),
+        calendarPrefs: sanitizeCalendarPrefs(raw.calendarPrefs),
       });
     },
     (err) =>
@@ -1044,12 +1253,18 @@ export function subscribeUserWorkspace(
             id: String(raw.id ?? d.id),
             dateKey: String(raw.dateKey ?? ''),
             timeSlot: String(raw.timeSlot ?? ''),
+            endTime: raw.endTime ? String(raw.endTime) : '',
+            durationMinutes:
+              typeof raw.durationMinutes === 'number'
+                ? raw.durationMinutes
+                : undefined,
             title: String(raw.title ?? ''),
             notes: String(raw.notes ?? ''),
             category,
             color,
             done: Boolean(raw.done),
             linkedTaskText: String(raw.linkedTaskText ?? ''),
+            linkedTaskId: raw.linkedTaskId ? String(raw.linkedTaskId) : undefined,
           } satisfies CalendarEvent;
         })
         .sort((a, b) => {
@@ -1199,6 +1414,15 @@ export function subscribeUserWorkspace(
               ? (raw.status as UnifiedTaskStatus)
               : 'todo',
           dueDate: String(raw.dueDate ?? ''),
+          scheduledDate: raw.scheduledDate ? String(raw.scheduledDate) : '',
+          startTime: raw.startTime ? String(raw.startTime) : '',
+          endTime: raw.endTime ? String(raw.endTime) : '',
+          durationMinutes:
+            typeof raw.durationMinutes === 'number' && raw.durationMinutes > 0
+              ? raw.durationMinutes
+              : undefined,
+          deadline: raw.deadline ? String(raw.deadline) : '',
+          projectId: raw.projectId ? String(raw.projectId) : '',
           linkedLabel: raw.linkedLabel ? String(raw.linkedLabel) : undefined,
         } satisfies UnifiedTask;
       });
@@ -1206,6 +1430,66 @@ export function subscribeUserWorkspace(
     },
     (err) =>
       handleFirestoreError(err, OperationType.LIST, `users/${uid}/unifiedTasks`)
+  );
+
+  const unsubWeeklyMeetings = onSnapshot(
+    query(collection(db, 'users', uid, 'weeklyMeetings'), where('ownerId', '==', uid)),
+    (snap) => {
+      if (!callbacks.onWeeklyMeetings) return;
+      const list = snap.docs
+        .map((d) => {
+          const raw = d.data() as Record<string, unknown>;
+          const colRaw = String(raw.color ?? 'navy');
+          const color: CalendarColor =
+            colRaw === 'emerald' || colRaw === 'amber' || colRaw === 'rose'
+              ? colRaw
+              : 'navy';
+          const status: WeeklyMeeting['status'] =
+            raw.status === 'completed' || raw.status === 'cancelled'
+              ? raw.status
+              : 'scheduled';
+          return {
+            id: String(raw.id ?? d.id),
+            title: String(raw.title ?? ''),
+            description: String(raw.description ?? ''),
+            hubId: sanitizeHubId(raw.hubId),
+            startDate: String(raw.startDate ?? ''),
+            dayOfWeek: Number(raw.dayOfWeek ?? 6),
+            startTime: String(raw.startTime ?? '18:00'),
+            endTime: String(raw.endTime ?? '19:00'),
+            durationMinutes: Number(raw.durationMinutes ?? 60),
+            isRecurringWeekly: Boolean(raw.isRecurringWeekly),
+            recurrenceEndDate: String(raw.recurrenceEndDate ?? ''),
+            color,
+            status,
+            completedDates: Array.isArray(raw.completedDates)
+              ? (raw.completedDates as string[])
+              : [],
+            attendanceByDate:
+              raw.attendanceByDate && typeof raw.attendanceByDate === 'object'
+                ? (raw.attendanceByDate as Record<string, MeetingAttendanceStatus>)
+                : {},
+            notesByDate:
+              raw.notesByDate && typeof raw.notesByDate === 'object'
+                ? (raw.notesByDate as Record<string, string>)
+                : {},
+            followUps: Array.isArray(raw.followUps)
+              ? (raw.followUps as WeeklyMeetingFollowUp[])
+              : [],
+            linkedTaskIds: Array.isArray(raw.linkedTaskIds)
+              ? (raw.linkedTaskIds as string[])
+              : [],
+            exceptions:
+              raw.exceptions && typeof raw.exceptions === 'object'
+                ? (raw.exceptions as Record<string, WeeklyMeetingException>)
+                : {},
+          } satisfies WeeklyMeeting;
+        })
+        .sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+      callbacks.onWeeklyMeetings(list);
+    },
+    (err) =>
+      handleFirestoreError(err, OperationType.LIST, `users/${uid}/weeklyMeetings`)
   );
 
   const unsubDentalCases = onSnapshot(
@@ -1263,6 +1547,7 @@ export function subscribeUserWorkspace(
     unsubReading();
     unsubProjects();
     unsubUnifiedTasks();
+    unsubWeeklyMeetings();
     unsubDentalCases();
   };
 }
@@ -1613,6 +1898,32 @@ export async function deleteDentalCaseDoc(
   const path = `users/${uid}/dentalCases/${id}`;
   try {
     await deleteDoc(doc(db, 'users', uid, 'dentalCases', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function saveWeeklyMeetingDoc(
+  uid: string,
+  meeting: WeeklyMeeting
+): Promise<void> {
+  const p = buildWeeklyMeetingPayload(uid, meeting);
+  const path = `users/${uid}/weeklyMeetings/${p.id}`;
+  try {
+    await setDoc(doc(db, 'users', uid, 'weeklyMeetings', p.id), p);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteWeeklyMeetingDoc(
+  uid: string,
+  meetingId: string
+): Promise<void> {
+  const id = sanitizeId(meetingId);
+  const path = `users/${uid}/weeklyMeetings/${id}`;
+  try {
+    await deleteDoc(doc(db, 'users', uid, 'weeklyMeetings', id));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }

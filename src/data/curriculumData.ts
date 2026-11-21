@@ -567,7 +567,13 @@ export interface UnifiedTask {
   categoryLabel: string;
   priority: TaskPriority;
   status: UnifiedTaskStatus;
-  dueDate: string;
+  dueDate: string; // legacy/sync alias or target date
+  scheduledDate?: string; // YYYY-MM-DD (empty string = unscheduled)
+  startTime?: string; // HH:mm
+  endTime?: string; // HH:mm
+  durationMinutes?: number; // e.g. 60
+  deadline?: string; // YYYY-MM-DD optional deadline
+  projectId?: string;
   linkedLabel?: string;
 }
 
@@ -613,12 +619,194 @@ export interface CalendarEvent {
   id: string;
   dateKey: string; // YYYY-MM-DD
   timeSlot: string;
+  endTime?: string;
+  durationMinutes?: number;
   title: string;
   notes: string;
   category: CalendarCategory;
   color: CalendarColor;
   done: boolean;
   linkedTaskText?: string;
+  linkedTaskId?: string;
+}
+
+export type CalendarViewMode = 'day' | 'week' | 'month' | 'year';
+export type CalendarDensity = 'compact' | 'expanded';
+export type WeekStartDay = 6 | 0 | 1; // 6=Sat, 0=Sun, 1=Mon
+
+export interface CalendarPreferences {
+  defaultView: CalendarViewMode;
+  density: CalendarDensity;
+  showCompleted: boolean;
+  showWeekends: boolean;
+  weekStartDay: WeekStartDay;
+  filterHub: LearningHubId | 'all';
+  filterPriority: TaskPriority | 'all';
+  filterStatus: 'all' | 'pending' | 'done';
+}
+
+export const DEFAULT_CALENDAR_PREFERENCES: CalendarPreferences = {
+  defaultView: 'week',
+  density: 'expanded',
+  showCompleted: true,
+  showWeekends: true,
+  weekStartDay: 6,
+  filterHub: 'all',
+  filterPriority: 'all',
+  filterStatus: 'all',
+};
+
+export type MeetingAttendanceStatus = 'pending' | 'attended' | 'missed' | 'excused';
+
+export interface WeeklyMeetingFollowUp {
+  id: string;
+  text: string;
+  done: boolean;
+  occurrenceDate?: string;
+  linkedTaskId?: string;
+}
+
+export interface WeeklyMeetingException {
+  cancelled?: boolean;
+  movedDateKey?: string;
+  startTime?: string;
+  endTime?: string;
+  durationMinutes?: number;
+  title?: string;
+}
+
+export interface WeeklyMeeting {
+  id: string;
+  title: string;
+  description: string;
+  hubId: LearningHubId;
+  startDate: string; // YYYY-MM-DD anchor date
+  dayOfWeek: number; // 0 (Sun) - 6 (Sat)
+  startTime: string; // HH:mm
+  endTime: string; // HH:mm
+  durationMinutes: number;
+  isRecurringWeekly: boolean;
+  recurrenceEndDate?: string; // YYYY-MM-DD or ''
+  color: CalendarColor;
+  status: 'scheduled' | 'completed' | 'cancelled';
+  completedDates: string[];
+  attendanceByDate: Record<string, MeetingAttendanceStatus>;
+  notesByDate: Record<string, string>;
+  followUps: WeeklyMeetingFollowUp[];
+  linkedTaskIds: string[];
+  exceptions: Record<string, WeeklyMeetingException>;
+}
+
+export interface WeeklyMeetingOccurrence {
+  meeting: WeeklyMeeting;
+  occurrenceKey: string; // canonical dateKey on series (YYYY-MM-DD)
+  dateKey: string; // effective dateKey (after movedDateKey override)
+  title: string;
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  completed: boolean;
+  attendance: MeetingAttendanceStatus;
+  notes: string;
+}
+
+export function computeEndTimeFromMinutes(startTime: string, durationMinutes: number): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(startTime.trim());
+  if (!m) return '';
+  const startTotal = Math.max(0, Math.min(23 * 60 + 59, Number(m[1]) * 60 + Number(m[2])));
+  const endTotal = Math.min(23 * 60 + 59, startTotal + Math.max(15, durationMinutes));
+  const hh = String(Math.floor(endTotal / 60)).padStart(2, '0');
+  const mm = String(endTotal % 60).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+export function expandWeeklyMeetingsInRange(
+  meetings: WeeklyMeeting[],
+  rangeStartKey: string,
+  rangeEndKey: string
+): WeeklyMeetingOccurrence[] {
+  const results: WeeklyMeetingOccurrence[] = [];
+  const parseDate = (key: string) => {
+    const [y, m, d] = key.split('-').map(Number);
+    return new Date(y || 2026, (m || 1) - 1, d || 1);
+  };
+  const rangeStart = parseDate(rangeStartKey);
+  const rangeEnd = parseDate(rangeEndKey);
+  if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime())) {
+    return results;
+  }
+
+  for (const mtg of meetings) {
+    if (!mtg.startDate || mtg.status === 'cancelled') continue;
+    const anchor = parseDate(mtg.startDate);
+    if (Number.isNaN(anchor.getTime())) continue;
+    const recEnd =
+      mtg.recurrenceEndDate && /^\d{4}-\d{2}-\d{2}$/.test(mtg.recurrenceEndDate)
+        ? parseDate(mtg.recurrenceEndDate)
+        : null;
+
+    const pushOccurrence = (canonDateKey: string) => {
+      const ex = mtg.exceptions?.[canonDateKey];
+      if (ex?.cancelled) return;
+      const effDate = ex?.movedDateKey && /^\d{4}-\d{2}-\d{2}$/.test(ex.movedDateKey)
+        ? ex.movedDateKey
+        : canonDateKey;
+      if (effDate < rangeStartKey || effDate > rangeEndKey) return;
+      const effDuration = ex?.durationMinutes ?? mtg.durationMinutes ?? 60;
+      const effStart = ex?.startTime ?? mtg.startTime ?? '18:00';
+      const effEnd = ex?.endTime ?? mtg.endTime ?? computeEndTimeFromMinutes(effStart, effDuration);
+      const completed = (mtg.completedDates || []).includes(canonDateKey) || mtg.status === 'completed';
+      const attendance = mtg.attendanceByDate?.[canonDateKey] ?? (completed ? 'attended' : 'pending');
+      const notes = mtg.notesByDate?.[canonDateKey] ?? '';
+      results.push({
+        meeting: mtg,
+        occurrenceKey: canonDateKey,
+        dateKey: effDate,
+        title: ex?.title || mtg.title,
+        startTime: effStart,
+        endTime: effEnd,
+        durationMinutes: effDuration,
+        completed,
+        attendance,
+        notes,
+      });
+    };
+
+    if (!mtg.isRecurringWeekly) {
+      pushOccurrence(mtg.startDate);
+      continue;
+    }
+
+    // Iterate weekly steps covering [rangeStart - 7d, rangeEnd + 7d] so movedDateKey exceptions in window are included
+    const cursor = new Date(anchor.getTime());
+    const minWindow = new Date(rangeStart.getTime());
+    minWindow.setDate(minWindow.getDate() - 7);
+    const maxWindow = new Date(rangeEnd.getTime());
+    maxWindow.setDate(maxWindow.getDate() + 7);
+
+    if (cursor < minWindow) {
+      const diffDays = Math.floor((minWindow.getTime() - cursor.getTime()) / 86400000);
+      const weeks = Math.floor(diffDays / 7);
+      cursor.setDate(cursor.getDate() + weeks * 7);
+    }
+
+    let guard = 0;
+    while (cursor <= maxWindow && guard < 120) {
+      guard += 1;
+      if (cursor >= anchor && (!recEnd || cursor <= recEnd)) {
+        const y = cursor.getFullYear();
+        const m = String(cursor.getMonth() + 1).padStart(2, '0');
+        const d = String(cursor.getDate()).padStart(2, '0');
+        pushOccurrence(`${y}-${m}-${d}`);
+      }
+      cursor.setDate(cursor.getDate() + 7);
+    }
+  }
+
+  return results.sort((a, b) => {
+    if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey);
+    return (a.startTime || '').localeCompare(b.startTime || '');
+  });
 }
 
 export type HighlightColorKey = 'amber' | 'emerald' | 'sky' | 'rose';
@@ -637,6 +825,7 @@ export interface UserPreferences {
   readAloudSpeed: 'normal' | 'calm';
   showExcelExport?: boolean;
   hubCategories?: Record<LearningHubId, string[]>;
+  calendarPrefs?: CalendarPreferences;
 }
 
 export const DEFAULT_HUB_CATEGORIES: Record<LearningHubId, string[]> = {
@@ -656,6 +845,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   readAloudSpeed: 'normal',
   showExcelExport: true,
   hubCategories: DEFAULT_HUB_CATEGORIES,
+  calendarPrefs: DEFAULT_CALENDAR_PREFERENCES,
 };
 
 export interface WeeklyRhythmSlot {

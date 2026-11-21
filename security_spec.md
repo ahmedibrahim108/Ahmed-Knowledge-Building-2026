@@ -1,11 +1,11 @@
 # Security Specification — ميزان المعرفة (Firestore Rules)
 
 ## 1. Data Invariants
-1. All curriculum data (`quarters`, `months`, `domains`, `courses`, `bookNotes`) is strictly private to the authenticated, email-verified user (`request.auth.uid == userId && request.auth.token.email_verified == true`).
+1. All curriculum and workspace data (`quarters`, `months`, `domains`, `courses`, `bookNotes`, `unifiedTasks`, `calendarEvents`, `weeklyMeetings`, `audioCache`, `attachments`, and `chunks` subcollections) is strictly private to the authenticated, email-verified user (`request.auth.uid == userId && request.auth.token.email_verified == true`).
 2. Every subcollection document MUST contain `ownerId == request.auth.uid`, validated on both `create` and `update`, and `ownerId` is immutable after creation.
 3. Every subcollection `create` verifies parent `/users/{userId}` document existence via `exists(...)` (Master Gate).
 4. Every document ID and user ID must match `^[a-zA-Z0-9_\-]+$` with length `<= 128` (`isValidId`).
-5. Every string field has strict `.size()` bounds and arrays (`tasks`, `resources`, `thinkers`, `linkedMonths`) have bounded `.size()` caps to prevent resource exhaustion.
+5. Every string field has strict `.size()` bounds and arrays (`tasks`, `resources`, `thinkers`, `linkedMonths`, `completedDates`, `followUps`, `linkedTaskIds`) and maps (`calendarPrefs`, `attendanceByDate`, `notesByDate`, `exceptions`) have bounded `.size()` caps to prevent resource exhaustion.
 6. All `createdAt` / `updatedAt` timestamps must strictly equal `request.time`.
 7. Top-level `/users` list queries are explicitly denied (`allow list: if false`) to prevent user enumeration or PII leakage.
 

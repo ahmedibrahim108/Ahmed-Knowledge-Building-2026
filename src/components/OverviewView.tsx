@@ -1,14 +1,18 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
   ArrowLeft,
   BookOpen,
   CalendarDays,
   CheckCircle2,
+  CheckSquare,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Compass,
   Edit3,
   Feather,
+  FileText,
   FolderPlus,
   GraduationCap,
   Headphones,
@@ -19,18 +23,24 @@ import {
   LogIn,
   MessageSquare,
   NotebookPen,
+  Pause,
   PenLine,
   Pin,
+  Play,
   Plus,
   Repeat,
   ShieldCheck,
   Sparkles,
+  Square,
   Tag,
   Trash2,
+  Users,
+  Volume2,
   X,
 } from 'lucide-react';
 import {
   BookNote,
+  CalendarEvent,
   CustomCategory,
   DEFAULT_HUB_CATEGORIES,
   DentalCase,
@@ -52,17 +62,27 @@ import {
   UserPreferences,
   VoiceDialectMode,
   WEEKLY_RHYTHM,
+  WeeklyMeeting,
+  addDaysToDateKey,
+  expandWeeklyMeetingsInRange,
   getHubMeta,
   getTodayDateKey,
   resolveCourseStudyStage,
 } from '../data/curriculumData';
 import { OWNER_ADMIN_EMAIL } from '../firebase';
+import {
+  SavedAudioClipSummary,
+  listUserAudioClips,
+  loadAudioClipById,
+} from '../utils/audioCache';
 import { moveImagesScope } from '../utils/imageStorage';
 import ConfirmDialog from './ConfirmDialog';
 import { ActiveTab } from './Header';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
+import type { ActivePdfTarget } from './PDFViewerModal';
 import ProgressCharts from './ProgressCharts';
 import VoiceRecorderButton from './VoiceRecorderButton';
+import WeeklyMeetingsPanel from './WeeklyMeetingsPanel';
 
 interface OverviewViewProps {
   user: User | null;
@@ -84,6 +104,8 @@ interface OverviewViewProps {
   customCategories: CustomCategory[];
   history: StudyHistoryEntry[];
   reflections: PersonalReflection[];
+  calendarEvents?: CalendarEvent[];
+  weeklyMeetings?: WeeklyMeeting[];
   onGoogleSignIn: () => void;
   onNavigateTab: (tab: ActiveTab) => void;
   onSelectHub: (hub: LearningHubId, targetTab: ActiveTab) => void;
@@ -92,6 +114,12 @@ interface OverviewViewProps {
   onFilterByDomain: (domainId: DomainId) => void;
   onOpenNoteById: (noteId: string) => void;
   onOpenDentalCases?: () => void;
+  onOpenPdf?: (target: ActivePdfTarget) => void;
+  onAddUnifiedTask?: (task: Omit<UnifiedTask, 'id'>) => string | void;
+  onUpdateUnifiedTask?: (id: string, updates: Partial<UnifiedTask>) => void;
+  onAddWeeklyMeeting?: (meeting: Omit<WeeklyMeeting, 'id'>) => void;
+  onUpdateWeeklyMeeting?: (id: string, updates: Partial<WeeklyMeeting>) => void;
+  onDeleteWeeklyMeeting?: (id: string) => void;
   onAddCustomCategory: (
     title: string,
     description: string,
@@ -140,6 +168,8 @@ export default function OverviewView({
   customCategories,
   history,
   reflections,
+  calendarEvents = [],
+  weeklyMeetings = [],
   onGoogleSignIn,
   onNavigateTab,
   onSelectHub,
@@ -148,6 +178,12 @@ export default function OverviewView({
   onFilterByDomain,
   onOpenNoteById,
   onOpenDentalCases,
+  onOpenPdf,
+  onAddUnifiedTask,
+  onUpdateUnifiedTask,
+  onAddWeeklyMeeting,
+  onUpdateWeeklyMeeting,
+  onDeleteWeeklyMeeting,
   onAddCustomCategory,
   onDeleteCustomCategory,
   onDeleteHistoryEntry,
@@ -192,6 +228,25 @@ export default function OverviewView({
   const [editingRefContent, setEditingRefContent] = useState('');
   const [draftImgRefresh, setDraftImgRefresh] = useState(0);
 
+  // Interactive Dashboard Agenda & Quick Access State
+  const [agendaOpen, setAgendaOpen] = useState(true);
+  const [agendaFilter, setAgendaFilter] = useState<
+    'all' | 'today_overdue' | 'tasks' | 'meetings'
+  >('all');
+  const [agendaSort, setAgendaSort] = useState<'date' | 'priority'>('date');
+  const [quickDashTaskTitle, setQuickDashTaskTitle] = useState('');
+  const [quickDashTaskSchedule, setQuickDashTaskSchedule] = useState<
+    'today' | 'unscheduled'
+  >('today');
+  const [quickAccessOpen, setQuickAccessOpen] = useState(true);
+  const [savedAudioClips, setSavedAudioClips] = useState<SavedAudioClipSummary[]>(
+    []
+  );
+  const [playingClipId, setPlayingClipId] = useState<string | null>(null);
+  const [loadingClipId, setLoadingClipId] = useState<string | null>(null);
+  const dashAudioRef = useRef<HTMLAudioElement | null>(null);
+  const dashAudioUrlRef = useRef<string | null>(null);
+
   const isOwnerAdmin =
     Boolean(user?.email) &&
     user?.email?.toLowerCase() === OWNER_ADMIN_EMAIL.toLowerCase();
@@ -200,6 +255,150 @@ export default function OverviewView({
     preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES;
 
   const today = getTodayDateKey();
+  const nextWeekKey = useMemo(() => addDaysToDateKey(today, 7), [today]);
+
+  useEffect(() => {
+    let active = true;
+    if (!user?.uid) {
+      setSavedAudioClips([]);
+      return;
+    }
+    void listUserAudioClips(user.uid).then((clips) => {
+      if (active) setSavedAudioClips(clips);
+    });
+    return () => {
+      active = false;
+    };
+  }, [user?.uid]);
+
+  useEffect(() => {
+    return () => {
+      if (dashAudioRef.current) {
+        dashAudioRef.current.pause();
+        dashAudioRef.current = null;
+      }
+      if (dashAudioUrlRef.current) {
+        URL.revokeObjectURL(dashAudioUrlRef.current);
+        dashAudioUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  const upcomingMeetingOccurrences = useMemo(
+    () => expandWeeklyMeetingsInRange(weeklyMeetings, today, nextWeekKey),
+    [weeklyMeetings, today, nextWeekKey]
+  );
+
+  const upcomingAgendaTasks = useMemo(() => {
+    const priOrder = { high: 0, medium: 1, low: 2 };
+    const filtered = unifiedTasks.filter((t) => {
+      const targetDate = t.scheduledDate || t.dueDate || '';
+      if (agendaFilter === 'today_overdue') {
+        return (
+          t.status !== 'done' &&
+          ((targetDate && targetDate <= today) ||
+            (t.deadline && t.deadline <= today))
+        );
+      }
+      if (agendaFilter === 'meetings') return false;
+      return t.status !== 'done';
+    });
+    return filtered
+      .slice()
+      .sort((a, b) => {
+        if (agendaSort === 'priority') {
+          return priOrder[a.priority] - priOrder[b.priority];
+        }
+        const da = a.scheduledDate || a.dueDate || '9999-99-99';
+        const db = b.scheduledDate || b.dueDate || '9999-99-99';
+        return da.localeCompare(db);
+      })
+      .slice(0, 8);
+  }, [unifiedTasks, agendaFilter, agendaSort, today]);
+
+  const upcomingEventsList = useMemo(() => {
+    if (agendaFilter === 'tasks') return [];
+    return calendarEvents
+      .filter((ev) => !ev.done && ev.dateKey >= today && ev.dateKey <= nextWeekKey)
+      .sort((a, b) => a.dateKey.localeCompare(b.dateKey))
+      .slice(0, 5);
+  }, [calendarEvents, agendaFilter, today, nextWeekKey]);
+
+  const quickPdfItems = useMemo(() => {
+    const list: Array<{
+      id: string;
+      resourceId?: string;
+      title: string;
+      subtitle: string;
+      downloadUrl?: string;
+      storagePath?: string;
+      attachmentName?: string;
+    }> = [];
+    for (const item of readingItems) {
+      if (item.downloadUrl || item.storagePath) {
+        list.push({
+          id: `lib-${item.id}`,
+          resourceId: item.attachmentResourceId || item.id,
+          title: item.title,
+          subtitle: item.author || item.categoryLabel,
+          downloadUrl: item.downloadUrl,
+          storagePath: item.storagePath,
+          attachmentName: item.attachmentName,
+        });
+      }
+    }
+    for (const c of courses) {
+      for (const res of c.resources) {
+        if (
+          res.downloadUrl ||
+          res.storagePath ||
+          (res.attachmentName && res.attachmentName.toLowerCase().endsWith('.pdf'))
+        ) {
+          list.push({
+            id: `cres-${c.id}-${res.id}`,
+            resourceId: res.id,
+            title: res.title,
+            subtitle: c.title,
+            downloadUrl: res.downloadUrl,
+            storagePath: res.storagePath,
+            attachmentName: res.attachmentName,
+          });
+        }
+      }
+    }
+    return list.slice(0, 6);
+  }, [readingItems, courses]);
+
+  const handleTogglePlaySavedClip = async (clip: SavedAudioClipSummary) => {
+    if (playingClipId === clip.id && dashAudioRef.current) {
+      dashAudioRef.current.pause();
+      setPlayingClipId(null);
+      return;
+    }
+    if (dashAudioRef.current) {
+      dashAudioRef.current.pause();
+    }
+    setLoadingClipId(clip.id);
+    try {
+      const loaded = await loadAudioClipById(user?.uid, clip.id);
+      if (!loaded) {
+        setLoadingClipId(null);
+        return;
+      }
+      if (dashAudioUrlRef.current) {
+        URL.revokeObjectURL(dashAudioUrlRef.current);
+      }
+      const url = URL.createObjectURL(loaded.blob);
+      dashAudioUrlRef.current = url;
+      const audio = new Audio(url);
+      audio.onended = () => setPlayingClipId(null);
+      dashAudioRef.current = audio;
+      await audio.play();
+      setPlayingClipId(clip.id);
+    } finally {
+      setLoadingClipId(null);
+    }
+  };
 
   // Progress Calculations
   const completedMonths = months.filter((m) => m.status === 'completed').length;
@@ -548,11 +747,17 @@ export default function OverviewView({
         </div>
       </section>
 
-      {/* 4-Column KPI Strip */}
+      {/* 4-Column Interactive KPI Strip */}
       <section aria-label="ملخص التقدم" className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
+        <button
+          type="button"
+          onClick={() =>
+            activeMonth ? onJumpToMonth(activeMonth.id) : onNavigateTab('plan')
+          }
+          className="text-right bg-white border border-slate-200 hover:border-[#1E3A5F]/40 hover:shadow-xs rounded-xl p-5 transition-all cursor-pointer group"
+        >
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>الوحدات المنجزة</span>
+            <span className="group-hover:text-[#1E3A5F] font-medium">الوحدات المنجزة</span>
             <CheckCircle2 className="w-4 h-4 text-emerald-700" aria-hidden="true" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
@@ -563,13 +768,17 @@ export default function OverviewView({
           </p>
           <p className="mt-1 text-xs text-slate-500 tabular-nums">
             {inProgressMonths} قيد الدراسة ·{' '}
-            {activeMonth ? `الحالية: وحدة ${activeMonth.id}` : 'جاهز للبدء'}
+            {activeMonth ? `الحالية: وحدة ${activeMonth.id} ←` : 'فتح الخطة ←'}
           </p>
-        </div>
+        </button>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
+        <button
+          type="button"
+          onClick={() => onNavigateTab('tasks')}
+          className="text-right bg-white border border-slate-200 hover:border-[#1E3A5F]/40 hover:shadow-xs rounded-xl p-5 transition-all cursor-pointer group"
+        >
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>المهام الصغيرة المنجزة</span>
+            <span className="group-hover:text-[#1E3A5F] font-medium">المهام والنشاطات</span>
             <Clock className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
@@ -579,13 +788,17 @@ export default function OverviewView({
             </span>
           </p>
           <p className="mt-1 text-xs text-slate-500 tabular-nums">
-            ركائز الدراسة: {completedActivities} / {totalActivities}
+            نشطة بالمهام: {unifiedTasks.filter((t) => t.status !== 'done').length} · فتح المهام ←
           </p>
-        </div>
+        </button>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
+        <button
+          type="button"
+          onClick={() => onNavigateTab('courses')}
+          className="text-right bg-white border border-slate-200 hover:border-[#1E3A5F]/40 hover:shadow-xs rounded-xl p-5 transition-all cursor-pointer group"
+        >
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>الكورسات والمراجع</span>
+            <span className="group-hover:text-[#1E3A5F] font-medium">الكورسات والمراجع</span>
             <Layers className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
@@ -595,13 +808,17 @@ export default function OverviewView({
             </span>
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            قابلة للإضافة والتعديل والتوسّع
+            عرض وتحديث الكورسات ←
           </p>
-        </div>
+        </button>
 
-        <div className="bg-white border border-slate-200 rounded-xl p-5">
+        <button
+          type="button"
+          onClick={() => onNavigateTab('journal')}
+          className="text-right bg-white border border-slate-200 hover:border-[#1E3A5F]/40 hover:shadow-xs rounded-xl p-5 transition-all cursor-pointer group"
+        >
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>الملاحظات والخواطر</span>
+            <span className="group-hover:text-[#1E3A5F] font-medium">الملاحظات والخواطر</span>
             <PenLine className="w-4 h-4 text-slate-600" aria-hidden="true" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 tabular-nums">
@@ -614,10 +831,455 @@ export default function OverviewView({
             <span className="text-xs font-normal text-slate-500">خاطرة</span>
           </p>
           <p className="mt-1 text-xs text-slate-500 tabular-nums">
-            {bookTypeNotesCount} كتاب · {lectureNotesCount} محاضرة ·{' '}
-            {generalNotesCount} عام
+            {bookTypeNotesCount} كتاب · {lectureNotesCount} محاضرة · فتح الدفتر ←
           </p>
+        </button>
+      </section>
+
+      {/* Interactive Today & Upcoming Agenda + Quick Access Strip */}
+      <section className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <CalendarDays className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+            <h2 className="font-editorial text-xl font-bold text-slate-900">
+              أجندة اليوم والأيام القادمة (مهام ولقاءات)
+            </h2>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onNavigateTab('calendar')}
+              className="px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+            >
+              فتح التقويم التفاعلي ←
+            </button>
+            <button
+              type="button"
+              onClick={() => setAgendaOpen((v) => !v)}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg cursor-pointer"
+            >
+              {agendaOpen ? (
+                <>
+                  <ChevronUp className="w-3.5 h-3.5" /> طي
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="w-3.5 h-3.5" /> فتح
+                </>
+              )}
+            </button>
+          </div>
         </div>
+
+        {agendaOpen && (
+          <div className="space-y-4">
+            {/* Inline Quick Task Creator + Filter/Sort */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              {onAddUnifiedTask && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!canEdit) return onRequireAuth();
+                    const clean = quickDashTaskTitle.trim();
+                    if (!clean) return;
+                    const sched = quickDashTaskSchedule === 'today' ? today : '';
+                    onAddUnifiedTask({
+                      title: clean,
+                      description: '',
+                      hubId: 'knowledge',
+                      categoryLabel: 'مهمة سريعة',
+                      priority: 'medium',
+                      status: 'todo',
+                      dueDate: sched,
+                      scheduledDate: sched,
+                      startTime: '',
+                      durationMinutes: 60,
+                    });
+                    setQuickDashTaskTitle('');
+                  }}
+                  className="flex flex-wrap sm:flex-nowrap items-center gap-2 flex-1"
+                >
+                  <input
+                    type="text"
+                    value={quickDashTaskTitle}
+                    onChange={(e) => setQuickDashTaskTitle(e.target.value)}
+                    onClick={() => {
+                      if (!canEdit) onRequireAuth();
+                    }}
+                    readOnly={!canEdit}
+                    placeholder="أضف مهمة سريعة مباشرة من لوحة المتابعة..."
+                    className="flex-1 min-w-[200px] px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+                  />
+                  <select
+                    value={quickDashTaskSchedule}
+                    disabled={!canEdit}
+                    onChange={(e) =>
+                      setQuickDashTaskSchedule(
+                        e.target.value as 'today' | 'unscheduled'
+                      )
+                    }
+                    className="px-2.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg"
+                  >
+                    <option value="today">جدولة لليوم</option>
+                    <option value="unscheduled">قائمة الانتظار</option>
+                  </select>
+                  <button
+                    type="submit"
+                    className="inline-flex items-center gap-1 px-3.5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer shrink-0"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> إضافة
+                  </button>
+                </form>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-lg text-[11px]">
+                  {(
+                    [
+                      { id: 'all', label: 'الكل' },
+                      { id: 'today_overdue', label: 'اليوم والمتأخر' },
+                      { id: 'tasks', label: 'المهام' },
+                      { id: 'meetings', label: 'اللقاءات' },
+                    ] as const
+                  ).map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setAgendaFilter(f.id)}
+                      className={`px-2.5 py-1 rounded-md cursor-pointer ${
+                        agendaFilter === f.id
+                          ? 'bg-white text-[#1E3A5F] font-semibold shadow-2xs'
+                          : 'text-slate-600'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+                <select
+                  aria-label="ترتيب الأجندة"
+                  value={agendaSort}
+                  onChange={(e) =>
+                    setAgendaSort(e.target.value as 'date' | 'priority')
+                  }
+                  className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg"
+                >
+                  <option value="date">ترتيب بالموعد</option>
+                  <option value="priority">ترتيب بالأولوية</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Tasks & Meetings Split Feed */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {agendaFilter !== 'meetings' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-slate-600">
+                    <span className="font-semibold">
+                      المهام النشطة ({upcomingAgendaTasks.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onNavigateTab('tasks')}
+                      className="text-[#1E3A5F] font-medium hover:underline cursor-pointer"
+                    >
+                      عرض الكل ←
+                    </button>
+                  </div>
+                  {upcomingAgendaTasks.length === 0 ? (
+                    <p className="text-xs text-slate-400 p-3 bg-slate-50 rounded-lg border border-slate-200">
+                      لا توجد مهام متأخرة أو نشطة في هذا الفلتر.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {upcomingAgendaTasks.map((t) => {
+                        const tDate = t.scheduledDate || t.dueDate || '';
+                        const isOverdue = Boolean(tDate && tDate < today);
+                        return (
+                          <div
+                            key={t.id}
+                            className="p-2.5 bg-slate-50/70 border border-slate-200 rounded-lg flex items-center justify-between gap-2"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!canEdit) return onRequireAuth();
+                                onUpdateUnifiedTask?.(t.id, {
+                                  status: t.status === 'done' ? 'todo' : 'done',
+                                });
+                              }}
+                              className="flex items-center gap-2 text-right flex-1 min-w-0 cursor-pointer"
+                            >
+                              {t.status === 'done' ? (
+                                <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0" />
+                              ) : (
+                                <Square className="w-4 h-4 text-slate-400 shrink-0" />
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-semibold text-slate-900 truncate">
+                                  {t.title}
+                                </p>
+                                <p className="text-[10px] text-slate-500 tabular-nums">
+                                  {tDate ? tDate : 'غير مجدولة'}
+                                  {t.startTime ? ` · ${t.startTime}` : ''}
+                                  {isOverdue ? ' · متأخرة' : ''}
+                                </p>
+                              </div>
+                            </button>
+                            {canEdit && onUpdateUnifiedTask && !tDate && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onUpdateUnifiedTask(t.id, {
+                                    scheduledDate: today,
+                                    dueDate: today,
+                                  })
+                                }
+                                className="px-2 py-1 text-[10px] font-semibold bg-white border border-slate-300 text-[#1E3A5F] rounded cursor-pointer shrink-0"
+                              >
+                                جدولة لليوم
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {agendaFilter !== 'tasks' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-slate-600">
+                    <span className="font-semibold flex items-center gap-1">
+                      <Users className="w-3.5 h-3.5 text-indigo-700" />
+                      اللقاءات والمواعيد القادمة (7 أيام)
+                    </span>
+                    <a
+                      href="#weekly-meetings-section"
+                      className="text-[#1E3A5F] font-medium hover:underline"
+                    >
+                      قسم اللقاءات ←
+                    </a>
+                  </div>
+                  {upcomingMeetingOccurrences.length === 0 &&
+                  upcomingEventsList.length === 0 ? (
+                    <p className="text-xs text-slate-400 p-3 bg-slate-50 rounded-lg border border-slate-200">
+                      لا توجد لقاءات أسبوعية أو مواعيد خلال الأيام السبعة القادمة.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {upcomingMeetingOccurrences.slice(0, 5).map((occ) => (
+                        <div
+                          key={`${occ.meeting.id}-${occ.occurrenceKey}`}
+                          className="p-2.5 bg-indigo-50/50 border border-indigo-200 rounded-lg flex items-center justify-between gap-2"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-indigo-950 truncate">
+                              {occ.title}
+                            </p>
+                            <p className="text-[10px] text-indigo-700 tabular-nums">
+                              {occ.dateKey} · {occ.startTime}–{occ.endTime}
+                            </p>
+                          </div>
+                          {canEdit && onUpdateWeeklyMeeting && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const doneSet = new Set(occ.meeting.completedDates || []);
+                                const nextAtt = { ...(occ.meeting.attendanceByDate || {}) };
+                                if (occ.completed) {
+                                  doneSet.delete(occ.occurrenceKey);
+                                  nextAtt[occ.occurrenceKey] = 'pending';
+                                } else {
+                                  doneSet.add(occ.occurrenceKey);
+                                  nextAtt[occ.occurrenceKey] = 'attended';
+                                }
+                                onUpdateWeeklyMeeting(occ.meeting.id, {
+                                  completedDates: Array.from(doneSet),
+                                  attendanceByDate: nextAtt,
+                                });
+                              }}
+                              className={`px-2 py-1 text-[10px] font-semibold rounded border cursor-pointer shrink-0 ${
+                                occ.completed
+                                  ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                                  : 'bg-white text-indigo-900 border-indigo-300'
+                              }`}
+                            >
+                              {occ.completed ? 'تم الحضور ✓' : 'تسجيل حضور'}
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      {upcomingEventsList.map((ev) => (
+                        <div
+                          key={ev.id}
+                          className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between gap-2"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-slate-900 truncate">
+                              {ev.title}
+                            </p>
+                            <p className="text-[10px] text-slate-500 tabular-nums">
+                              {ev.dateKey}
+                              {ev.timeSlot ? ` · ${ev.timeSlot}` : ''} · {ev.category}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Quick Access Drawer: PDFs, Saved Audio Clips, Pinned Notes */}
+            <div className="pt-3 border-t border-slate-200 space-y-3">
+              <button
+                type="button"
+                onClick={() => setQuickAccessOpen((v) => !v)}
+                className="w-full flex items-center justify-between text-xs font-bold text-slate-700 cursor-pointer"
+              >
+                <span>
+                  وصول سريع (ملفات PDF · تسجيلات صوتية محفوظة · ملاحظات مثبّتة)
+                </span>
+                {quickAccessOpen ? (
+                  <ChevronUp className="w-4 h-4" />
+                ) : (
+                  <ChevronDown className="w-4 h-4" />
+                )}
+              </button>
+
+              {quickAccessOpen && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {/* PDFs */}
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                    <div className="flex items-center justify-between text-xs font-semibold text-slate-800">
+                      <span className="inline-flex items-center gap-1">
+                        <FileText className="w-3.5 h-3.5 text-[#1E3A5F]" />
+                        ملفات PDF سريعة
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onNavigateTab('library')}
+                        className="text-[11px] text-[#1E3A5F] hover:underline cursor-pointer"
+                      >
+                        المكتبة
+                      </button>
+                    </div>
+                    {quickPdfItems.length === 0 ? (
+                      <p className="text-[11px] text-slate-400">
+                        لا توجد ملفات PDF مرفوعة بعد.
+                      </p>
+                    ) : (
+                      <div className="space-y-1">
+                        {quickPdfItems.slice(0, 3).map((pdf) => (
+                          <button
+                            key={pdf.id}
+                            type="button"
+                            onClick={() =>
+                              onOpenPdf?.({
+                                title: pdf.title,
+                                fileName: pdf.attachmentName || `${pdf.title}.pdf`,
+                                resourceId: pdf.resourceId,
+                                contextLabel: pdf.subtitle,
+                                downloadUrl: pdf.downloadUrl,
+                                storagePath: pdf.storagePath,
+                              })
+                            }
+                            className="w-full text-right px-2 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[11px] font-medium text-slate-800 truncate block cursor-pointer"
+                          >
+                            {pdf.title}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Saved TTS Audio Clips */}
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                    <div className="flex items-center justify-between text-xs font-semibold text-slate-800">
+                      <span className="inline-flex items-center gap-1">
+                        <Volume2 className="w-3.5 h-3.5 text-[#1E3A5F]" />
+                        الصوتيات المحفوظة ({savedAudioClips.length})
+                      </span>
+                    </div>
+                    {savedAudioClips.length === 0 ? (
+                      <p className="text-[11px] text-slate-400">
+                        سيظهر هنا كل ملخص صوتي تقوم بتوليده عبر الأجهزة.
+                      </p>
+                    ) : (
+                      <div className="space-y-1">
+                        {savedAudioClips.slice(0, 3).map((clip) => (
+                          <button
+                            key={clip.id}
+                            type="button"
+                            onClick={() => void handleTogglePlaySavedClip(clip)}
+                            className="w-full flex items-center justify-between gap-2 px-2 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[11px] text-slate-800 cursor-pointer"
+                          >
+                            <span className="truncate font-medium">
+                              {clip.title}
+                            </span>
+                            <span className="shrink-0 text-[#1E3A5F]">
+                              {loadingClipId === clip.id ? (
+                                '...'
+                              ) : playingClipId === clip.id ? (
+                                <Pause className="w-3.5 h-3.5" />
+                              ) : (
+                                <Play className="w-3.5 h-3.5" />
+                              )}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Pinned Reflections & Recent Book Notes */}
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                    <div className="flex items-center justify-between text-xs font-semibold text-slate-800">
+                      <span className="inline-flex items-center gap-1">
+                        <Pin className="w-3.5 h-3.5 text-[#1E3A5F]" />
+                        خواطر مثبّتة وملخصات
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onNavigateTab('journal')}
+                        className="text-[11px] text-[#1E3A5F] hover:underline cursor-pointer"
+                      >
+                        الدفتر
+                      </button>
+                    </div>
+                    <div className="space-y-1">
+                      {reflections
+                        .filter((r) => r.pinned)
+                        .slice(0, 2)
+                        .map((r) => (
+                          <a
+                            key={r.id}
+                            href="#daily-reflections"
+                            className="block px-2 py-1.5 bg-white border border-slate-200 rounded text-[11px] text-slate-800 truncate"
+                          >
+                            ★ {r.title || r.content}
+                          </a>
+                        ))}
+                      {bookNotes.slice(0, 2).map((bn) => (
+                        <button
+                          key={bn.id}
+                          type="button"
+                          onClick={() => onOpenNoteById(bn.id)}
+                          className="w-full text-right px-2 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[11px] text-slate-800 truncate block cursor-pointer"
+                        >
+                          {bn.bookTitle}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* 3 Learning Hubs Command Center */}
@@ -1848,6 +2510,22 @@ export default function OverviewView({
           )}
         </div>
       </section>
+
+      {/* Interactive Weekly Meetings Section */}
+      {onAddWeeklyMeeting && onUpdateWeeklyMeeting && onDeleteWeeklyMeeting && (
+        <section id="weekly-meetings-section">
+          <WeeklyMeetingsPanel
+            canEdit={canEdit}
+            onRequireAuth={onRequireAuth}
+            meetings={weeklyMeetings}
+            onAddMeeting={onAddWeeklyMeeting}
+            onUpdateMeeting={onUpdateWeeklyMeeting}
+            onDeleteMeeting={onDeleteWeeklyMeeting}
+            onCreateTaskFromFollowUp={onAddUnifiedTask}
+            onOpenCalendar={() => onNavigateTab('calendar')}
+          />
+        </section>
+      )}
 
       {/* Weekly Rhythm 4 Pillars */}
       <section className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">

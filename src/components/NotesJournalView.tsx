@@ -1137,6 +1137,9 @@ export default function NotesJournalView({
 
                 <ReadAloudButton
                   uid={uid}
+                  entityType={standaloneNote.noteType === 'course_lecture' ? 'course' : 'note'}
+                  entityId={standaloneNote.id}
+                  title={standaloneNote.bookTitle}
                   text={richHtmlToPlainText(
                     isEditingNote ? activeDraft.content : standaloneNote.content
                   )}
@@ -2865,6 +2868,9 @@ export default function NotesJournalView({
                     <div className="flex items-center gap-2 shrink-0">
                       <ReadAloudButton
                         uid={uid}
+                        entityType="month"
+                        entityId={`month_${month.id}`}
+                        title={`ملخص الوحدة ${month.id}: ${month.theme}`}
                         text={month.notes}
                         voiceName={preferences.readAloudVoice}
                         speed={preferences.readAloudSpeed}

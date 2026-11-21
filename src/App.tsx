@@ -68,6 +68,7 @@ import {
   StudyResource,
   UnifiedTask,
   UserPreferences,
+  WeeklyMeeting,
   resolveCourseStudyStage,
 } from './data/curriculumData';
 import {
@@ -92,6 +93,7 @@ import {
   deleteReadingItemDoc,
   deleteReflectionDoc,
   deleteUnifiedTaskDoc,
+  deleteWeeklyMeetingDoc,
   ensureUserDocumentAndSeed,
   sanitizeId,
   saveBookNoteDoc,
@@ -109,6 +111,7 @@ import {
   saveReflectionDoc,
   saveUnifiedTaskDoc,
   saveUserPreferencesDoc,
+  saveWeeklyMeetingDoc,
   subscribeUserWorkspace,
 } from './services/firestoreSync';
 import { exportPlanToExcel } from './utils/excelExport';
@@ -248,6 +251,7 @@ export default function App() {
   const [projects, setProjects] = useState<PracticalProject[]>([]);
   const [unifiedTasks, setUnifiedTasks] = useState<UnifiedTask[]>([]);
   const [dentalCases, setDentalCases] = useState<DentalCase[]>([]);
+  const [weeklyMeetings, setWeeklyMeetings] = useState<WeeklyMeeting[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences>(
     DEFAULT_USER_PREFERENCES
   );
@@ -445,6 +449,7 @@ export default function App() {
     setProjects([]);
     setUnifiedTasks([]);
     setDentalCases([]);
+    setWeeklyMeetings([]);
     setPreferences(DEFAULT_USER_PREFERENCES);
     if (!preserveRoute) {
       setActiveBookNoteId(null);
@@ -547,6 +552,9 @@ export default function App() {
             },
             onDentalCases: (items) => {
               setDentalCases(items);
+            },
+            onWeeklyMeetings: (items) => {
+              setWeeklyMeetings(items);
             },
           });
         } catch (err) {
@@ -1817,10 +1825,10 @@ export default function App() {
   };
 
   // --- Unified Tasks CRUD ---
-  const handleAddUnifiedTask = (payload: Omit<UnifiedTask, 'id'>) => {
+  const handleAddUnifiedTask = (payload: Omit<UnifiedTask, 'id'>): string | undefined => {
     if (!user) {
       handleRequireAuth();
-      return;
+      return undefined;
     }
     const newTask: UnifiedTask = {
       ...payload,
@@ -1834,6 +1842,7 @@ export default function App() {
       detail: newTask.categoryLabel,
       targetTab: 'tasks',
     });
+    return newTask.id;
   };
 
   const handleUpdateUnifiedTask = (
@@ -1917,6 +1926,53 @@ export default function App() {
     }
     setDentalCases((prev) => prev.filter((dc) => dc.id !== id));
     void deleteDentalCaseDoc(user.uid, id);
+  };
+
+  // --- Weekly Meetings CRUD ---
+  const handleAddWeeklyMeeting = (payload: Omit<WeeklyMeeting, 'id'>) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    const newMtg: WeeklyMeeting = {
+      ...payload,
+      id: `mtg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    };
+    setWeeklyMeetings((prev) => [...prev, newMtg]);
+    void saveWeeklyMeetingDoc(user.uid, newMtg);
+    recordHistory({
+      actionType: 'task',
+      title: `أضفت لقاءً أسبوعيًا: ${newMtg.title}`,
+      detail: `${newMtg.startTime} · ${newMtg.isRecurringWeekly ? 'متكرر أسبوعيًا' : 'مرة واحدة'}`,
+      targetTab: 'calendar',
+    });
+  };
+
+  const handleUpdateWeeklyMeeting = (
+    id: string,
+    updates: Partial<WeeklyMeeting>
+  ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setWeeklyMeetings((prev) =>
+      prev.map((m) => {
+        if (m.id !== id) return m;
+        const next = { ...m, ...updates };
+        void saveWeeklyMeetingDoc(user.uid, next);
+        return next;
+      })
+    );
+  };
+
+  const handleDeleteWeeklyMeeting = (id: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setWeeklyMeetings((prev) => prev.filter((m) => m.id !== id));
+    void deleteWeeklyMeetingDoc(user.uid, id);
   };
 
   const handleResetPlan = () => {
@@ -2076,6 +2132,8 @@ export default function App() {
             customCategories={customCategories}
             history={history}
             reflections={reflections}
+            calendarEvents={calendarEvents}
+            weeklyMeetings={weeklyMeetings}
             onGoogleSignIn={handleGoogleSignIn}
             onNavigateTab={navigateToTab}
             onSelectHub={(hub, targetTab) => {
@@ -2087,6 +2145,12 @@ export default function App() {
             onFilterByDomain={handleFilterByDomain}
             onOpenNoteById={handleOpenNoteById}
             onOpenDentalCases={handleOpenDentalCases}
+            onOpenPdf={setActivePdfTarget}
+            onAddUnifiedTask={handleAddUnifiedTask}
+            onUpdateUnifiedTask={handleUpdateUnifiedTask}
+            onAddWeeklyMeeting={handleAddWeeklyMeeting}
+            onUpdateWeeklyMeeting={handleUpdateWeeklyMeeting}
+            onDeleteWeeklyMeeting={handleDeleteWeeklyMeeting}
             onAddCustomCategory={handleAddCustomCategory}
             onDeleteCustomCategory={handleDeleteCustomCategory}
             onDeleteHistoryEntry={handleDeleteHistoryEntry}
@@ -2292,6 +2356,7 @@ export default function App() {
             onToggleCourseTask={handleToggleCourseTask}
             onJumpToMonth={handleJumpToMonth}
             onOpenCourse={(courseId) => navigateToCourseRoute(courseId)}
+            onOpenCalendar={() => navigateToTab('calendar')}
           />
         )}
 
@@ -2344,10 +2409,27 @@ export default function App() {
             events={calendarEvents}
             months={months}
             courses={courses}
+            unifiedTasks={unifiedTasks}
+            projects={projects}
+            weeklyMeetings={weeklyMeetings}
+            preferences={preferences}
+            onUpdatePreferences={handleUpdatePreferences}
             onAddEvent={handleAddCalendarEvent}
             onUpdateEvent={handleUpdateCalendarEvent}
             onDeleteEvent={handleDeleteCalendarEvent}
+            onAddUnifiedTask={handleAddUnifiedTask}
+            onUpdateUnifiedTask={handleUpdateUnifiedTask}
+            onDeleteUnifiedTask={handleDeleteUnifiedTask}
+            onUpdateWeeklyMeeting={handleUpdateWeeklyMeeting}
             onJumpToMonth={handleJumpToMonth}
+            onOpenMeetingsSection={() => {
+              navigateToTab('overview');
+              window.setTimeout(() => {
+                document
+                  .getElementById('weekly-meetings-section')
+                  ?.scrollIntoView({ behavior: 'smooth' });
+              }, 160);
+            }}
           />
         )}
         </ErrorBoundary>
