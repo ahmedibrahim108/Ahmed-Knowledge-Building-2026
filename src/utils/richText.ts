@@ -21,7 +21,7 @@ export function getNoteLayoutClasses(
   >
 ) {
   const margin: NoteMarginMode = prefs?.noteMargin ?? 'normal';
-  const width: NoteWidthMode = prefs?.noteWidth ?? 'full';
+  const width: NoteWidthMode = prefs?.noteWidth ?? 'focused';
   const border: NoteBorderMode = prefs?.noteBorder ?? 'subtle';
   const paperTone = prefs?.notePaperTone ?? 'clean';
 
@@ -33,8 +33,8 @@ export function getNoteLayoutClasses(
   };
 
   const widthClass: Record<NoteWidthMode, string> = {
-    focused: 'max-w-2xl mx-auto w-full',
-    balanced: 'max-w-4xl mx-auto w-full',
+    focused: 'max-w-[630px] mx-auto w-full',
+    balanced: 'max-w-[760px] mx-auto w-full',
     full: 'w-full',
   };
 

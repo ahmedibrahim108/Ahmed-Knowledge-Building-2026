@@ -246,6 +246,9 @@
         "noteFontSize": { "type": "string", "enum": ["sm", "base", "lg"] },
         "noteHighlightColor": { "type": "string", "enum": ["amber", "emerald", "sky", "rose"] },
         "notePaperTone": { "type": "string", "enum": ["clean", "warm", "slate"] },
+        "noteMargin": { "type": "string", "enum": ["compact", "normal", "wide", "spacious"] },
+        "noteWidth": { "type": "string", "enum": ["focused", "balanced", "full"] },
+        "noteBorder": { "type": "string", "enum": ["none", "subtle", "medium", "framed"] },
         "autoAddTimestampOnVoice": { "type": "boolean" },
         "voiceDialect": { "type": "string", "enum": ["standard_arabic", "egyptian_arabic", "bilingual"] },
         "voiceInsertMode": { "type": "string", "enum": ["append_paragraph", "append_bullet", "append_quote"] },
@@ -253,6 +256,7 @@
         "readAloudSpeed": { "type": "string", "enum": ["normal", "calm"] },
         "showExcelExport": { "type": "boolean" },
         "hubCategories": { "type": "object" },
+        "calendarPrefs": { "type": "object" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [

@@ -2074,6 +2074,31 @@ export default function CourseDetailPage({
                       </button>
 
                       {canEdit && !isEditingNote && (
+                        <div className="hidden sm:inline-flex items-center gap-0.5 bg-slate-100 border border-slate-200 rounded-lg p-0.5 text-[11px]">
+                          {(
+                            [
+                              { id: 'focused', label: 'مريح (~12 كلمة)' },
+                              { id: 'balanced', label: 'متوازن' },
+                              { id: 'full', label: 'كامل' },
+                            ] as const
+                          ).map((opt) => (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() => onUpdatePreferences({ noteWidth: opt.id })}
+                              className={`px-2 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                                noteLayout.width === opt.id
+                                  ? 'bg-[#1E3A5F] text-white'
+                                  : 'text-slate-600 hover:bg-white'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {canEdit && !isEditingNote && (
                         <button
                           type="button"
                           onClick={() => beginEditActiveNote(activeNote)}
@@ -2212,7 +2237,7 @@ export default function CourseDetailPage({
                           className={`${noteLayout.widthClass} ${noteLayout.canvasPaddingClass} ${noteLayout.borderClass} ${noteLayout.paperToneClass} rounded-xl overflow-x-auto transition-all`}
                         >
                           <div
-                            className="prose-bidi text-sm text-slate-800 leading-relaxed [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white"
+                            className="prose-bidi text-sm sm:text-base text-slate-800 leading-relaxed [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900"
                             dangerouslySetInnerHTML={{
                               __html: renderSafeBidiHtml(activeNote.content),
                             }}

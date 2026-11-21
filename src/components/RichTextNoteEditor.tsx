@@ -71,9 +71,9 @@ const MARGIN_OPTIONS: Array<{ id: NoteMarginMode; label: string }> = [
 ];
 
 const WIDTH_OPTIONS: Array<{ id: NoteWidthMode; label: string }> = [
-  { id: 'focused', label: 'محدود' },
+  { id: 'focused', label: 'مريح (~12 كلمة)' },
   { id: 'balanced', label: 'متوازن' },
-  { id: 'full', label: 'مفتوح كامل' },
+  { id: 'full', label: 'كامل' },
 ];
 
 const BORDER_OPTIONS: Array<{ id: NoteBorderMode; label: string }> = [
@@ -156,7 +156,7 @@ export default function RichTextNoteEditor({
     preferences.noteMargin ?? 'normal'
   );
   const [localWidth, setLocalWidth] = useState<NoteWidthMode>(
-    preferences.noteWidth ?? 'full'
+    preferences.noteWidth ?? 'focused'
   );
   const [localBorder, setLocalBorder] = useState<NoteBorderMode>(
     preferences.noteBorder ?? 'subtle'
@@ -1675,7 +1675,7 @@ export default function RichTextNoteEditor({
                     onClick={() =>
                       updateLayoutPrefs({
                         noteMargin: 'normal',
-                        noteWidth: 'full',
+                        noteWidth: 'focused',
                         noteBorder: 'subtle',
                       })
                     }
@@ -1853,7 +1853,7 @@ export default function RichTextNoteEditor({
             FONT_SIZE_CLASS[preferences.noteFontSize]
           } ${
             editorDir === 'ltr' ? 'text-left' : editorDir === 'rtl' ? 'text-right' : 'text-start'
-          } text-slate-800 break-words focus:outline-none rounded-b-xl touch-manipulation transition-all [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white/60 ${
+          } text-slate-800 break-words focus:outline-none rounded-b-xl touch-manipulation transition-all [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 ${
             !canEdit ? 'cursor-not-allowed opacity-85' : ''
           }`}
         />

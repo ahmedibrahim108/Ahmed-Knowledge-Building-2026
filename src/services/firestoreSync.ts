@@ -538,9 +538,9 @@ function buildUserPreferencesPayload(uid: string, prefs: UserPreferences) {
       ? prefs.noteMargin
       : 'normal';
   const noteWidth =
-    prefs.noteWidth === 'focused' || prefs.noteWidth === 'balanced'
+    prefs.noteWidth === 'balanced' || prefs.noteWidth === 'full'
       ? prefs.noteWidth
-      : 'full';
+      : 'focused';
   const noteBorder =
     prefs.noteBorder === 'none' ||
     prefs.noteBorder === 'medium' ||

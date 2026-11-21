@@ -845,7 +845,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   noteHighlightColor: 'amber',
   notePaperTone: 'clean',
   noteMargin: 'normal',
-  noteWidth: 'full',
+  noteWidth: 'focused',
   noteBorder: 'subtle',
   autoAddTimestampOnVoice: false,
   voiceDialect: 'standard_arabic',

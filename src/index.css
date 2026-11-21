@@ -218,12 +218,34 @@
     font-style: italic;
   }
 
-  .prose-bidi th {
+  .prose-bidi table {
+    width: fit-content;
+    max-width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.75rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+
+  .prose-bidi th,
+  .prose-bidi td {
+    border: 1px solid #cbd5e1;
+    padding: 0.45rem 0.85rem;
+    vertical-align: top;
     text-align: start;
+    white-space: normal;
+    overflow-wrap: break-word;
+  }
+
+  .prose-bidi th {
+    background-color: #f1f5f9;
+    font-weight: 700;
+    color: #0f172a;
   }
 
   .prose-bidi td {
-    text-align: start;
+    background-color: rgba(255, 255, 255, 0.72);
   }
 
   /* Explicit user block alignment overrides */

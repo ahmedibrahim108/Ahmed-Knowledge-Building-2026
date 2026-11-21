@@ -289,8 +289,10 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'id', 'ownerId', 'noteFontSize', 'noteHighlightColor', 'notePaperTone',
+          'noteMargin', 'noteWidth', 'noteBorder',
           'autoAddTimestampOnVoice', 'voiceDialect', 'voiceInsertMode',
-          'readAloudVoice', 'readAloudSpeed', 'showExcelExport', 'hubCategories', 'updatedAt'
+          'readAloudVoice', 'readAloudSpeed', 'showExcelExport', 'hubCategories',
+          'calendarPrefs', 'updatedAt'
         ])
         && data.id == prefId
         && isValidId(data.id)
@@ -299,6 +301,9 @@ service cloud.firestore {
         && data.noteFontSize in ['sm', 'base', 'lg']
         && data.noteHighlightColor in ['amber', 'emerald', 'sky', 'rose']
         && data.notePaperTone in ['clean', 'warm', 'slate']
+        && (!('noteMargin' in data) || data.noteMargin in ['compact', 'normal', 'wide', 'spacious'])
+        && (!('noteWidth' in data) || data.noteWidth in ['focused', 'balanced', 'full'])
+        && (!('noteBorder' in data) || data.noteBorder in ['none', 'subtle', 'medium', 'framed'])
         && data.autoAddTimestampOnVoice is bool
         && data.voiceDialect in ['standard_arabic', 'egyptian_arabic', 'bilingual']
         && data.voiceInsertMode in ['append_paragraph', 'append_bullet', 'append_quote']
@@ -306,6 +311,7 @@ service cloud.firestore {
         && data.readAloudSpeed in ['normal', 'calm']
         && (!('showExcelExport' in data) || data.showExcelExport is bool)
         && (!('hubCategories' in data) || data.hubCategories is map)
+        && (!('calendarPrefs' in data) || data.calendarPrefs is map)
         && data.updatedAt is timestamp;
     }
 
@@ -796,8 +802,10 @@ service cloud.firestore {
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly([
             'noteFontSize', 'noteHighlightColor', 'notePaperTone',
+            'noteMargin', 'noteWidth', 'noteBorder',
             'autoAddTimestampOnVoice', 'voiceDialect', 'voiceInsertMode',
-            'readAloudVoice', 'readAloudSpeed', 'showExcelExport', 'hubCategories', 'updatedAt'
+            'readAloudVoice', 'readAloudSpeed', 'showExcelExport', 'hubCategories',
+            'calendarPrefs', 'updatedAt'
           ]);
         allow delete: if isValidId(userId) && isValidId(prefId) && isOwner(userId) && isVerifiedUser();
       }
