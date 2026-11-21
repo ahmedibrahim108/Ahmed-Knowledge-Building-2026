@@ -13,8 +13,6 @@ import {
 import {
   LEARNING_HUBS,
   LearningHubId,
-  MonthPlan,
-  PersonalCourse,
   READING_MODES_META,
   ReadingItemStatus,
   ReadingItemType,
@@ -23,11 +21,11 @@ import {
   getHubMeta,
   getTodayDateKey,
 } from '../data/curriculumData';
-import { CloudAttachmentItem } from '../services/firestoreSync';
+import { auth } from '../firebase';
 import {
-  BUNDLED_APP_DOCUMENTS,
-  downloadResourceAttachment,
+  downloadResourceAttachmentResult,
   isPdfAttachment,
+  isViewableDocumentAttachment,
   uploadResourceAttachment,
 } from '../utils/documentImportExport';
 import ConfirmDialog from './ConfirmDialog';
@@ -39,9 +37,6 @@ interface LibraryViewProps {
   canEdit: boolean;
   onRequireAuth: () => void;
   items: ReadingLibraryItem[];
-  cloudAttachments?: CloudAttachmentItem[];
-  courses?: PersonalCourse[];
-  months?: MonthPlan[];
   hubCategories: Record<LearningHubId, string[]>;
   activeHubFilter: LearningHubId | 'all';
   onChangeHubFilter: (hub: LearningHubId | 'all') => void;
@@ -62,9 +57,6 @@ export default function LibraryView({
   canEdit,
   onRequireAuth,
   items,
-  cloudAttachments = [],
-  courses = [],
-  months = [],
   hubCategories,
   activeHubFilter,
   onChangeHubFilter,
@@ -90,7 +82,11 @@ export default function LibraryView({
   const [externalUrl, setExternalUrl] = useState('');
   const [takeaways, setTakeaways] = useState('');
   const [uploadingFile, setUploadingFile] = useState(false);
-  const [uploadCloudNotice, setUploadCloudNotice] = useState<string | null>(null);
+  const [uploadStatusMsg, setUploadStatusMsg] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [pendingResId, setPendingResId] = useState('');
   const [pendingFileName, setPendingFileName] = useState('');
   const [pendingStoragePath, setPendingStoragePath] = useState<string | undefined>();
@@ -99,91 +95,6 @@ export default function LibraryView({
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const today = getTodayDateKey();
-
-  const syncedAndBundledFiles = useMemo(() => {
-    const out: Array<{
-      id: string;
-      resourceId?: string;
-      title: string;
-      fileName: string;
-      subtitle: string;
-      downloadUrl?: string;
-      storagePath?: string;
-      mimeType?: string;
-      fallbackText?: string;
-    }> = [];
-    const seen = new Set<string>();
-
-    for (const item of items) {
-      if (item.attachmentResourceId) seen.add(item.attachmentResourceId);
-      seen.add(item.id);
-    }
-
-    for (const c of courses) {
-      for (const r of c.resources) {
-        if (r.attachmentName || r.storagePath || r.downloadUrl || r.extractedPreview) {
-          seen.add(r.id);
-          out.push({
-            id: `course-${c.id}-${r.id}`,
-            resourceId: r.id,
-            title: r.title,
-            fileName: r.attachmentName || r.title,
-            subtitle: `كورس: ${c.title}`,
-            downloadUrl: r.downloadUrl,
-            storagePath: r.storagePath,
-            mimeType: r.mimeType,
-            fallbackText: r.extractedPreview,
-          });
-        }
-      }
-    }
-
-    for (const m of months) {
-      for (const r of m.resources) {
-        if (r.attachmentName || r.storagePath || r.downloadUrl || r.extractedPreview) {
-          seen.add(r.id);
-          out.push({
-            id: `month-${m.id}-${r.id}`,
-            resourceId: r.id,
-            title: r.title,
-            fileName: r.attachmentName || r.title,
-            subtitle: `الشهر ${m.id}: ${m.theme}`,
-            downloadUrl: r.downloadUrl,
-            storagePath: r.storagePath,
-            mimeType: r.mimeType,
-            fallbackText: r.extractedPreview,
-          });
-        }
-      }
-    }
-
-    for (const att of cloudAttachments) {
-      if (seen.has(att.id)) continue;
-      seen.add(att.id);
-      out.push({
-        id: `cloud-${att.id}`,
-        resourceId: att.id,
-        title: att.fileName,
-        fileName: att.fileName,
-        subtitle: 'مرفق محفوظ في قاعدة البيانات',
-        mimeType: att.mimeType,
-      });
-    }
-
-    for (const docItem of BUNDLED_APP_DOCUMENTS) {
-      out.push({
-        id: docItem.id,
-        resourceId: docItem.id,
-        title: docItem.title,
-        fileName: docItem.fileName,
-        subtitle: docItem.subtitle,
-        downloadUrl: docItem.downloadUrl,
-        mimeType: docItem.mimeType,
-      });
-    }
-
-    return out;
-  }, [items, courses, months, cloudAttachments]);
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
@@ -220,25 +131,36 @@ export default function LibraryView({
     e.target.value = '';
     if (!file) return;
     setUploadingFile(true);
-    setUploadCloudNotice(null);
+    setUploadStatusMsg(null);
     try {
       const resId = `lib-res-${Date.now()}`;
-      const uploaded = await uploadResourceAttachment(uid, resId, file);
+      const effectiveUid = uid || auth?.currentUser?.uid;
+      const uploaded = await uploadResourceAttachment(effectiveUid, resId, file);
       setPendingResId(resId);
       setPendingFileName(file.name);
       setPendingStoragePath(uploaded.storagePath);
       setPendingDownloadUrl(uploaded.downloadUrl);
-      if (uploaded.cloudErrorCode === 'PERMISSION') {
-        setUploadCloudNotice(
-          'تم حفظ الملف محليًا على هذا الجهاز، لكن قواعد Firebase السحابية الحالية منعت رفعه للسحابة. حدث Firestore/Storage Rules لمزامنة الملفات بين اللابتوب والموبايل.'
-        );
-      }
       if (!title.trim()) {
-        setTitle(file.name.replace(/\.(pdf|docx?|txt|md)$/i, ''));
+        setTitle(
+          file.name.replace(/\.(pdf|docx|doc|txt|md|markdown)$/i, '').trim()
+        );
       }
       if (isPdfAttachment(file.name, file.type)) {
         setItemType('ملف PDF');
       }
+      setUploadStatusMsg(
+        uploaded.uploadedToCloud
+          ? {
+              ok: true,
+              text: 'تم رفع الملف ومزامنته سحابيًا ليفتح على الهاتف واللابتوب معًا.',
+            }
+          : {
+              ok: false,
+              text:
+                uploaded.errorMessage ||
+                'تعذر رفع الملف للسحابة وتم حفظه محليًا فقط على هذا الجهاز.',
+            }
+      );
     } finally {
       setUploadingFile(false);
     }
@@ -288,22 +210,28 @@ export default function LibraryView({
     setPendingFileName('');
     setPendingStoragePath(undefined);
     setPendingDownloadUrl(undefined);
+    setUploadStatusMsg(null);
     setShowAddForm(false);
   };
 
   // Dedicated Single Library Item View
   if (selectedItem) {
     const hubMeta = getHubMeta(selectedItem.hubId);
-    const hasViewable =
-      Boolean(selectedItem.attachmentName) ||
-      Boolean(selectedItem.downloadUrl) ||
-      Boolean(selectedItem.storagePath) ||
-      Boolean(selectedItem.takeaways?.trim());
-    const hasDownloadable =
+    const hasAttachedFile =
       Boolean(selectedItem.attachmentName) ||
       Boolean(selectedItem.downloadUrl) ||
       Boolean(selectedItem.storagePath);
-    const selectedIsPdf = isPdfAttachment(selectedItem.attachmentName);
+    const isPdf =
+      isPdfAttachment(selectedItem.attachmentName) ||
+      (!selectedItem.attachmentName &&
+        Boolean(selectedItem.downloadUrl || selectedItem.storagePath) &&
+        selectedItem.itemType === 'ملف PDF');
+    const isViewable =
+      hasAttachedFile &&
+      (isPdf ||
+        isViewableDocumentAttachment(selectedItem.attachmentName) ||
+        Boolean(selectedItem.attachmentResourceId));
+    const resolvedUid = uid || auth?.currentUser?.uid;
 
     return (
       <div className="space-y-6">
@@ -355,49 +283,74 @@ export default function LibraryView({
               )}
             </div>
 
-            {hasViewable && (
+            {hasAttachedFile && (
               <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() =>
-                    onOpenPdf({
-                      title: selectedItem.title,
-                      fileName: selectedItem.attachmentName || `${selectedItem.title}.pdf`,
-                      resourceId: selectedItem.attachmentResourceId,
-                      storagePath: selectedItem.storagePath,
-                      downloadUrl: selectedItem.downloadUrl,
-                      mimeType: selectedIsPdf ? 'application/pdf' : undefined,
-                      fallbackText: selectedItem.takeaways,
-                      contextLabel: `مكتبة القراءة · ${hubMeta.title}`,
-                    })
-                  }
-                  className="inline-flex items-center gap-1.5 px-4 py-2.5 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
-                >
-                  <Eye className="w-4 h-4" aria-hidden="true" />
-                  <span>
-                    {selectedIsPdf ? 'عرض PDF داخل المنصة' : 'عرض الملف داخل المنصة'}
-                  </span>
-                </button>
-                {hasDownloadable && (
+                {isViewable && (
                   <button
                     type="button"
-                    onClick={() =>
-                      void downloadResourceAttachment({
+                    onClick={() => {
+                      setDownloadError(null);
+                      onOpenPdf({
+                        uid: resolvedUid,
+                        title: selectedItem.title,
+                        fileName:
+                          selectedItem.attachmentName ||
+                          `${selectedItem.title}.pdf`,
                         resourceId: selectedItem.attachmentResourceId,
-                        fileName: selectedItem.attachmentName || selectedItem.title,
                         storagePath: selectedItem.storagePath,
                         downloadUrl: selectedItem.downloadUrl,
-                      })
-                    }
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
+                        extractedPreview: selectedItem.takeaways || undefined,
+                        contextLabel: `مكتبة القراءة · ${hubMeta.title}`,
+                      });
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
                   >
-                    <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>تنزيل</span>
+                    <Eye className="w-4 h-4" aria-hidden="true" />
+                    <span>
+                      {isPdf
+                        ? 'فتح وقراءة PDF داخل المنصة'
+                        : 'فتح وقراءة المستند داخل المنصة'}
+                    </span>
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setDownloadError(null);
+                    const result = await downloadResourceAttachmentResult({
+                      uid: resolvedUid,
+                      resourceId: selectedItem.attachmentResourceId,
+                      fileName:
+                        selectedItem.attachmentName ||
+                        `${selectedItem.title}.pdf`,
+                      storagePath: selectedItem.storagePath,
+                      downloadUrl: selectedItem.downloadUrl,
+                    });
+                    if (!result.ok && result.errorMessage) {
+                      setDownloadError(result.errorMessage);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{isPdf ? 'تنزيل PDF' : 'تنزيل الملف'}</span>
+                </button>
               </div>
             )}
           </div>
+
+          {downloadError && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-2">
+              <span>{downloadError}</span>
+              <button
+                type="button"
+                onClick={() => setDownloadError(null)}
+                className="text-amber-700 hover:text-amber-950 font-semibold cursor-pointer"
+              >
+                إغلاق
+              </button>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <label className="block text-xs font-medium text-slate-700">
@@ -678,17 +631,11 @@ export default function LibraryView({
             </label>
           </div>
 
-          {uploadCloudNotice && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
-              {uploadCloudNotice}
-            </div>
-          )}
-
           <div className="flex flex-wrap items-center gap-3">
             <input
               ref={fileRef}
               type="file"
-              accept=".pdf,.docx,.doc,.txt,.md,image/*"
+              accept=".pdf,.docx,.doc,.txt,.md,.markdown"
               className="hidden"
               onChange={(e) => void handlePickPdf(e)}
             />
@@ -701,10 +648,10 @@ export default function LibraryView({
               <FileUp className="w-4 h-4" aria-hidden="true" />
               <span>
                 {uploadingFile
-                  ? 'جاري رفع الملف...'
+                  ? 'جاري رفع الملف للسحابة...'
                   : pendingFileName
                   ? `تم إرفاق: ${pendingFileName}`
-                  : 'رفع ملف PDF أو Word أو نص للعرض والتنزيل'}
+                  : 'رفع ملف PDF / Word للقراءة داخل التطبيق (اختياري)'}
               </span>
             </button>
 
@@ -716,6 +663,18 @@ export default function LibraryView({
               className="flex-1 min-w-[200px] px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
             />
           </div>
+
+          {uploadStatusMsg && (
+            <p
+              className={`text-xs px-3 py-2 rounded-lg border ${
+                uploadStatusMsg.ok
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-amber-50 border-amber-200 text-amber-900'
+              }`}
+            >
+              {uploadStatusMsg.text}
+            </p>
+          )}
 
           <label className="block text-xs font-medium text-slate-700">
             ملاحظات مبدئية (اختياري)
@@ -746,73 +705,6 @@ export default function LibraryView({
         </form>
       )}
 
-      {syncedAndBundledFiles.length > 0 && (
-        <section className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="text-sm font-bold text-slate-900">
-                جميع الملفات والمرفقات المتزامنة والمضمّنة ({syncedAndBundledFiles.length})
-              </h2>
-              <p className="text-[11px] text-slate-500">
-                ملفات الكورسات ووحدات الخطة والمرفقات السحابية متاحة للعرض المباشر على اللابتوب والموبايل
-              </p>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {syncedAndBundledFiles.map((f) => (
-              <div
-                key={f.id}
-                className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex flex-col justify-between gap-2.5"
-              >
-                <div className="space-y-0.5 min-w-0">
-                  <p className="text-xs font-bold text-slate-900 truncate">{f.title}</p>
-                  <p className="text-[11px] text-slate-500 truncate">{f.subtitle}</p>
-                </div>
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onOpenPdf({
-                        title: f.title,
-                        fileName: f.fileName,
-                        resourceId: f.resourceId,
-                        storagePath: f.storagePath,
-                        downloadUrl: f.downloadUrl,
-                        mimeType: f.mimeType,
-                        fallbackText: f.fallbackText,
-                        contextLabel: f.subtitle,
-                      })
-                    }
-                    className="inline-flex items-center justify-center gap-1.5 flex-1 px-3 py-2 min-h-[36px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
-                  >
-                    <Eye className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>عرض</span>
-                  </button>
-                  {(f.downloadUrl || f.storagePath || f.resourceId) && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void downloadResourceAttachment({
-                          resourceId: f.resourceId,
-                          fileName: f.fileName,
-                          storagePath: f.storagePath,
-                          downloadUrl: f.downloadUrl,
-                        })
-                      }
-                      aria-label={`تنزيل ${f.title}`}
-                      className="inline-flex items-center justify-center gap-1 px-3 py-2 min-h-[36px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>تنزيل</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
       {filteredItems.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-2">
           <BookOpen className="w-8 h-8 text-slate-400 mx-auto" aria-hidden="true" />
@@ -827,17 +719,22 @@ export default function LibraryView({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredItems.map((item) => {
             const hubMeta = getHubMeta(item.hubId);
-            const hasViewable =
-              Boolean(item.attachmentName) ||
-              Boolean(item.downloadUrl) ||
-              Boolean(item.storagePath) ||
-              Boolean(item.takeaways?.trim());
-            const hasDownloadable =
+            const hasAttachedFile =
               Boolean(item.attachmentName) ||
               Boolean(item.downloadUrl) ||
               Boolean(item.storagePath);
-            const itemIsPdf = isPdfAttachment(item.attachmentName);
+            const isPdf =
+              isPdfAttachment(item.attachmentName) ||
+              (!item.attachmentName &&
+                Boolean(item.downloadUrl || item.storagePath) &&
+                item.itemType === 'ملف PDF');
+            const isViewable =
+              hasAttachedFile &&
+              (isPdf ||
+                isViewableDocumentAttachment(item.attachmentName) ||
+                Boolean(item.attachmentResourceId));
             const due = Boolean(item.nextReviewDateKey && item.nextReviewDateKey <= today);
+            const resolvedUid = uid || auth?.currentUser?.uid;
 
             return (
               <article
@@ -908,7 +805,7 @@ export default function LibraryView({
                 </div>
 
                 <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
                       onClick={() => setSelectedItemId(item.id)}
@@ -916,45 +813,29 @@ export default function LibraryView({
                     >
                       التفاصيل والتكرار ←
                     </button>
-                    {hasViewable && (
+                    {isViewable && (
                       <button
                         type="button"
                         onClick={() =>
                           onOpenPdf({
+                            uid: resolvedUid,
                             title: item.title,
-                            fileName: item.attachmentName || `${item.title}.pdf`,
+                            fileName:
+                              item.attachmentName || `${item.title}.pdf`,
                             resourceId: item.attachmentResourceId,
                             storagePath: item.storagePath,
                             downloadUrl: item.downloadUrl,
-                            mimeType: itemIsPdf ? 'application/pdf' : undefined,
-                            fallbackText: item.takeaways,
+                            extractedPreview: item.takeaways || undefined,
                             contextLabel: `مكتبة القراءة · ${hubMeta.shortTitle}`,
                           })
                         }
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md cursor-pointer"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md cursor-pointer"
                       >
                         <Eye className="w-3 h-3" aria-hidden="true" />
-                        <span>{itemIsPdf ? 'عرض PDF' : 'عرض الملف'}</span>
+                        <span>{isPdf ? 'فتح PDF' : 'فتح الملف'}</span>
                       </button>
                     )}
-                    {hasDownloadable && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void downloadResourceAttachment({
-                            resourceId: item.attachmentResourceId,
-                            fileName: item.attachmentName || item.title,
-                            storagePath: item.storagePath,
-                            downloadUrl: item.downloadUrl,
-                          })
-                        }
-                        aria-label={`تنزيل ${item.title}`}
-                        className="inline-flex items-center gap-1 px-2 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
-                      >
-                        <Download className="w-3 h-3" aria-hidden="true" />
-                      </button>
-                    )}
-                    {!hasViewable && item.externalUrl && (
+                    {!hasAttachedFile && item.externalUrl && (
                       <a
                         href={item.externalUrl}
                         target="_blank"

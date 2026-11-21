@@ -23,7 +23,10 @@ import {
   getTodayDateKey,
   resolveCourseStudyStage,
 } from '../data/curriculumData';
-import { isPdfAttachment } from '../utils/documentImportExport';
+import {
+  isPdfAttachment,
+  isViewableDocumentAttachment,
+} from '../utils/documentImportExport';
 import ConfirmDialog from './ConfirmDialog';
 import DentalCasesView from './DentalCasesView';
 
@@ -760,8 +763,11 @@ export default function CoursesView({
                     : course.tasks.length > 0
                     ? Math.round((tasksDone / course.tasks.length) * 100)
                     : 0);
-                const pdfCount = course.resources.filter((r) =>
-                  isPdfAttachment(r.attachmentName, r.mimeType)
+                const attachedDocsCount = course.resources.filter(
+                  (r) =>
+                    isPdfAttachment(r.attachmentName, r.mimeType) ||
+                    isViewableDocumentAttachment(r.attachmentName, r.mimeType) ||
+                    Boolean(r.attachmentName)
                 ).length;
                 const notesCount = bookNotes.filter(
                   (bn) =>
@@ -848,7 +854,7 @@ export default function CoursesView({
 
                       {((course.listenCount ?? 0) >= 2 ||
                         (course.reviewCount ?? 0) > 0 ||
-                        pdfCount > 0) && (
+                        attachedDocsCount > 0) && (
                         <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
                           {(course.listenCount ?? 0) >= 2 && (
                             <span className="text-amber-800 font-medium">
@@ -860,9 +866,9 @@ export default function CoursesView({
                               مراجعات ({course.reviewCount}×)
                             </span>
                           )}
-                          {pdfCount > 0 && (
+                          {attachedDocsCount > 0 && (
                             <span className="text-[#1E3A5F] font-medium tabular-nums">
-                              {pdfCount} PDF
+                              {attachedDocsCount} ملف مرفق
                             </span>
                           )}
                         </div>

@@ -39,6 +39,8 @@ const ALLOWED_TAGS = new Set([
   'OL',
   'LI',
   'BLOCKQUOTE',
+  'H1',
+  'H2',
   'H3',
   'H4',
   'MARK',
@@ -188,6 +190,8 @@ export function sanitizeRichHtml(dirtyHtml: string): string {
       (rawDir === 'ltr' || rawDir === 'rtl' || rawDir === 'auto') &&
       (tag === 'P' ||
         tag === 'DIV' ||
+        tag === 'H1' ||
+        tag === 'H2' ||
         tag === 'H3' ||
         tag === 'H4' ||
         tag === 'UL' ||
@@ -252,6 +256,8 @@ export function richHtmlToPlainText(raw: string): string {
       tag === 'P' ||
       tag === 'DIV' ||
       tag === 'BLOCKQUOTE' ||
+      tag === 'H1' ||
+      tag === 'H2' ||
       tag === 'H3' ||
       tag === 'H4' ||
       tag === 'TABLE'
@@ -303,6 +309,8 @@ export function richHtmlToMarkdown(raw: string): string {
         return inner.trim() ? `*${inner.trim()}*` : '';
       case 'MARK':
         return inner.trim() ? `==${inner.trim()}==` : '';
+      case 'H1':
+      case 'H2':
       case 'H3':
       case 'H4':
         return inner.trim() ? `\n### ${inner.trim()}\n\n` : '';

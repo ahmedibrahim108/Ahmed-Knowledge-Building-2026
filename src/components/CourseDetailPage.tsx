@@ -38,19 +38,17 @@ import {
   PersonalCourse,
   PracticalProject,
   StudyResource,
-  TaskPriority,
   UnifiedTask,
   UserPreferences,
-  computeEndTimeFromMinutes,
   getCourseStageMeta,
   getHubMeta,
-  getTodayDateKey,
   resolveCourseStudyStage,
 } from '../data/curriculumData';
 import { auth } from '../firebase';
 import {
-  downloadResourceAttachment,
+  downloadResourceAttachmentResult,
   isPdfAttachment,
+  isViewableDocumentAttachment,
   parseDocumentFile,
   uploadResourceAttachment,
 } from '../utils/documentImportExport';
@@ -106,7 +104,6 @@ interface CourseDetailPageProps {
   onJumpToMonth: (monthId: number) => void;
   onOpenPaths: () => void;
   onOpenTasksTab: () => void;
-  onOpenCalendar?: () => void;
   onOpenNoteById: (noteId: string) => void;
   onAddStructuredNote: (payload: {
     hubId?: LearningHubId;
@@ -152,7 +149,6 @@ export default function CourseDetailPage({
   onJumpToMonth,
   onOpenPaths,
   onOpenTasksTab,
-  onOpenCalendar,
   onOpenNoteById,
   onAddStructuredNote,
   onUpdateBookNote,
@@ -178,12 +174,6 @@ export default function CourseDetailPage({
   // Tasks & Unified Tasks forms
   const [newTaskText, setNewTaskText] = useState('');
   const [newLinkedUnifiedTask, setNewLinkedUnifiedTask] = useState('');
-  const [schedTaskId, setSchedTaskId] = useState<string | null>(null);
-  const [schedDate, setSchedDate] = useState(() => getTodayDateKey());
-  const [schedTime, setSchedTime] = useState('09:00');
-  const [schedDuration, setSchedDuration] = useState(60);
-  const [schedPriority, setSchedPriority] = useState<TaskPriority>('medium');
-  const [schedDeadline, setSchedDeadline] = useState('');
 
   // Add resource state
   const [showAddResource, setShowAddResource] = useState(false);
@@ -202,7 +192,13 @@ export default function CourseDetailPage({
   );
   const [pendingResId, setPendingResId] = useState('');
   const [uploadingFile, setUploadingFile] = useState(false);
-  const [uploadCloudNotice, setUploadCloudNotice] = useState<string | null>(null);
+  const [uploadStatusMsg, setUploadStatusMsg] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+  const [resourceActionError, setResourceActionError] = useState<string | null>(
+    null
+  );
   const [expandedResId, setExpandedResId] = useState<string | null>(null);
   const courseResFileRef = useRef<HTMLInputElement | null>(null);
 
@@ -360,63 +356,13 @@ export default function CourseDetailPage({
       title,
       description: `مهمة تطبيقية مرتبطة بكورس: ${course.title}`,
       hubId: course.hubId ?? 'knowledge',
-      categoryLabel: course.category || 'كورس',
+      categoryLabel: course.category || 'تطبيق الكورسات',
       priority: 'medium',
       status: 'todo',
       dueDate: '',
-      scheduledDate: '',
-      startTime: '',
-      durationMinutes: 60,
-      projectId: `course:${course.id}`,
       linkedLabel: course.title,
     });
     setNewLinkedUnifiedTask('');
-  };
-
-  const handleSaveCourseTaskSchedule = (
-    courseTaskId: string,
-    courseTaskText: string,
-    isDone: boolean
-  ) => {
-    if (!requireEdit()) return;
-    const canonicalKey = `course:${course.id}:${courseTaskId}`;
-    const existing = linkedUnifiedTasks.find(
-      (ut) => ut.projectId === canonicalKey
-    );
-    const endTime = schedTime
-      ? computeEndTimeFromMinutes(schedTime, schedDuration)
-      : '';
-    if (existing) {
-      onUpdateUnifiedTask(existing.id, {
-        title: courseTaskText,
-        scheduledDate: schedDate,
-        dueDate: schedDeadline || schedDate,
-        startTime: schedTime,
-        endTime,
-        durationMinutes: schedDuration,
-        priority: schedPriority,
-        deadline: schedDeadline,
-        status: isDone ? 'done' : existing.status,
-      });
-    } else {
-      onAddUnifiedTask({
-        title: courseTaskText,
-        description: `مهمة درس من كورس: ${course.title}`,
-        hubId: course.hubId ?? 'knowledge',
-        categoryLabel: 'كورس',
-        priority: schedPriority,
-        status: isDone ? 'done' : 'todo',
-        dueDate: schedDeadline || schedDate,
-        scheduledDate: schedDate,
-        startTime: schedTime,
-        endTime,
-        durationMinutes: schedDuration,
-        deadline: schedDeadline,
-        projectId: canonicalKey,
-        linkedLabel: course.title,
-      });
-    }
-    setSchedTaskId(null);
   };
 
   const handlePickCourseResourceFile = async (
@@ -428,25 +374,17 @@ export default function CourseDetailPage({
     if (!requireEdit()) return;
 
     setUploadingFile(true);
-    setUploadCloudNotice(null);
+    setUploadStatusMsg(null);
+    setResourceActionError(null);
     try {
       const generatedId = `c${course.id}-res-${Date.now()}`;
       setPendingResId(generatedId);
-      const effectiveUid = uid || auth.currentUser?.uid;
+      const effectiveUid = uid || auth?.currentUser?.uid;
       const uploadRes = await uploadResourceAttachment(
         effectiveUid,
         generatedId,
         file
       );
-      if (uploadRes.cloudErrorCode === 'PERMISSION') {
-        setUploadCloudNotice(
-          'تم حفظ الملف محليًا على هذا الجهاز؛ لنشره عبر السحابة والأجهزة الأخرى يرجى تحديث قواعد Firestore في Firebase Console.'
-        );
-      } else if (!uploadRes.uploadedToCloud && effectiveUid) {
-        setUploadCloudNotice(
-          'تعذّر رفع الملف للسحابة حاليًا (حُفظ على هذا الجهاز). تأكد من صلاحيات Firebase.'
-        );
-      }
       const parsed = await parseDocumentFile(file);
       if (!newResTitle.trim()) {
         setNewResTitle(parsed.title);
@@ -465,6 +403,19 @@ export default function CourseDetailPage({
       if (!newResNote.trim()) {
         setNewResNote(`ملف مرفق (${file.name})`);
       }
+      setUploadStatusMsg(
+        uploadRes.uploadedToCloud
+          ? {
+              ok: true,
+              text: 'تم رفع الملف ومزامنته سحابيًا ليفتح على الهاتف واللابتوب معًا.',
+            }
+          : {
+              ok: false,
+              text:
+                uploadRes.errorMessage ||
+                'تعذر رفع الملف للسحابة وتم حفظه محليًا فقط على هذا الجهاز.',
+            }
+      );
     } finally {
       setUploadingFile(false);
     }
@@ -495,6 +446,7 @@ export default function CourseDetailPage({
     setNewResMimeType('');
     setNewResSizeBytes(undefined);
     setPendingResId('');
+    setUploadStatusMsg(null);
     setShowAddResource(false);
   };
 
@@ -1386,9 +1338,15 @@ export default function CourseDetailPage({
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
                   />
 
-                  {uploadCloudNotice && (
-                    <p className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-900">
-                      {uploadCloudNotice}
+                  {uploadStatusMsg && (
+                    <p
+                      className={`text-xs px-3 py-2 rounded-lg border ${
+                        uploadStatusMsg.ok
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-amber-50 border-amber-200 text-amber-900'
+                      }`}
+                    >
+                      {uploadStatusMsg.text}
                     </p>
                   )}
 
@@ -1402,35 +1360,58 @@ export default function CourseDetailPage({
                 </form>
               )}
 
+              {resourceActionError && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-2">
+                  <span>{resourceActionError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setResourceActionError(null)}
+                    className="text-amber-700 hover:text-amber-950 font-semibold cursor-pointer"
+                  >
+                    إغلاق
+                  </button>
+                </div>
+              )}
+
               <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl bg-slate-50/40">
                 {course.resources.length === 0 ? (
                   <p className="p-4 text-xs text-slate-500">
-                    لا توجد مصادر أو ملفات PDF مضافة لهذا الكورس بعد.
+                    لا توجد مصادر أو ملفات PDF أو Word مضافة لهذا الكورس بعد.
                   </p>
                 ) : (
                   course.resources.map((res) => {
                     const isPdf =
                       isPdfAttachment(res.attachmentName, res.mimeType) ||
                       (res.externalUrl ? isPdfAttachment(res.externalUrl) : false);
-                    const hasViewableDoc =
+                    const hasAttachedFile = Boolean(
+                      res.attachmentName || res.storagePath || res.downloadUrl
+                    );
+                    const isViewable =
                       isPdf ||
-                      Boolean(res.attachmentName) ||
-                      Boolean(res.storagePath) ||
-                      Boolean(res.downloadUrl) ||
-                      Boolean(res.extractedPreview);
+                      isViewableDocumentAttachment(
+                        res.attachmentName,
+                        res.mimeType
+                      ) ||
+                      Boolean(res.extractedPreview) ||
+                      hasAttachedFile;
                     const isPreviewOpen = expandedResId === res.id;
+                    const resolvedUid = uid || auth?.currentUser?.uid;
 
-                    const handleOpenPdfModal = () => {
+                    const handleOpenDocModal = () => {
+                      setResourceActionError(null);
                       onOpenPdf({
+                        uid: resolvedUid,
                         title: res.title,
-                        fileName: res.attachmentName || `${res.title}.pdf`,
+                        fileName:
+                          res.attachmentName ||
+                          (isPdf ? `${res.title}.pdf` : `${res.title}.docx`),
                         resourceId: res.id,
                         storagePath: res.storagePath,
                         downloadUrl:
                           res.downloadUrl || (isPdf ? res.externalUrl : undefined),
-                        contextLabel: course.title,
                         mimeType: res.mimeType,
-                        fallbackText: res.extractedPreview,
+                        extractedPreview: res.extractedPreview,
+                        contextLabel: course.title,
                       });
                     };
 
@@ -1442,10 +1423,10 @@ export default function CourseDetailPage({
                         <div className="p-3.5 flex flex-col sm:flex-row sm:items-start justify-between gap-2.5">
                           <div className="space-y-1 min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                              {hasViewableDoc ? (
+                              {isViewable ? (
                                 <button
                                   type="button"
-                                  onClick={handleOpenPdfModal}
+                                  onClick={handleOpenDocModal}
                                   className="font-bold text-[#1E3A5F] hover:underline text-right cursor-pointer"
                                 >
                                   {res.title}
@@ -1473,14 +1454,14 @@ export default function CourseDetailPage({
                           </div>
 
                           <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                            {hasViewableDoc && (
+                            {isViewable && (
                               <button
                                 type="button"
-                                onClick={handleOpenPdfModal}
+                                onClick={handleOpenDocModal}
                                 className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md cursor-pointer"
                               >
                                 <Eye className="w-3 h-3" aria-hidden="true" />
-                                <span>{isPdf ? 'عرض PDF' : 'عرض الملف'}</span>
+                                <span>{isPdf ? 'فتح PDF' : 'فتح الملف'}</span>
                               </button>
                             )}
 
@@ -1522,19 +1503,24 @@ export default function CourseDetailPage({
                               </>
                             )}
 
-                            {(res.attachmentName ||
-                              res.storagePath ||
-                              res.downloadUrl) && (
+                            {hasAttachedFile && (
                               <button
                                 type="button"
-                                onClick={() =>
-                                  void downloadResourceAttachment({
-                                    resourceId: res.id,
-                                    fileName: res.attachmentName || res.title,
-                                    storagePath: res.storagePath,
-                                    downloadUrl: res.downloadUrl,
-                                  })
-                                }
+                                onClick={async () => {
+                                  setResourceActionError(null);
+                                  const result =
+                                    await downloadResourceAttachmentResult({
+                                      uid: resolvedUid,
+                                      resourceId: res.id,
+                                      fileName: res.attachmentName || res.title,
+                                      mimeType: res.mimeType,
+                                      storagePath: res.storagePath,
+                                      downloadUrl: res.downloadUrl,
+                                    });
+                                  if (!result.ok && result.errorMessage) {
+                                    setResourceActionError(result.errorMessage);
+                                  }
+                                }}
                                 title="تنزيل الملف"
                                 className="inline-flex items-center gap-1 px-2 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
                               >
@@ -1645,203 +1631,59 @@ export default function CourseDetailPage({
                       لا توجد مهام مضافة بعد. أضف أول مهمة عملية للكورس.
                     </p>
                   ) : (
-                    course.tasks.map((task) => {
-                      const canonicalKey = `course:${course.id}:${task.id}`;
-                      const linkedSched = linkedUnifiedTasks.find(
-                        (ut) => ut.projectId === canonicalKey
-                      );
-                      const isSchedOpen = schedTaskId === task.id;
-                      return (
-                        <div key={task.id} className="bg-white">
-                          <div className="flex items-start justify-between gap-2 px-3.5 py-2.5">
-                            <div className="flex-1 min-w-0 space-y-1">
-                              <button
-                                type="button"
-                                disabled={!canEdit}
-                                onClick={() => onToggleCourseTask(course.id, task.id)}
-                                aria-pressed={task.done}
-                                className="flex items-start gap-2.5 text-right w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-75"
-                              >
-                                {task.done ? (
-                                  <CheckSquare
-                                    className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
-                                    aria-hidden="true"
-                                  />
-                                ) : (
-                                  <Square
-                                    className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
-                                    aria-hidden="true"
-                                  />
-                                )}
-                                <span
-                                  className={`text-xs sm:text-sm leading-relaxed ${
-                                    task.done
-                                      ? 'line-through text-slate-400'
-                                      : 'text-slate-800'
-                                  }`}
-                                >
-                                  {task.text}
-                                </span>
-                              </button>
-
-                              {linkedSched && (
-                                <div className="flex flex-wrap items-center gap-1.5 pr-6 text-[10px] text-[#1E3A5F]">
-                                  {linkedSched.scheduledDate ? (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200 font-semibold tabular-nums">
-                                      <Calendar className="w-3 h-3" aria-hidden="true" />
-                                      مجدولة: {linkedSched.scheduledDate}
-                                      {linkedSched.startTime ? ` · ${linkedSched.startTime}` : ''}
-                                    </span>
-                                  ) : (
-                                    <span className="px-1.5 py-0.5 bg-slate-50 rounded border border-slate-200 text-slate-600">
-                                      في قائمة المهام
-                                    </span>
-                                  )}
-                                  {onOpenCalendar && (
-                                    <button
-                                      type="button"
-                                      onClick={onOpenCalendar}
-                                      className="underline font-semibold cursor-pointer"
-                                    >
-                                      عرض في التقويم
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-
-                            <div className="flex items-center gap-1 shrink-0">
-                              {canEdit && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (isSchedOpen) {
-                                      setSchedTaskId(null);
-                                    } else {
-                                      setSchedTaskId(task.id);
-                                      setSchedDate(
-                                        linkedSched?.scheduledDate || getTodayDateKey()
-                                      );
-                                      setSchedTime(linkedSched?.startTime || '09:00');
-                                      setSchedDuration(linkedSched?.durationMinutes || 60);
-                                      setSchedPriority(linkedSched?.priority || 'medium');
-                                      setSchedDeadline(linkedSched?.deadline || '');
-                                    }
-                                  }}
-                                  className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
-                                >
-                                  <Calendar className="w-3 h-3" aria-hidden="true" />
-                                  <span>
-                                    {isSchedOpen
-                                      ? 'إغلاق'
-                                      : linkedSched?.scheduledDate
-                                      ? 'تعديل الجدول'
-                                      : 'جدولة'}
-                                  </span>
-                                </button>
-                              )}
-
-                              {canEdit && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setConfirmState({
-                                      type: 'task',
-                                      courseId: course.id,
-                                      taskId: task.id,
-                                      label: task.text,
-                                    })
-                                  }
-                                  aria-label="حذف المهمة"
-                                  className="p-1 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-
-                          {isSchedOpen && canEdit && (
-                            <div className="px-3.5 pb-3 pt-1 bg-slate-50 border-t border-slate-100 space-y-2">
-                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
-                                <label className="block text-slate-600">
-                                  التاريخ
-                                  <input
-                                    type="date"
-                                    value={schedDate}
-                                    onChange={(e) => setSchedDate(e.target.value)}
-                                    className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
-                                  />
-                                </label>
-                                <label className="block text-slate-600">
-                                  الوقت
-                                  <input
-                                    type="time"
-                                    value={schedTime}
-                                    onChange={(e) => setSchedTime(e.target.value)}
-                                    className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
-                                  />
-                                </label>
-                                <label className="block text-slate-600">
-                                  المدة (د)
-                                  <select
-                                    value={schedDuration}
-                                    onChange={(e) =>
-                                      setSchedDuration(Number(e.target.value))
-                                    }
-                                    className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
-                                  >
-                                    {[15, 30, 45, 60, 90, 120, 180].map((m) => (
-                                      <option key={m} value={m}>
-                                        {m} د
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                                <label className="block text-slate-600">
-                                  الأولوية
-                                  <select
-                                    value={schedPriority}
-                                    onChange={(e) =>
-                                      setSchedPriority(e.target.value as TaskPriority)
-                                    }
-                                    className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
-                                  >
-                                    <option value="high">عالية</option>
-                                    <option value="medium">متوسطة</option>
-                                    <option value="low">منخفضة</option>
-                                  </select>
-                                </label>
-                              </div>
-                              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                                <label className="flex items-center gap-1.5 text-slate-600">
-                                  <span>موعد نهائي:</span>
-                                  <input
-                                    type="date"
-                                    value={schedDeadline}
-                                    onChange={(e) => setSchedDeadline(e.target.value)}
-                                    className="px-2 py-1 bg-white border border-slate-300 rounded"
-                                  />
-                                </label>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleSaveCourseTaskSchedule(
-                                      task.id,
-                                      task.text,
-                                      task.done
-                                    )
-                                  }
-                                  className="px-3 py-1.5 font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded cursor-pointer"
-                                >
-                                  حفظ في المهام والتقويم
-                                </button>
-                              </div>
-                            </div>
+                    course.tasks.map((task) => (
+                      <div
+                        key={task.id}
+                        className="flex items-start justify-between gap-2 px-3.5 py-2.5 bg-white"
+                      >
+                        <button
+                          type="button"
+                          disabled={!canEdit}
+                          onClick={() => onToggleCourseTask(course.id, task.id)}
+                          aria-pressed={task.done}
+                          className="flex items-start gap-2.5 text-right flex-1 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75"
+                        >
+                          {task.done ? (
+                            <CheckSquare
+                              className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <Square
+                              className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
+                              aria-hidden="true"
+                            />
                           )}
-                        </div>
-                      );
-                    })
+                          <span
+                            className={`text-xs sm:text-sm leading-relaxed ${
+                              task.done
+                                ? 'line-through text-slate-400'
+                                : 'text-slate-800'
+                            }`}
+                          >
+                            {task.text}
+                          </span>
+                        </button>
+
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setConfirmState({
+                                type: 'task',
+                                courseId: course.id,
+                                taskId: task.id,
+                                label: task.text,
+                              })
+                            }
+                            aria-label="حذف المهمة"
+                            className="p-1 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          </button>
+                        )}
+                      </div>
+                    ))
                   )}
                 </div>
 
@@ -1960,11 +1802,9 @@ export default function CourseDetailPage({
                               {ut.title}
                             </span>
                           </button>
-                          {(ut.scheduledDate || ut.dueDate) && (
-                            <span className="inline-flex items-center gap-1 text-[11px] text-[#1E3A5F] font-medium tabular-nums shrink-0">
-                              <Calendar className="w-3 h-3" aria-hidden="true" />
-                              {ut.scheduledDate || ut.dueDate}
-                              {ut.startTime ? ` · ${ut.startTime}` : ''}
+                          {ut.dueDate && (
+                            <span className="text-[11px] text-slate-500 tabular-nums shrink-0">
+                              {ut.dueDate}
                             </span>
                           )}
                         </div>
@@ -2201,9 +2041,6 @@ export default function CourseDetailPage({
                     <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                       <ReadAloudButton
                         uid={uid}
-                        entityType={activeNote.noteType === 'course_lecture' ? 'course' : 'note'}
-                        entityId={activeNote.id}
-                        title={activeNote.bookTitle}
                         text={richHtmlToPlainText(activeNote.content)}
                         voiceName={preferences.readAloudVoice}
                         speed={preferences.readAloudSpeed}

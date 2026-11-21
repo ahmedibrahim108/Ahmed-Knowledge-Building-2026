@@ -78,6 +78,7 @@ import {
   signInWithGoogle,
   signOutUser,
 } from './firebase';
+import { deleteCloudAttachment } from './utils/documentImportExport';
 import {
   CloudAttachmentItem,
   deleteBookNoteDoc,
@@ -1078,6 +1079,12 @@ export default function App() {
       handleRequireAuth();
       return;
     }
+    const existing = months
+      .find((m) => m.id === monthId)
+      ?.resources.find((r) => r.id === resourceId);
+    if (existing) {
+      void deleteCloudAttachment(user.uid, resourceId, existing.storagePath);
+    }
     setMonths((prev) =>
       prev.map((m) => {
         if (m.id !== monthId) return m;
@@ -1382,6 +1389,12 @@ export default function App() {
     if (!user) {
       handleRequireAuth();
       return;
+    }
+    const existing = courses
+      .find((c) => c.id === courseId)
+      ?.resources.find((r) => r.id === resourceId);
+    if (existing) {
+      void deleteCloudAttachment(user.uid, resourceId, existing.storagePath);
     }
     setCourses((prev) =>
       prev.map((c) => {
@@ -1877,6 +1890,14 @@ export default function App() {
     if (!user) {
       handleRequireAuth();
       return;
+    }
+    const existing = readingItems.find((item) => item.id === id);
+    if (existing?.attachmentResourceId || existing?.storagePath) {
+      void deleteCloudAttachment(
+        user.uid,
+        existing.attachmentResourceId,
+        existing.storagePath
+      );
     }
     setReadingItems((prev) => prev.filter((item) => item.id !== id));
     void deleteReadingItemDoc(user.uid, id);
@@ -2696,6 +2717,7 @@ export default function App() {
         <ErrorBoundary inline onReset={() => setActivePdfTarget(null)}>
           <Suspense fallback={null}>
             <PDFViewerModal
+              uid={user?.uid}
               target={activePdfTarget}
               onClose={() => setActivePdfTarget(null)}
             />

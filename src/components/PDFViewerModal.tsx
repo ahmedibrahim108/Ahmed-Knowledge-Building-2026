@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
@@ -10,25 +10,25 @@ import {
   ExternalLink,
   FileText,
   FileWarning,
-  Globe,
   Loader2,
-  Maximize2,
-  RefreshCw,
   X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import {
-  downloadResourceAttachment,
-  loadAnyAttachmentForViewing,
+  downloadResourceAttachmentResult,
+  getAttachmentKind,
+  getPdfBlobForViewing,
+  renderDocumentBlobToHtml,
 } from '../utils/documentImportExport';
-import { sanitizeRichHtml } from '../utils/richText';
+import { ensureRichHtml, sanitizeRichHtml } from '../utils/richText';
 import ErrorBoundary from './ErrorBoundary';
 
 // Safe runtime shim for older Android Chrome / WebViews when PDF modal is opened
 if (
   typeof Promise !== 'undefined' &&
-  typeof (Promise as unknown as { withResolvers?: unknown }).withResolvers !== 'function'
+  typeof (Promise as unknown as { withResolvers?: unknown }).withResolvers !==
+    'function'
 ) {
   (
     Promise as unknown as {
@@ -61,119 +61,29 @@ export interface ActivePdfTarget {
   resourceId?: string;
   storagePath?: string;
   downloadUrl?: string;
-  contextLabel?: string;
   mimeType?: string;
-  fallbackText?: string;
+  extractedPreview?: string;
+  contextLabel?: string;
+  uid?: string;
 }
 
 interface PDFViewerModalProps {
+  uid?: string;
   target: ActivePdfTarget | null;
   onClose: () => void;
 }
 
-interface LazyPdfPageProps {
-  pageNumber: number;
-  width: number;
-  scrollRoot: HTMLDivElement | null;
-  isNearby: boolean;
-  onVisible: (pageNumber: number) => void;
-  setContainerRef: (pageNumber: number, el: HTMLDivElement | null) => void;
-}
-
-function LazyPdfPage({
-  pageNumber,
-  width,
-  scrollRoot,
-  isNearby,
-  onVisible,
-  setContainerRef,
-}: LazyPdfPageProps) {
-  const localRef = useRef<HTMLDivElement | null>(null);
-  const [inView, setInView] = useState(pageNumber <= 2);
-
-  useEffect(() => {
-    const el = localRef.current;
-    if (!el || typeof IntersectionObserver === 'undefined') {
-      setInView(true);
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (!entry) return;
-        setInView(entry.isIntersecting);
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.35) {
-          onVisible(pageNumber);
-        }
-      },
-      {
-        root: scrollRoot,
-        rootMargin: '420px 0px',
-        threshold: [0, 0.35, 0.7],
-      }
-    );
-
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [pageNumber, scrollRoot, onVisible]);
-
-  const shouldRender = inView || isNearby;
-  const estimatedHeight = Math.round(width * 1.414);
-
-  return (
-    <div
-      ref={(el) => {
-        localRef.current = el;
-        setContainerRef(pageNumber, el);
-      }}
-      style={{
-        minHeight: shouldRender ? undefined : `${estimatedHeight}px`,
-        width: `${width}px`,
-      }}
-      className="bg-white shadow-xl rounded-sm overflow-hidden flex items-center justify-center shrink-0"
-    >
-      {shouldRender ? (
-        <Page
-          pageNumber={pageNumber}
-          width={width}
-          devicePixelRatio={
-            typeof window !== 'undefined'
-              ? Math.min(window.devicePixelRatio || 1, 2)
-              : 1
-          }
-          renderTextLayer
-          renderAnnotationLayer
-          loading={
-            <div
-              style={{ width: `${width}px`, height: `${estimatedHeight}px` }}
-              className="flex items-center justify-center bg-white text-slate-400 text-xs gap-2"
-            >
-              <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-              <span>صفحة {pageNumber}</span>
-            </div>
-          }
-        />
-      ) : (
-        <span className="text-xs text-slate-400 tabular-nums">
-          صفحة {pageNumber}
-        </span>
-      )}
-    </div>
-  );
-}
-
-export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps) {
-  const [loadingBytes, setLoadingBytes] = useState(false);
-  const [contentKind, setContentKind] = useState<'pdf' | 'docx' | 'text' | 'image' | 'iframe'>('pdf');
-  const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
-  const [docHtml, setDocHtml] = useState<string>('');
-  const [docText, setDocText] = useState<string>('');
-  const [imageObjectUrl, setImageObjectUrl] = useState<string>('');
+export default function PDFViewerModal({
+  uid,
+  target,
+  onClose,
+}: PDFViewerModalProps) {
+  const [loadingBlob, setLoadingBlob] = useState(false);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [docHtml, setDocHtml] = useState<string | null>(null);
+  const [previewOnlyNotice, setPreviewOnlyNotice] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [fallbackUrl, setFallbackUrl] = useState<string | undefined>(undefined);
-  const [reloadNonce, setReloadNonce] = useState(0);
-
+  const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
   const [numPages, setNumPages] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [zoom, setZoom] = useState<number>(1);
@@ -182,71 +92,91 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
   const bodyContainerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
-  useEffect(() => {
-    let activeImgUrl = '';
+  const attachmentKind = useMemo(
+    () => getAttachmentKind(target?.fileName, target?.mimeType),
+    [target?.fileName, target?.mimeType]
+  );
 
+  const isPdfMode = attachmentKind === 'pdf';
+
+  useEffect(() => {
     if (!target) {
-      setPdfBytes(null);
-      setDocHtml('');
-      setDocText('');
-      setImageObjectUrl('');
+      setPdfUrl(null);
+      setDocHtml(null);
+      setPreviewOnlyNotice(false);
       setNumPages(0);
       setCurrentPage(1);
       setLoadError(null);
-      setFallbackUrl(undefined);
+      setDownloadNotice(null);
       return;
     }
 
     let cancelled = false;
+    let createdUrl: string | null = null;
+    const resolvedUid = uid || target.uid;
 
     const load = async () => {
-      setLoadingBytes(true);
+      setLoadingBlob(true);
       setLoadError(null);
-      setFallbackUrl(target.downloadUrl);
-      setPdfBytes(null);
-      setDocHtml('');
-      setDocText('');
-      setImageObjectUrl('');
+      setDownloadNotice(null);
+      setPdfUrl(null);
+      setDocHtml(null);
+      setPreviewOnlyNotice(false);
       setNumPages(0);
       setCurrentPage(1);
       setZoom(1);
 
       try {
-        const res = await loadAnyAttachmentForViewing({
+        const blob = await getPdfBlobForViewing({
+          uid: resolvedUid,
           resourceId: target.resourceId,
           fileName: target.fileName,
           mimeType: target.mimeType,
           storagePath: target.storagePath,
           downloadUrl: target.downloadUrl,
-          fallbackText: target.fallbackText,
         });
+
         if (cancelled) return;
 
-        if (!res.ok) {
-          setLoadError(res.message);
-          setFallbackUrl(res.fallbackUrl ?? target.downloadUrl);
-        } else if (res.kind === 'pdf') {
-          setContentKind('pdf');
-          setPdfBytes(res.data);
-        } else if (res.kind === 'docx') {
-          setContentKind('docx');
-          setDocHtml(res.html || '');
-          setDocText(res.plainText || '');
-        } else if (res.kind === 'text') {
-          setContentKind('text');
-          setDocText(res.plainText || '');
-        } else if (res.kind === 'image') {
-          setContentKind('image');
-          activeImgUrl = URL.createObjectURL(res.blob);
-          setImageObjectUrl(activeImgUrl);
+        if (isPdfMode) {
+          if (!blob) {
+            setLoadError(
+              'لم يُعثر على ملف الـ PDF في قاعدة البيانات السحابية أو المحلية لهذا الجهاز. إذا رفعته قبل تحديث المزامنة، أعد رفعه مرة واحدة من الجهاز الأصلي ليفتح على كل الأجهزة.'
+            );
+          } else {
+            createdUrl = URL.createObjectURL(blob);
+            setPdfUrl(createdUrl);
+          }
+        } else {
+          if (blob) {
+            const rawHtml = await renderDocumentBlobToHtml(
+              blob,
+              target.fileName,
+              target.mimeType
+            );
+            if (cancelled) return;
+            setDocHtml(sanitizeRichHtml(rawHtml));
+            setPreviewOnlyNotice(false);
+          } else if (target.extractedPreview?.trim()) {
+            setDocHtml(sanitizeRichHtml(ensureRichHtml(target.extractedPreview)));
+            setPreviewOnlyNotice(true);
+          } else {
+            setLoadError(
+              'لم يُعثر على محتوى المستند في السحابة أو على هذا الجهاز. إذا رفعته قبل تحديث المزامنة، أعد رفعه مرة واحدة من الجهاز الأصلي.'
+            );
+          }
         }
       } catch {
         if (!cancelled) {
-          setPdfBytes(null);
-          setLoadError('تعذّر تحميل الملف للعرض المباشر. حاول إعادة المحاولة أو تنزيله مباشرة.');
+          if (!isPdfMode && target.extractedPreview?.trim()) {
+            setDocHtml(sanitizeRichHtml(ensureRichHtml(target.extractedPreview)));
+            setPreviewOnlyNotice(true);
+          } else {
+            setLoadError('تعذر فتح الملف مباشرة. حاول تنزيله أو إعادة رفعه.');
+          }
         }
       } finally {
-        if (!cancelled) setLoadingBytes(false);
+        if (!cancelled) setLoadingBlob(false);
       }
     };
 
@@ -254,16 +184,17 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
 
     return () => {
       cancelled = true;
-      if (activeImgUrl) URL.revokeObjectURL(activeImgUrl);
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl);
+      }
     };
-  }, [target, reloadNonce]);
+  }, [target, uid, isPdfMode]);
 
   useEffect(() => {
     if (!target) return;
     const updateWidth = () => {
       const w = bodyContainerRef.current?.clientWidth ?? window.innerWidth;
-      const horizontalPad = window.innerWidth < 640 ? 16 : 40;
-      setContainerWidth(Math.max(260, Math.min(920, w - horizontalPad)));
+      setContainerWidth(Math.max(280, Math.min(900, w - 32)));
     };
     updateWidth();
     window.addEventListener('resize', updateWidth);
@@ -277,33 +208,17 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
     };
   }, [target, onClose]);
 
-  const setContainerRef = useCallback((pageNum: number, el: HTMLDivElement | null) => {
-    pageRefs.current[pageNum] = el;
-  }, []);
-
-  const handlePageVisible = useCallback((pageNum: number) => {
-    setCurrentPage((prev) => (prev === pageNum ? prev : pageNum));
-  }, []);
-
-  // Provide fresh Uint8Array copy so pdf.js worker transfer never detaches React state buffer
-  const documentFile = useMemo(() => {
-    if (!pdfBytes) return null;
-    return { data: new Uint8Array(pdfBytes) };
-  }, [pdfBytes]);
-
-  const documentOptions = useMemo(() => {
-    const ver = pdfjs.version || '5.4.149';
-    return {
-      cMapUrl: `https://unpkg.com/pdfjs-dist@${ver}/cmaps/`,
-      cMapPacked: true,
-      standardFontDataUrl: `https://unpkg.com/pdfjs-dist@${ver}/standard_fonts/`,
-    };
-  }, []);
-
-  const allPageNumbers = useMemo(() => {
+  const renderedPages = useMemo(() => {
     if (numPages <= 0) return [];
     if (scrollMode === 'single') return [currentPage];
-    return Array.from({ length: numPages }, (_, i) => i + 1);
+    if (numPages <= 35) {
+      return Array.from({ length: numPages }, (_, i) => i + 1);
+    }
+    const start = Math.max(1, currentPage - 8);
+    const end = Math.min(numPages, currentPage + 8);
+    const arr: number[] = [];
+    for (let p = start; p <= end; p++) arr.push(p);
+    return arr;
   }, [numPages, scrollMode, currentPage]);
 
   if (!target) return null;
@@ -318,94 +233,111 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
           block: 'start',
         });
       }, 30);
-    } else if (bodyContainerRef.current) {
-      bodyContainerRef.current.scrollTop = 0;
     }
   };
 
   const handleExplicitDownload = async () => {
-    await downloadResourceAttachment({
+    setDownloadNotice(null);
+    const res = await downloadResourceAttachmentResult({
+      uid: uid || target.uid,
       resourceId: target.resourceId,
       fileName: target.fileName,
+      mimeType: target.mimeType,
       storagePath: target.storagePath,
       downloadUrl: target.downloadUrl,
     });
+    if (!res.ok) {
+      setDownloadNotice(
+        res.errorMessage || 'تعذر تنزيل الملف من السحابة أو الذاكرة المحلية.'
+      );
+    }
   };
 
-  const pageRenderWidth = Math.max(240, Math.round(containerWidth * zoom));
-  const isPdfActive = contentKind === 'pdf' && !loadError && Boolean(documentFile);
+  const pageRenderWidth = Math.round(containerWidth * zoom);
+  const downloadLabel = isPdfMode
+    ? 'تنزيل PDF'
+    : attachmentKind === 'docx' || attachmentKind === 'doc'
+    ? 'تنزيل Word'
+    : 'تنزيل الملف';
 
   return (
     <div
-      className="fixed inset-0 z-[80] bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4"
+      className="fixed inset-0 z-[80] bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-label={`عارض المستندات: ${target.title}`}
       onClick={onClose}
     >
       <div
-        className="w-full max-w-5xl h-[100dvh] sm:h-[94dvh] flex flex-col bg-white rounded-none sm:rounded-2xl border-0 sm:border sm:border-slate-200 shadow-2xl overflow-hidden"
+        className="w-full max-w-5xl h-[94dvh] flex flex-col bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top Bar */}
-        <div className="px-3 sm:px-5 py-2.5 sm:py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
+        <div className="px-3 sm:px-5 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div className="min-w-0 flex-1">
             {target.contextLabel && (
               <p className="text-[11px] font-medium text-[#1E3A5F] truncate">
                 {target.contextLabel}
               </p>
             )}
-            <h2 className="text-sm sm:text-base font-bold text-slate-900 truncate">
-              {target.title || target.fileName}
-            </h2>
+            <div className="flex items-center gap-2 min-w-0">
+              <FileText
+                className="w-4 h-4 text-[#1E3A5F] shrink-0"
+                aria-hidden="true"
+              />
+              <h2 className="text-sm sm:text-base font-bold text-slate-900 truncate">
+                {target.title || target.fileName}
+              </h2>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-            {fallbackUrl && (
+            <button
+              type="button"
+              onClick={() => void handleExplicitDownload()}
+              className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[38px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>{downloadLabel}</span>
+            </button>
+            {target.downloadUrl && (
               <a
-                href={fallbackUrl}
+                href={target.downloadUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 px-2.5 py-2 min-h-[40px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg"
-                title="فتح النسخة الأصلية في نافذة جديدة"
+                className="inline-flex items-center gap-1 px-2.5 py-2 min-h-[38px] text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-100 rounded-lg"
+                title="فتح الرابط المباشر في تبويب جديد"
               >
                 <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-                <span className="hidden md:inline">فتح الأصل</span>
+                <span className="hidden sm:inline">فتح مباشر</span>
               </a>
             )}
             <button
               type="button"
-              onClick={() => void handleExplicitDownload()}
-              className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer"
-            >
-              <Download className="w-3.5 h-3.5" aria-hidden="true" />
-              <span className="hidden sm:inline">تنزيل الملف</span>
-            </button>
-            <button
-              type="button"
               onClick={onClose}
-              className="inline-flex items-center gap-1 px-3 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+              className="inline-flex items-center gap-1 px-3 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
             >
               <X className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>إغلاق</span>
+              <span>إغلاق والعودة</span>
             </button>
           </div>
         </div>
 
-        {/* Navigation & Zoom Toolbar (for PDF) */}
-        {isPdfActive && (
-          <div className="px-3 sm:px-5 py-2 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+        {/* Navigation & Zoom Toolbar */}
+        <div className="px-3 sm:px-5 py-2 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+          {isPdfMode ? (
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 disabled={currentPage <= 1 || numPages === 0}
                 onClick={() => goToPage(currentPage - 1)}
                 aria-label="الصفحة السابقة"
-                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
               >
                 <ChevronRight className="w-4 h-4" aria-hidden="true" />
               </button>
-              <div className="inline-flex items-center gap-1 px-1.5">
+              <div className="inline-flex items-center gap-1.5 px-2">
+                <span className="text-slate-500">صفحة</span>
                 <input
                   type="number"
                   min={1}
@@ -416,10 +348,10 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
                     if (!Number.isNaN(val)) goToPage(val);
                   }}
                   aria-label="رقم الصفحة"
-                  className="w-12 px-1.5 py-1.5 min-h-[36px] text-center text-xs bg-slate-50 border border-slate-300 rounded-md tabular-nums"
+                  className="w-14 px-2 py-1 text-center text-xs bg-slate-50 border border-slate-300 rounded-md tabular-nums"
                 />
                 <span className="text-slate-600 tabular-nums">
-                  / {numPages || '—'}
+                  من {numPages || '—'}
                 </span>
               </div>
               <button
@@ -427,276 +359,181 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
                 disabled={numPages === 0 || currentPage >= numPages}
                 onClick={() => goToPage(currentPage + 1)}
                 aria-label="الصفحة التالية"
-                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+                className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
               >
                 <ChevronLeft className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
-
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setScrollMode((m) => (m === 'all' ? 'single' : 'all'))}
-                className="px-2.5 py-2 min-h-[40px] text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
-              >
-                {scrollMode === 'all' ? 'تمرير مستمر' : 'صفحة بصفحة'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.15).toFixed(2)))}
-                aria-label="تصغير"
-                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
-              >
-                <ZoomOut className="w-4 h-4" aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setZoom(1)}
-                title="ملاءمة عرض الشاشة (100%)"
-                className="inline-flex items-center gap-1 px-2.5 py-2 min-h-[40px] text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg tabular-nums cursor-pointer"
-              >
-                <Maximize2 className="w-3 h-3 text-slate-500 hidden sm:inline" aria-hidden="true" />
-                <span>{Math.round(zoom * 100)}%</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setZoom((z) => Math.min(2.4, +(z + 0.15).toFixed(2)))}
-                aria-label="تكبير"
-                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
-              >
-                <ZoomIn className="w-4 h-4" aria-hidden="true" />
-              </button>
+          ) : (
+            <div className="flex items-center gap-2 text-xs text-slate-600">
+              <span className="px-2 py-1 bg-slate-100 text-[#1E3A5F] font-semibold rounded-md">
+                {attachmentKind === 'docx' || attachmentKind === 'doc'
+                  ? 'مستند Word'
+                  : 'مستند نصي'}
+              </span>
+              <span className="truncate max-w-[200px] sm:max-w-xs text-slate-500">
+                {target.fileName}
+              </span>
             </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {isPdfMode && (
+              <button
+                type="button"
+                onClick={() =>
+                  setScrollMode((m) => (m === 'all' ? 'single' : 'all'))
+                }
+                className="px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+              >
+                {scrollMode === 'all' ? 'نمط التمرير' : 'صفحة بصفحة'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() =>
+                setZoom((z) => Math.max(0.6, +(z - 0.15).toFixed(2)))
+              }
+              aria-label="تصغير"
+              className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
+            >
+              <ZoomOut className="w-4 h-4" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setZoom(1)}
+              className="px-2.5 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg tabular-nums cursor-pointer"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setZoom((z) => Math.min(2.4, +(z + 0.15).toFixed(2)))
+              }
+              aria-label="تكبير"
+              className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
+            >
+              <ZoomIn className="w-4 h-4" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+
+        {downloadNotice && (
+          <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-xs text-amber-900 text-center">
+            {downloadNotice}
           </div>
         )}
 
         {/* Scrollable Document Viewport */}
         <div
           ref={bodyContainerRef}
-          className={`flex-1 overflow-auto ${
-            contentKind === 'docx' || contentKind === 'text'
-              ? 'bg-slate-50 p-3 sm:p-6'
-              : 'bg-slate-800 p-2 sm:p-5'
-          } flex flex-col items-center gap-4 touch-pan-x touch-pan-y`}
+          className="flex-1 overflow-auto bg-slate-800 p-3 sm:p-5 flex flex-col items-center gap-4"
         >
-          {loadingBytes && (
+          {loadingBlob && (
             <div className="my-auto flex flex-col items-center gap-3 text-slate-200 py-16">
               <Loader2 className="w-7 h-7 animate-spin" aria-hidden="true" />
-              <p className="text-sm">جاري تجهيز الملف للعرض داخل الموقع...</p>
+              <p className="text-sm">جاري تجهيز الملف للقراءة...</p>
             </div>
           )}
 
-          {!loadingBytes && loadError && contentKind !== 'iframe' && (
-            <div className="my-auto max-w-md bg-white rounded-xl p-6 text-center space-y-4">
-              <FileWarning className="w-8 h-8 text-amber-600 mx-auto" aria-hidden="true" />
+          {!loadingBlob && loadError && (
+            <div className="my-auto max-w-md bg-white rounded-xl p-6 text-center space-y-3">
+              <FileWarning
+                className="w-8 h-8 text-amber-600 mx-auto"
+                aria-hidden="true"
+              />
               <p className="text-sm font-semibold text-slate-900">
-                تعذّر عرض الملف مباشرة عبر الجلب المحلي
+                تعذر عرض الملف مباشرة
               </p>
-              <p className="text-xs text-slate-600 leading-relaxed">{loadError}</p>
-              <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setReloadNonce((n) => n + 1)}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>إعادة المحاولة</span>
-                </button>
-                {fallbackUrl && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoadError(null);
-                      setContentKind('iframe');
-                    }}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg cursor-pointer"
-                  >
-                    <Globe className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>عرض مدمج داخل الصفحة</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => void handleExplicitDownload()}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+              <p className="text-xs text-slate-600 leading-relaxed">
+                {loadError}
+              </p>
+              {target.downloadUrl && (
+                <a
+                  href={target.downloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg"
                 >
                   <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>تنزيل الملف</span>
-                </button>
-                {fallbackUrl && (
-                  <a
-                    href={fallbackUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] text-xs font-medium text-[#1E3A5F] border border-slate-300 rounded-lg hover:bg-slate-50"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>فتح في المتصفح</span>
-                  </a>
-                )}
-              </div>
+                  <span>فتح أو تنزيل الملف من الرابط السحابي</span>
+                </a>
+              )}
             </div>
           )}
 
-          {!loadingBytes && contentKind === 'iframe' && fallbackUrl && (
-            <div className="w-full h-full flex flex-col gap-2">
-              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-white rounded-lg text-xs text-slate-600">
-                <span>معاينة مدمجة عبر إطار الصفحة — إذا لم يظهر المستند بسبب إعدادات الموقع المصدر استخدم «فتح الأصل».</span>
-                <button
-                  type="button"
-                  onClick={() => setReloadNonce((n) => n + 1)}
-                  className="text-[#1E3A5F] font-semibold hover:underline cursor-pointer"
-                >
-                  العودة للعارض القياسي
-                </button>
-              </div>
-              <iframe
-                title={target.title || target.fileName}
-                src={fallbackUrl}
-                className="w-full flex-1 bg-white rounded-lg border border-slate-200 min-h-[70dvh]"
-              />
-            </div>
-          )}
-
-          {!loadingBytes && !loadError && contentKind === 'docx' && (
-            <article className="w-full max-w-3xl bg-white border border-slate-200 rounded-xl p-5 sm:p-8 shadow-sm space-y-4">
-              <div className="flex items-center gap-2 text-xs font-semibold text-[#1E3A5F] pb-3 border-b border-slate-200">
-                <FileText className="w-4 h-4" aria-hidden="true" />
-                <span>عرض مستند Word / نص منسق: {target.fileName}</span>
-              </div>
-              <div
-                dir="auto"
-                className="text-sm sm:text-base leading-relaxed text-slate-800 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:text-lg [&_h2]:font-bold [&_h3]:text-base [&_h3]:font-bold [&_ul]:list-disc [&_ul]:pr-6 [&_ol]:list-decimal [&_ol]:pr-6 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-slate-300 [&_td]:p-2 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:p-2"
-                dangerouslySetInnerHTML={{
-                  __html: sanitizeRichHtml(docHtml || `<p>${docText}</p>`),
-                }}
-              />
-            </article>
-          )}
-
-          {!loadingBytes && !loadError && contentKind === 'text' && (
-            <article className="w-full max-w-3xl bg-white border border-slate-200 rounded-xl p-5 sm:p-8 shadow-sm space-y-4">
-              <div className="flex items-center gap-2 text-xs font-semibold text-[#1E3A5F] pb-3 border-b border-slate-200">
-                <FileText className="w-4 h-4" aria-hidden="true" />
-                <span>عرض محتوى الملف: {target.fileName}</span>
-              </div>
-              <pre
-                dir="auto"
-                className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-800"
-              >
-                {docText || 'لا يوجد نص قابل للعرض داخل هذا الملف.'}
-              </pre>
-            </article>
-          )}
-
-          {!loadingBytes && !loadError && contentKind === 'image' && imageObjectUrl && (
-            <div className="my-auto flex flex-col items-center gap-3">
-              <img
-                src={imageObjectUrl}
-                alt={target.title || target.fileName}
-                className="max-w-full max-h-[80dvh] rounded-lg shadow-lg bg-white object-contain"
-              />
-            </div>
-          )}
-
-          {!loadingBytes && !loadError && contentKind === 'pdf' && documentFile && (
+          {/* PDF Renderer */}
+          {!loadingBlob && !loadError && isPdfMode && pdfUrl && (
             <ErrorBoundary
               inline
               fallbackTitle="تعذّر عرض ملف الـ PDF داخل المتصفح الحالي"
-              fallbackMessage="يمكنك استخدام زر «تنزيل الملف» أو «فتح الأصل» بالأعلى لفتح المستند."
+              fallbackMessage="قد لا يدعم متصفح الهاتف الحالي عارض الـ PDF المدمج. يمكنك استخدام زر «تنزيل PDF» بالأعلى لفتح الملف مباشرة."
             >
               <Document
-                file={documentFile}
-                options={documentOptions}
+                file={pdfUrl}
                 loading={
                   <div className="flex items-center gap-2 text-slate-200 py-12 text-sm">
                     <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
-                    <span>جاري معالجة صفحات المستند...</span>
+                    <span>جاري تحميل الصفحات...</span>
                   </div>
                 }
                 error={
-                  <div className="bg-white rounded-xl p-5 text-xs text-red-700 space-y-3 text-center max-w-sm">
-                    <p>تعذّر قراءة هذا المستند بصيغة PDF داخل العارض المدمج.</p>
-                    <div className="flex flex-wrap items-center justify-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void handleExplicitDownload()}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
-                      >
-                        <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>تنزيل الملف</span>
-                      </button>
-                      {fallbackUrl && (
-                        <a
-                          href={fallbackUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#1E3A5F] border border-slate-300 rounded-lg"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>فتح الأصل</span>
-                        </a>
-                      )}
-                    </div>
+                  <div className="bg-white rounded-xl p-5 text-xs text-red-700 space-y-2 text-center">
+                    <p>
+                      تعذر قراءة هذا المستند بصيغة PDF. يمكنك تجربة زر «تنزيل
+                      PDF».
+                    </p>
                   </div>
                 }
                 onLoadSuccess={({ numPages: total }) => {
                   setNumPages(total);
                   setCurrentPage(1);
                 }}
-                onLoadError={(err) => {
-                  setLoadError(
-                    err?.message
-                      ? `تعذر تفسير ملف الـ PDF (${err.message}).`
-                      : 'تعذر تفسير ملف الـ PDF.'
-                  );
-                }}
               >
                 <div className="flex flex-col items-center gap-4">
-                  {allPageNumbers.map((pageNumber) => (
-                    <LazyPdfPage
+                  {renderedPages.map((pageNumber) => (
+                    <div
                       key={pageNumber}
-                      pageNumber={pageNumber}
-                      width={pageRenderWidth}
-                      scrollRoot={bodyContainerRef.current}
-                      isNearby={Math.abs(pageNumber - currentPage) <= 1}
-                      onVisible={handlePageVisible}
-                      setContainerRef={setContainerRef}
-                    />
+                      ref={(el) => {
+                        pageRefs.current[pageNumber] = el;
+                      }}
+                      className="bg-white shadow-xl rounded-sm overflow-hidden"
+                    >
+                      <Page
+                        pageNumber={pageNumber}
+                        width={pageRenderWidth}
+                        renderTextLayer
+                        renderAnnotationLayer
+                      />
+                    </div>
                   ))}
                 </div>
               </Document>
             </ErrorBoundary>
           )}
-        </div>
 
-        {/* Mobile Bottom Quick Pager when in PDF mode */}
-        {isPdfActive && numPages > 1 && (
-          <div className="sm:hidden px-3 py-2 bg-white border-t border-slate-200 flex items-center justify-between gap-2 shrink-0">
-            <button
-              type="button"
-              disabled={currentPage <= 1}
-              onClick={() => goToPage(currentPage - 1)}
-              className="flex-1 min-h-[44px] inline-flex items-center justify-center gap-1 text-xs font-semibold text-slate-700 bg-slate-100 rounded-lg disabled:opacity-40 cursor-pointer"
-            >
-              <ChevronRight className="w-4 h-4" aria-hidden="true" />
-              <span>السابقة</span>
-            </button>
-            <span className="text-xs font-bold text-[#1E3A5F] tabular-nums px-2">
-              {currentPage} / {numPages}
-            </span>
-            <button
-              type="button"
-              disabled={currentPage >= numPages}
-              onClick={() => goToPage(currentPage + 1)}
-              className="flex-1 min-h-[44px] inline-flex items-center justify-center gap-1 text-xs font-semibold text-slate-700 bg-slate-100 rounded-lg disabled:opacity-40 cursor-pointer"
-            >
-              <span>التالية</span>
-              <ChevronLeft className="w-4 h-4" aria-hidden="true" />
-            </button>
-          </div>
-        )}
+          {/* Word / Doc / Text Renderer */}
+          {!loadingBlob && !loadError && !isPdfMode && docHtml !== null && (
+            <div className="w-full max-w-4xl bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden">
+              {previewOnlyNotice && (
+                <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-200 text-xs text-amber-900">
+                  يتم عرض المعاينة النصية المحفوظة سحابيًا لأن الملف رُفع قبل
+                  تحديث المزامنة الكاملة؛ أعد رفعه من الجهاز الأصلي لتفعيل
+                  تنزيله الكامل على كل أجهزتك.
+                </div>
+              )}
+              <div
+                dir="auto"
+                style={{ fontSize: `${Math.round(15 * zoom)}px` }}
+                className="p-5 sm:p-10 text-slate-800 leading-relaxed space-y-3 [&_h1]:text-xl [&_h1]:font-bold [&_h1]:text-[#1E3A5F] [&_h1]:mb-3 [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-[#1E3A5F] [&_h2]:mt-5 [&_h2]:mb-2 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-4 [&_ul]:list-disc [&_ul]:ps-6 [&_ol]:list-decimal [&_ol]:ps-6 [&_blockquote]:border-s-4 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:ps-3 [&_blockquote]:bg-slate-50 [&_blockquote]:py-2 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:p-2 [&_th]:text-start [&_td]:border [&_td]:border-slate-300 [&_td]:p-2 [&_mark]:px-1 [&_mark]:rounded"
+                dangerouslySetInnerHTML={{ __html: docHtml }}
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
+

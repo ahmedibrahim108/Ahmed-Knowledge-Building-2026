@@ -253,7 +253,6 @@
         "readAloudSpeed": { "type": "string", "enum": ["normal", "calm"] },
         "showExcelExport": { "type": "boolean" },
         "hubCategories": { "type": "object" },
-        "calendarPrefs": { "type": "object" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
@@ -288,15 +287,12 @@
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "dateKey": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
         "timeSlot": { "type": "string", "maxLength": 20 },
-        "endTime": { "type": "string", "maxLength": 10 },
-        "durationMinutes": { "type": "integer" },
         "title": { "type": "string", "maxLength": 200 },
         "notes": { "type": "string", "maxLength": 2000 },
         "category": { "type": "string", "enum": ["شخصي", "دراسة", "موعد", "مراجعة", "قراءة"] },
         "color": { "type": "string", "enum": ["navy", "emerald", "amber", "rose"] },
         "done": { "type": "boolean" },
         "linkedTaskText": { "type": "string", "maxLength": 300 },
-        "linkedTaskId": { "type": "string", "maxLength": 128 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "ownerId", "dateKey", "timeSlot", "title", "notes", "category", "color", "done", "linkedTaskText", "updatedAt"]
@@ -399,12 +395,6 @@
         "priority": { "type": "string", "enum": ["low", "medium", "high"] },
         "status": { "type": "string", "enum": ["todo", "in_progress", "done"] },
         "dueDate": { "type": "string", "maxLength": 10 },
-        "scheduledDate": { "type": "string", "maxLength": 10 },
-        "startTime": { "type": "string", "maxLength": 10 },
-        "endTime": { "type": "string", "maxLength": 10 },
-        "durationMinutes": { "type": "integer" },
-        "deadline": { "type": "string", "maxLength": 10 },
-        "projectId": { "type": "string", "maxLength": 128 },
         "linkedLabel": { "type": "string", "maxLength": 200 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -432,7 +422,7 @@
     },
     "FileAttachmentItem": {
       "title": "FileAttachmentItem",
-      "description": "Cloud-synced PDF/document backup payload for cross-device reading.",
+      "description": "Cloud-synced PDF/Word/document manifest and inline payload for cross-device reading.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -442,22 +432,25 @@
         "sizeBytes": { "type": "integer" },
         "dataUrl": { "type": "string", "maxLength": 900000 },
         "chunkCount": { "type": "integer" },
+        "storagePath": { "type": "string", "maxLength": 400 },
+        "downloadUrl": { "type": "string", "maxLength": 1200 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "ownerId", "fileName", "mimeType", "sizeBytes", "updatedAt"]
+      "required": ["id", "ownerId", "fileName", "mimeType", "sizeBytes", "dataUrl", "updatedAt"]
     },
-    "BinaryChunkItem": {
-      "title": "BinaryChunkItem",
-      "description": "Ordered base64 chunk stored in subcollection when a PDF or audio asset exceeds inline document size.",
+    "FileAttachmentChunkItem": {
+      "title": "FileAttachmentChunkItem",
+      "description": "Base64 slice of a large cloud-synced PDF/Word attachment stored safely under the 1 MiB Firestore document cap.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "attachmentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "chunkIndex": { "type": "integer" },
-        "data": { "type": "string", "maxLength": 750000 },
+        "data": { "type": "string", "maxLength": 850000 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "ownerId", "chunkIndex", "data", "updatedAt"]
+      "required": ["id", "ownerId", "attachmentId", "chunkIndex", "data", "updatedAt"]
     },
     "AudioCacheItem": {
       "title": "AudioCacheItem",
@@ -474,46 +467,9 @@
         "downloadUrl": { "type": "string", "maxLength": 1200 },
         "inlineDataUrl": { "type": "string", "maxLength": 800000 },
         "previewText": { "type": "string", "maxLength": 160 },
-        "entityType": { "type": "string", "enum": ["note", "month", "course", "summary", "other"] },
-        "entityId": { "type": "string", "maxLength": 128 },
-        "title": { "type": "string", "maxLength": 200 },
-        "contentHash": { "type": "string", "maxLength": 64 },
-        "durationSeconds": { "type": "number" },
-        "lastPositionSeconds": { "type": "number" },
-        "playbackRate": { "type": "number" },
-        "chunkCount": { "type": "integer" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "ownerId", "voiceName", "speed", "mimeType", "sizeBytes", "updatedAt"]
-    },
-    "WeeklyMeetingItem": {
-      "title": "WeeklyMeetingItem",
-      "description": "Interactive weekly study/review meeting supporting weekly recurrence, per-occurrence attendance, notes, exceptions, and follow-up actions.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "title": { "type": "string", "maxLength": 250 },
-        "description": { "type": "string", "maxLength": 2000 },
-        "hubId": { "type": "string", "enum": ["marketing", "dental_career", "knowledge"] },
-        "startDate": { "type": "string", "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-        "dayOfWeek": { "type": "integer" },
-        "startTime": { "type": "string", "maxLength": 10 },
-        "endTime": { "type": "string", "maxLength": 10 },
-        "durationMinutes": { "type": "integer" },
-        "isRecurringWeekly": { "type": "boolean" },
-        "recurrenceEndDate": { "type": "string", "maxLength": 10 },
-        "color": { "type": "string", "enum": ["navy", "emerald", "amber", "rose"] },
-        "status": { "type": "string", "enum": ["scheduled", "completed", "cancelled"] },
-        "completedDates": { "type": "array" },
-        "attendanceByDate": { "type": "object" },
-        "notesByDate": { "type": "object" },
-        "followUps": { "type": "array" },
-        "linkedTaskIds": { "type": "array" },
-        "exceptions": { "type": "object" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "ownerId", "title", "hubId", "startDate", "dayOfWeek", "startTime", "endTime", "durationMinutes", "isRecurringWeekly", "color", "status", "updatedAt"]
     },
     "DentalCaseItem": {
       "title": "DentalCaseItem",
@@ -605,23 +561,15 @@
     },
     "/users/{userId}/attachments/{attachmentId}": {
       "schema": { "$ref": "#/entities/FileAttachmentItem" },
-      "description": "User's cloud-synced PDF/document backup payloads."
+      "description": "User's cloud-synced PDF/Word/document attachment manifests and inline payloads."
     },
     "/users/{userId}/attachments/{attachmentId}/chunks/{chunkId}": {
-      "schema": { "$ref": "#/entities/BinaryChunkItem" },
-      "description": "Chunked PDF binary backup for files exceeding single document size."
+      "schema": { "$ref": "#/entities/FileAttachmentChunkItem" },
+      "description": "Ordered base64 slices for large cloud-synced PDF/Word attachments."
     },
     "/users/{userId}/audioCache/{cacheId}": {
       "schema": { "$ref": "#/entities/AudioCacheItem" },
       "description": "User's cloud-cached synthesized ReadAloud audio references across devices."
-    },
-    "/users/{userId}/audioCache/{cacheId}/chunks/{chunkId}": {
-      "schema": { "$ref": "#/entities/BinaryChunkItem" },
-      "description": "Chunked audio data URL segments stored in Firestore as Storage-resilient cross-device fallback."
-    },
-    "/users/{userId}/weeklyMeetings/{meetingId}": {
-      "schema": { "$ref": "#/entities/WeeklyMeetingItem" },
-      "description": "User's interactive weekly recurring or single study meetings."
     },
     "/users/{userId}/dentalCases/{caseId}": {
       "schema": { "$ref": "#/entities/DentalCaseItem" },

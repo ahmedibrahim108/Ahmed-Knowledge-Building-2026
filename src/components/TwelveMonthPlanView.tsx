@@ -37,8 +37,9 @@ import {
 } from '../data/curriculumData';
 import { auth } from '../firebase';
 import {
-  downloadResourceAttachment,
+  downloadResourceAttachmentResult,
   isPdfAttachment,
+  isViewableDocumentAttachment,
   parseDocumentFile,
   uploadResourceAttachment,
 } from '../utils/documentImportExport';
@@ -226,6 +227,13 @@ export default function TwelveMonthPlanView({
     undefined
   );
   const [uploadingResFile, setUploadingResFile] = useState(false);
+  const [uploadStatusMsg, setUploadStatusMsg] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
+  const [resourceActionError, setResourceActionError] = useState<string | null>(
+    null
+  );
   const [pendingResId, setPendingResId] = useState<string>('');
   const [expandedResPreviewId, setExpandedResPreviewId] = useState<string | null>(
     null
@@ -335,8 +343,10 @@ export default function TwelveMonthPlanView({
     const generatedId = `m${activeMonth.id}-res-${Date.now()}`;
     setPendingResId(generatedId);
     setUploadingResFile(true);
+    setUploadStatusMsg(null);
+    setResourceActionError(null);
     try {
-      const effectiveUid = uid || auth.currentUser?.uid;
+      const effectiveUid = uid || auth?.currentUser?.uid;
       const uploaded = await uploadResourceAttachment(
         effectiveUid,
         generatedId,
@@ -348,15 +358,34 @@ export default function TwelveMonthPlanView({
       }
       setNewResType('ملف / مستند');
       setNewResAttachmentName(file.name);
-      setNewResPreview(parsed.plainText.slice(0, 7500));
-      setNewResStoragePath(uploaded.storagePath ?? '');
+      setNewResPreview(
+        isPdfAttachment(file.name, file.type)
+          ? ''
+          : parsed.plainText.slice(0, 7500)
+      );
+      setNewResStoragePath(uploadResPath(uploaded.storagePath));
       setNewResDownloadUrl(uploaded.downloadUrl ?? '');
       setNewResMimeType(uploaded.mimeType || file.type || '');
       setNewResSizeBytes(uploaded.sizeBytes ?? file.size);
+      setUploadStatusMsg(
+        uploaded.uploadedToCloud
+          ? {
+              ok: true,
+              text: 'تم رفع الملف ومزامنته سحابيًا ليفتح على الهاتف واللابتوب معًا.',
+            }
+          : {
+              ok: false,
+              text:
+                uploaded.errorMessage ||
+                'تعذر رفع الملف للسحابة وتم حفظه محليًا فقط على هذا الجهاز.',
+            }
+      );
     } finally {
       setUploadingResFile(false);
     }
   };
+
+  const uploadResPath = (path?: string) => path ?? '';
 
   const handleSubmitResource = (e: React.FormEvent) => {
     e.preventDefault();
@@ -389,6 +418,7 @@ export default function TwelveMonthPlanView({
     setNewResMimeType('');
     setNewResSizeBytes(undefined);
     setPendingResId('');
+    setUploadStatusMsg(null);
     setShowAddResource(false);
   };
 
@@ -1444,6 +1474,17 @@ export default function TwelveMonthPlanView({
                     placeholder="ملاحظة مختصرة عن المصدر (اختياري)..."
                     className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
                   />
+                  {uploadStatusMsg && (
+                    <p
+                      className={`text-xs px-3 py-2 rounded-lg border ${
+                        uploadStatusMsg.ok
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-amber-50 border-amber-200 text-amber-900'
+                      }`}
+                    >
+                      {uploadStatusMsg.text}
+                    </p>
+                  )}
                   <button
                     type="submit"
                     disabled={uploadingResFile}
@@ -1454,6 +1495,19 @@ export default function TwelveMonthPlanView({
                 </form>
               )}
 
+              {resourceActionError && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-center justify-between gap-2">
+                  <span>{resourceActionError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setResourceActionError(null)}
+                    className="text-amber-700 hover:text-amber-950 font-semibold cursor-pointer"
+                  >
+                    إغلاق
+                  </button>
+                </div>
+              )}
+
               <div className="divide-y divide-slate-200 border border-slate-200 rounded-lg">
                 {activeMonth.resources.map((res) => {
                   const isPreviewOpen = expandedResPreviewId === res.id;
@@ -1461,15 +1515,52 @@ export default function TwelveMonthPlanView({
                   const hasAttachment = Boolean(
                     res.attachmentName || res.storagePath || res.downloadUrl
                   );
+                  const isViewable =
+                    isPdf ||
+                    isViewableDocumentAttachment(
+                      res.attachmentName,
+                      res.mimeType
+                    ) ||
+                    Boolean(res.extractedPreview) ||
+                    hasAttachment;
+                  const resolvedUid = uid || auth?.currentUser?.uid;
+
+                  const handleOpenDocModal = () => {
+                    if (!onOpenPdf) return;
+                    setResourceActionError(null);
+                    onOpenPdf({
+                      uid: resolvedUid,
+                      title: res.title,
+                      fileName:
+                        res.attachmentName ||
+                        (isPdf ? `${res.title}.pdf` : `${res.title}.docx`),
+                      resourceId: res.id,
+                      storagePath: res.storagePath,
+                      downloadUrl: res.downloadUrl,
+                      mimeType: res.mimeType,
+                      extractedPreview: res.extractedPreview,
+                      contextLabel: `الشهر ${activeMonth.id}: ${activeMonth.theme}`,
+                    });
+                  };
 
                   return (
                     <div key={res.id} className="bg-white">
                       <div className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                         <div className="space-y-0.5">
                           <div className="flex flex-wrap items-center gap-2 text-xs">
-                            <span className="font-semibold text-slate-900">
-                              {res.title}
-                            </span>
+                            {isViewable && onOpenPdf ? (
+                              <button
+                                type="button"
+                                onClick={handleOpenDocModal}
+                                className="font-semibold text-[#1E3A5F] hover:underline text-right cursor-pointer"
+                              >
+                                {res.title}
+                              </button>
+                            ) : (
+                              <span className="font-semibold text-slate-900">
+                                {res.title}
+                              </span>
+                            )}
                             <span aria-hidden="true" className="text-slate-300">
                               ·
                             </span>
@@ -1486,28 +1577,16 @@ export default function TwelveMonthPlanView({
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 shrink-0">
-                          {(isPdf || hasAttachment || Boolean(res.extractedPreview)) &&
-                            onOpenPdf && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onOpenPdf({
-                                    title: res.title,
-                                    fileName: res.attachmentName || `${res.title}.pdf`,
-                                    resourceId: res.id,
-                                    storagePath: res.storagePath,
-                                    downloadUrl: res.downloadUrl,
-                                    mimeType: res.mimeType,
-                                    fallbackText: res.extractedPreview,
-                                    contextLabel: `الشهر ${activeMonth.id}: ${activeMonth.theme}`,
-                                  })
-                                }
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded cursor-pointer"
-                              >
-                                <Eye className="w-3 h-3" aria-hidden="true" />
-                                <span>{isPdf ? 'عرض PDF' : 'عرض الملف'}</span>
-                              </button>
-                            )}
+                          {isViewable && onOpenPdf && (
+                            <button
+                              type="button"
+                              onClick={handleOpenDocModal}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded cursor-pointer"
+                            >
+                              <Eye className="w-3 h-3" aria-hidden="true" />
+                              <span>{isPdf ? 'فتح PDF' : 'فتح الملف'}</span>
+                            </button>
+                          )}
 
                           {res.extractedPreview && (
                             <>
@@ -1545,14 +1624,21 @@ export default function TwelveMonthPlanView({
                           {hasAttachment && (
                             <button
                               type="button"
-                              onClick={() =>
-                                void downloadResourceAttachment({
-                                  resourceId: res.id,
-                                  fileName: res.attachmentName || res.title,
-                                  storagePath: res.storagePath,
-                                  downloadUrl: res.downloadUrl,
-                                })
-                              }
+                              onClick={async () => {
+                                setResourceActionError(null);
+                                const result =
+                                  await downloadResourceAttachmentResult({
+                                    uid: resolvedUid,
+                                    resourceId: res.id,
+                                    fileName: res.attachmentName || res.title,
+                                    mimeType: res.mimeType,
+                                    storagePath: res.storagePath,
+                                    downloadUrl: res.downloadUrl,
+                                  });
+                                if (!result.ok && result.errorMessage) {
+                                  setResourceActionError(result.errorMessage);
+                                }
+                              }}
                               className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
                             >
                               <Download className="w-3 h-3" aria-hidden="true" />

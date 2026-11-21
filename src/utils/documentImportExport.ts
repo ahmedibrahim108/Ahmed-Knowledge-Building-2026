@@ -1,18 +1,29 @@
 import mammoth from 'mammoth';
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
-  query,
   serverTimestamp,
   setDoc,
-  where,
   writeBatch,
 } from 'firebase/firestore';
-import { getBlob, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import {
+  deleteObject,
+  getBlob,
+  getDownloadURL,
+  ref,
+  uploadBytes,
+} from 'firebase/storage';
 import { BookNote } from '../data/curriculumData';
-import { auth, db, storage } from '../firebase';
+import {
+  OperationType,
+  auth,
+  db,
+  handleFirestoreError,
+  storage,
+} from '../firebase';
 import { ensureRichHtml, richHtmlToPlainText } from './richText';
 
 export interface ParsedImportedDocument {
@@ -21,6 +32,8 @@ export interface ParsedImportedDocument {
   plainText: string;
   fileName: string;
 }
+
+export type DocumentAttachmentKind = 'pdf' | 'docx' | 'doc' | 'text' | 'other';
 
 function escapeHtml(text: string): string {
   return text
@@ -33,29 +46,126 @@ function stripExtension(name: string): string {
   return name.replace(/\.(docx|doc|txt|md|markdown|pdf|html|htm)$/i, '').trim();
 }
 
-export const BUNDLED_APP_DOCUMENTS: Array<{
-  id: string;
-  title: string;
-  fileName: string;
-  downloadUrl: string;
-  subtitle: string;
-  mimeType: string;
-}> = [
-  {
-    id: 'bundled-zoho-notebook-pdf',
-    title: 'المستند المرفق بالتطبيق (Untitled PDF)',
-    fileName: '_data_user_0_com.zoho.notebook_files_Untitled__1__6ee5100a.pdf',
-    downloadUrl:
-      '/assets/aistudio/_data_user_0_com.zoho.notebook_files_Untitled__1__6ee5100a.pdf',
-    subtitle: 'ملف PDF مرفق بالتطبيق · جاهز للعرض والتنزيل',
-    mimeType: 'application/pdf',
-  },
-];
-
 export function isPdfAttachment(fileName?: string, mimeType?: string): boolean {
   if (mimeType && mimeType.toLowerCase().includes('pdf')) return true;
   if (!fileName) return false;
   return /\.pdf($|\?)/i.test(fileName.trim());
+}
+
+export function isWordAttachment(fileName?: string, mimeType?: string): boolean {
+  const mime = (mimeType || '').toLowerCase();
+  if (
+    mime.includes('wordprocessingml') ||
+    mime.includes('msword') ||
+    mime.includes('vnd.ms-word')
+  ) {
+    return true;
+  }
+  if (!fileName) return false;
+  return /\.(docx|doc)($|\?)/i.test(fileName.trim());
+}
+
+export function isTextAttachment(fileName?: string, mimeType?: string): boolean {
+  const mime = (mimeType || '').toLowerCase();
+  if (mime.startsWith('text/plain') || mime.includes('markdown')) return true;
+  if (!fileName) return false;
+  return /\.(txt|md|markdown|html|htm)($|\?)/i.test(fileName.trim());
+}
+
+export function isViewableDocumentAttachment(
+  fileName?: string,
+  mimeType?: string
+): boolean {
+  return (
+    isPdfAttachment(fileName, mimeType) ||
+    isWordAttachment(fileName, mimeType) ||
+    isTextAttachment(fileName, mimeType)
+  );
+}
+
+export function getAttachmentKind(
+  fileName?: string,
+  mimeType?: string
+): DocumentAttachmentKind {
+  if (isPdfAttachment(fileName, mimeType)) return 'pdf';
+  const cleanName = (fileName || '').split('?')[0].trim().toLowerCase();
+  const mime = (mimeType || '').toLowerCase();
+  if (cleanName.endsWith('.docx') || mime.includes('wordprocessingml')) {
+    return 'docx';
+  }
+  if (cleanName.endsWith('.doc') || mime.includes('msword')) {
+    return 'doc';
+  }
+  if (isTextAttachment(fileName, mimeType)) return 'text';
+  return 'other';
+}
+
+export function inferMimeTypeFromFileName(
+  fileName?: string,
+  provided?: string
+): string {
+  if (provided && provided !== 'application/octet-stream') {
+    return provided;
+  }
+  const clean = (fileName || '').split('?')[0].trim().toLowerCase();
+  if (clean.endsWith('.pdf')) return 'application/pdf';
+  if (clean.endsWith('.docx')) {
+    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  }
+  if (clean.endsWith('.doc')) return 'application/msword';
+  if (clean.endsWith('.md') || clean.endsWith('.markdown')) {
+    return 'text/markdown';
+  }
+  if (clean.endsWith('.txt')) return 'text/plain';
+  if (clean.endsWith('.html') || clean.endsWith('.htm')) return 'text/html';
+  return provided || 'application/octet-stream';
+}
+
+function parseLegacyDocOrTextRaw(raw: string, fileName: string): string {
+  if (
+    raw.includes('<html') ||
+    raw.includes('<body') ||
+    raw.includes('<p') ||
+    raw.includes('<div') ||
+    raw.includes('<table')
+  ) {
+    const bodyMatch = raw.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    const htmlContent = bodyMatch ? bodyMatch[1] : raw;
+    const html = ensureRichHtml(htmlContent);
+    if (html) return html;
+  }
+  const cleaned = raw
+    .replace(/[^\u0600-\u06FF\u0020-\u007E\n\r\t]/g, ' ')
+    .replace(/ {3,}/g, ' ')
+    .trim();
+  return ensureRichHtml(cleaned || `تم إرفاق الملف: ${fileName}`);
+}
+
+export async function renderDocumentBlobToHtml(
+  blob: Blob,
+  fileName: string,
+  mimeType?: string
+): Promise<string> {
+  const kind = getAttachmentKind(fileName, mimeType || blob.type);
+  if (kind === 'docx') {
+    const buffer = await blob.arrayBuffer();
+    const result = await mammoth.convertToHtml({ arrayBuffer: buffer });
+    const html = ensureRichHtml(result.value || '');
+    return (
+      html ||
+      '<p>المستند فارغ أو لا يحتوي على نص قابل للعرض. يمكنك تنزيله مباشرة.</p>'
+    );
+  }
+  if (kind === 'doc') {
+    const raw = await blob.text();
+    return parseLegacyDocOrTextRaw(raw, fileName);
+  }
+  if (kind === 'text') {
+    const raw = await blob.text();
+    const html = ensureRichHtml(raw);
+    return html || '<p>الملف النصي فارغ.</p>';
+  }
+  return `<p><strong>مستند مرفق:</strong> ${escapeHtml(fileName)}</p>`;
 }
 
 export async function parseDocumentFile(
@@ -91,20 +201,7 @@ export async function parseDocumentFile(
 
   if (lower.endsWith('.doc') || lower.endsWith('.html') || lower.endsWith('.htm')) {
     const raw = await file.text();
-    if (raw.includes('<body') || raw.includes('<p') || raw.includes('<div')) {
-      const bodyMatch = raw.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-      const htmlContent = bodyMatch ? bodyMatch[1] : raw;
-      const html = ensureRichHtml(htmlContent);
-      const plainText = richHtmlToPlainText(html);
-      return {
-        title: baseTitle,
-        html,
-        plainText,
-        fileName: file.name,
-      };
-    }
-    const cleaned = raw.replace(/[^\u0600-\u06FF\u0020-\u007E\n\r\t]/g, ' ').trim();
-    const html = ensureRichHtml(cleaned || `تم إرفاق الملف: ${file.name}`);
+    const html = parseLegacyDocOrTextRaw(raw, file.name);
     return {
       title: baseTitle,
       html,
@@ -113,6 +210,7 @@ export async function parseDocumentFile(
     };
   }
 
+  // Binary PDF or other file formats — attach metadata cleanly
   return {
     title: baseTitle,
     html: `<p><strong>مستند مرفق:</strong> ${escapeHtml(file.name)} (${Math.max(1, Math.round(file.size / 1024))} كيلوبايت)</p>`,
@@ -124,7 +222,6 @@ export async function parseDocumentFile(
 // --- Lightweight IndexedDB cache for locally attached files (PDF / Word / Docs) ---
 const IDB_NAME = 'mizan_attachments_db';
 const IDB_STORE = 'files';
-const PDF_CHUNK_CHAR_SIZE = 550_000;
 
 function openAttachmentsDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -134,9 +231,9 @@ function openAttachmentsDb(): Promise<IDBDatabase> {
     }
     const req = indexedDB.open(IDB_NAME, 1);
     req.onupgradeneeded = () => {
-      const database = req.result;
-      if (!database.objectStoreNames.contains(IDB_STORE)) {
-        database.createObjectStore(IDB_STORE);
+      const idb = req.result;
+      if (!idb.objectStoreNames.contains(IDB_STORE)) {
+        idb.createObjectStore(IDB_STORE);
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -150,12 +247,13 @@ export async function saveLocalAttachment(
   fileName?: string
 ): Promise<void> {
   try {
-    const database = await openAttachmentsDb();
-    const tx = database.transaction(IDB_STORE, 'readwrite');
+    const idb = await openAttachmentsDb();
+    const tx = idb.transaction(IDB_STORE, 'readwrite');
     const resolvedName =
       file instanceof File ? file.name : fileName || 'document.pdf';
+    const resolvedType = inferMimeTypeFromFileName(resolvedName, file.type);
     tx.objectStore(IDB_STORE).put(
-      { blob: file, name: resolvedName, type: file.type || 'application/pdf' },
+      { blob: file, name: resolvedName, type: resolvedType },
       resourceId
     );
     await new Promise<void>((resolve, reject) => {
@@ -171,8 +269,8 @@ export async function getLocalAttachmentBlob(
   resourceId: string
 ): Promise<{ blob: Blob; name?: string; type?: string } | null> {
   try {
-    const database = await openAttachmentsDb();
-    const tx = database.transaction(IDB_STORE, 'readonly');
+    const idb = await openAttachmentsDb();
+    const tx = idb.transaction(IDB_STORE, 'readonly');
     const req = tx.objectStore(IDB_STORE).get(resourceId);
     const record = await new Promise<
       { blob: Blob; name?: string; type?: string } | undefined
@@ -204,7 +302,7 @@ export async function downloadLocalAttachment(
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1500);
     return true;
   } catch {
     return false;
@@ -217,7 +315,31 @@ export interface UploadedAttachmentResult {
   mimeType: string;
   sizeBytes: number;
   uploadedToCloud: boolean;
-  cloudErrorCode?: 'PERMISSION' | 'NETWORK' | 'SIZE_LIMIT';
+  errorMessage?: string;
+}
+
+const MAX_FIRESTORE_CHUNKED_BYTES = 15 * 1024 * 1024; // 15 MB across up to 31 chunks
+const SINGLE_DOC_THRESHOLD_BYTES = 500 * 1024; // ~670 KB base64 (< 900 KB rule)
+const RAW_CHUNK_BYTES = 510 * 1024; // Divisible by 3 -> ~680 KB base64 (< 850 KB chunk rule)
+
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const step = 0x8000;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += step) {
+    const sub = bytes.subarray(i, Math.min(i + step, bytes.length));
+    parts.push(String.fromCharCode(...sub));
+  }
+  return btoa(parts.join(''));
+}
+
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 function fileToDataUrl(file: Blob): Promise<string> {
@@ -229,40 +351,30 @@ function fileToDataUrl(file: Blob): Promise<string> {
   });
 }
 
-function decodeDataUrlToBytes(dataUrl: string): Uint8Array | null {
+async function dataUrlToBlob(
+  dataUrl: string,
+  mimeType?: string
+): Promise<Blob | null> {
   try {
-    const commaIdx = dataUrl.indexOf(',');
-    if (commaIdx === -1) return null;
-    const base64 = dataUrl.slice(commaIdx + 1);
-    const bin = atob(base64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) {
-      bytes[i] = bin.charCodeAt(i);
+    const res = await fetch(dataUrl);
+    const rawBlob = await res.blob();
+    if (mimeType && rawBlob.type !== mimeType) {
+      return new Blob([rawBlob], { type: mimeType });
     }
-    return bytes;
+    return rawBlob;
   } catch {
-    return null;
-  }
-}
-
-function normalizePdfBytes(raw: Uint8Array): { valid: boolean; bytes: Uint8Array; blob: Blob } {
-  const bytes = new Uint8Array(raw);
-  // Check for "%PDF-" within first 1024 bytes (handles BOM/leading whitespace)
-  let hasPdfMagic = false;
-  const checkLimit = Math.min(bytes.length - 4, 1024);
-  for (let i = 0; i <= checkLimit; i++) {
-    if (
-      bytes[i] === 0x25 && // %
-      bytes[i + 1] === 0x50 && // P
-      bytes[i + 2] === 0x44 && // D
-      bytes[i + 3] === 0x46 // F
-    ) {
-      hasPdfMagic = true;
-      break;
+    try {
+      const commaIdx = dataUrl.indexOf(',');
+      if (commaIdx === -1) return null;
+      const b64 = dataUrl.slice(commaIdx + 1);
+      const bytes = base64ToUint8Array(b64);
+      const buf = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(buf).set(bytes);
+      return new Blob([buf], { type: mimeType || 'application/octet-stream' });
+    } catch {
+      return null;
     }
   }
-  const blob = new Blob([bytes], { type: 'application/pdf' });
-  return { valid: hasPdfMagic && bytes.length > 32, bytes, blob };
 }
 
 export async function uploadResourceAttachment(
@@ -270,17 +382,19 @@ export async function uploadResourceAttachment(
   resourceId: string,
   file: File
 ): Promise<UploadedAttachmentResult> {
-  const mimeType =
-    file.type ||
-    (isPdfAttachment(file.name) ? 'application/pdf' : 'application/octet-stream');
+  const mimeType = inferMimeTypeFromFileName(file.name, file.type);
 
+  // Always persist locally in IndexedDB for instant offline/in-app viewing
   await saveLocalAttachment(resourceId, file, file.name);
 
-  if (!uid) {
+  const effectiveUid = uid || auth?.currentUser?.uid;
+  if (!effectiveUid) {
     return {
       mimeType,
       sizeBytes: file.size,
       uploadedToCloud: false,
+      errorMessage:
+        'سجّل الدخول أولاً ليتم حفظ الملف في السحابة ومزامنته بين الهاتف واللابتوب.',
     };
   }
 
@@ -288,84 +402,122 @@ export async function uploadResourceAttachment(
   let storagePath: string | undefined;
   let downloadUrl: string | undefined;
   let uploadedToCloud = false;
+  let errorMessage: string | undefined;
 
-  try {
-    const safeFileName =
-      file.name.replace(/[^a-zA-Z0-9._\-\u0600-\u06FF]/g, '_').slice(0, 120) ||
-      'attachment';
-    storagePath = `users/${uid}/resources/${safeId}/${safeFileName}`;
-    const storageRef = ref(storage, storagePath);
-    await uploadBytes(storageRef, file, { contentType: mimeType });
-    downloadUrl = await getDownloadURL(storageRef);
-    uploadedToCloud = true;
-  } catch (err) {
-    console.warn('Cloud Storage upload fallback:', err);
-    storagePath = undefined;
+  // 1) Try Firebase Storage first (fast CDN + supports files > 15 MB)
+  if (storage) {
+    try {
+      const safeFileName =
+        file.name
+          .replace(/[^a-zA-Z0-9._\-\u0600-\u06FF]/g, '_')
+          .replace(/^_+/, '')
+          .slice(0, 120) || 'attachment';
+      storagePath = `users/${effectiveUid}/resources/${safeId}/${safeFileName}`;
+      const storageRef = ref(storage, storagePath);
+      await uploadBytes(storageRef, file, { contentType: mimeType });
+      downloadUrl = await getDownloadURL(storageRef);
+      uploadedToCloud = true;
+    } catch (err) {
+      console.warn('Cloud Storage upload fallback:', err);
+      storagePath = undefined;
+    }
   }
 
-  let cloudErrorCode: UploadedAttachmentResult['cloudErrorCode'];
-
-  // Persist files <= 4.5MB directly in Firestore (single doc <= 850KB or chunked subcollection)
-  // so mobile Android Chrome never fails due to Storage CORS or blocked blob fetches.
-  if (file.size <= 4.5 * 1024 * 1024) {
+  // 2) Always mirror up to 15 MB into Firestore (`attachments` + optional `chunks`)
+  //    so cross-device download & opening NEVER break from Storage CORS issues.
+  if (db && file.size <= MAX_FIRESTORE_CHUNKED_BYTES) {
     try {
-      const dataUrl = await fileToDataUrl(file);
-      if (dataUrl.length <= 850_000) {
-        // Omit chunkCount when single doc so BOTH old and new firestore.rules accept it
-        await setDoc(doc(db, 'users', uid, 'attachments', safeId), {
-          id: safeId,
-          ownerId: uid,
-          fileName: file.name.slice(0, 200),
-          mimeType: mimeType.slice(0, 120),
-          sizeBytes: Math.round(file.size),
-          dataUrl,
-          updatedAt: serverTimestamp(),
-        });
-        uploadedToCloud = true;
-      } else if (dataUrl.length <= 8_000_000) {
-        const chunkCount = Math.ceil(dataUrl.length / PDF_CHUNK_CHAR_SIZE);
-        await setDoc(doc(db, 'users', uid, 'attachments', safeId), {
-          id: safeId,
-          ownerId: uid,
-          fileName: file.name.slice(0, 200),
-          mimeType: mimeType.slice(0, 120),
-          sizeBytes: Math.round(file.size),
-          dataUrl: '',
-          chunkCount,
-          updatedAt: serverTimestamp(),
-        });
-        const batch = writeBatch(db);
-        for (let i = 0; i < chunkCount; i++) {
-          const chunkId = `chunk_${String(i).padStart(4, '0')}`;
-          const slice = dataUrl.slice(
-            i * PDF_CHUNK_CHAR_SIZE,
-            (i + 1) * PDF_CHUNK_CHAR_SIZE
-          );
-          batch.set(doc(db, 'users', uid, 'attachments', safeId, 'chunks', chunkId), {
-            id: chunkId,
-            ownerId: uid,
-            chunkIndex: i,
-            data: slice,
+      const attachmentDocRef = doc(db, 'users', effectiveUid, 'attachments', safeId);
+
+      if (file.size <= SINGLE_DOC_THRESHOLD_BYTES) {
+        const dataUrl = await fileToDataUrl(file);
+        if (dataUrl.length > 0 && dataUrl.length <= 899_000) {
+          await setDoc(attachmentDocRef, {
+            id: safeId,
+            ownerId: effectiveUid,
+            fileName: file.name.slice(0, 200),
+            mimeType: mimeType.slice(0, 120),
+            sizeBytes: file.size,
+            dataUrl,
+            chunkCount: 1,
+            ...(storagePath ? { storagePath: storagePath.slice(0, 400) } : {}),
+            ...(downloadUrl ? { downloadUrl: downloadUrl.slice(0, 1200) } : {}),
             updatedAt: serverTimestamp(),
           });
+          uploadedToCloud = true;
         }
-        await batch.commit();
-        uploadedToCloud = true;
       } else {
-        cloudErrorCode = 'SIZE_LIMIT';
+        const buffer = await file.arrayBuffer();
+        const totalChunks = Math.max(1, Math.ceil(buffer.byteLength / RAW_CHUNK_BYTES));
+        if (totalChunks <= 40) {
+          // Master Gate rule requires parent attachment doc to exist before creating chunks
+          await setDoc(attachmentDocRef, {
+            id: safeId,
+            ownerId: effectiveUid,
+            fileName: file.name.slice(0, 200),
+            mimeType: mimeType.slice(0, 120),
+            sizeBytes: file.size,
+            dataUrl: '',
+            chunkCount: totalChunks,
+            ...(storagePath ? { storagePath: storagePath.slice(0, 400) } : {}),
+            ...(downloadUrl ? { downloadUrl: downloadUrl.slice(0, 1200) } : {}),
+            updatedAt: serverTimestamp(),
+          });
+
+          const BATCH_SIZE = 4;
+          for (let start = 0; start < totalChunks; start += BATCH_SIZE) {
+            const batch = writeBatch(db);
+            const end = Math.min(start + BATCH_SIZE, totalChunks);
+            for (let idx = start; idx < end; idx++) {
+              const sliceStart = idx * RAW_CHUNK_BYTES;
+              const sliceEnd = Math.min(
+                sliceStart + RAW_CHUNK_BYTES,
+                buffer.byteLength
+              );
+              const bytes = new Uint8Array(buffer.slice(sliceStart, sliceEnd));
+              const b64 = uint8ArrayToBase64(bytes);
+              const chunkId = `chunk_${String(idx).padStart(3, '0')}`;
+              const chunkRef = doc(
+                db,
+                'users',
+                effectiveUid,
+                'attachments',
+                safeId,
+                'chunks',
+                chunkId
+              );
+              batch.set(chunkRef, {
+                id: chunkId,
+                ownerId: effectiveUid,
+                attachmentId: safeId,
+                chunkIndex: idx,
+                data: b64,
+                updatedAt: serverTimestamp(),
+              });
+            }
+            await batch.commit();
+          }
+          uploadedToCloud = true;
+        }
       }
     } catch (err) {
-      const code = (err as { code?: string })?.code ?? '';
-      const msg = err instanceof Error ? err.message.toLowerCase() : '';
-      if (code === 'permission-denied' || msg.includes('permission')) {
-        cloudErrorCode = 'PERMISSION';
-      } else {
-        cloudErrorCode = 'NETWORK';
+      try {
+        handleFirestoreError(
+          err,
+          OperationType.WRITE,
+          `users/${effectiveUid}/attachments/${safeId}`
+        );
+      } catch {
+        // Logged via handleFirestoreError; preserve Storage upload status if succeeded
       }
-      console.warn('Firestore attachment backup failed:', err);
+      if (!uploadedToCloud) {
+        errorMessage =
+          'تعذر رفع الملف إلى قاعدة البيانات السحابية. تحقق من الاتصال بالإنترنت أو صلاحيات الحساب وحاول مجددًا.';
+      }
     }
-  } else if (!uploadedToCloud) {
-    cloudErrorCode = 'SIZE_LIMIT';
+  } else if (!uploadedToCloud && file.size > MAX_FIRESTORE_CHUNKED_BYTES) {
+    errorMessage =
+      'حجم الملف أكبر من 15 ميجابايت وتعذر رفعه إلى Firebase Storage. جرّب ضغط الملف أو تقليل حجمه.';
   }
 
   return {
@@ -374,281 +526,45 @@ export async function uploadResourceAttachment(
     mimeType,
     sizeBytes: file.size,
     uploadedToCloud,
-    cloudErrorCode,
-  };
-}
-
-export type PdfLoadResult =
-  | {
-      ok: true;
-      data: Uint8Array;
-      blob: Blob;
-      mimeType: string;
-      source: 'local' | 'firestore' | 'storage' | 'url';
-      sizeBytes: number;
-    }
-  | {
-      ok: false;
-      errorCode: 'NOT_FOUND' | 'INVALID_PDF' | 'NETWORK_OR_CORS' | 'PERMISSION';
-      message: string;
-      fallbackUrl?: string;
-    };
-
-/**
- * Loads raw PDF bytes safely across Desktop & Android Chrome without relying on ephemeral blob URLs.
- * Enforces application/pdf MIME, verifies %PDF magic bytes, and provides diagnostic error codes.
- */
-export async function loadPdfBytesForViewing(options: {
-  resourceId?: string;
-  storagePath?: string;
-  downloadUrl?: string;
-}): Promise<PdfLoadResult> {
-  // 1. Local IndexedDB cache (fastest, offline-safe)
-  if (options.resourceId) {
-    const local = await getLocalAttachmentBlob(options.resourceId);
-    if (local?.blob) {
-      const ab = await local.blob.arrayBuffer();
-      const norm = normalizePdfBytes(new Uint8Array(ab));
-      if (norm.valid) {
-        return {
-          ok: true,
-          data: norm.bytes,
-          blob: norm.blob,
-          mimeType: 'application/pdf',
-          source: 'local',
-          sizeBytes: norm.bytes.byteLength,
-        };
-      }
-    }
-  }
-
-  // 2. Firestore attachments doc + chunks (completely bypasses Storage CORS on mobile browsers)
-  const uid = auth?.currentUser?.uid;
-  if (uid && options.resourceId) {
-    try {
-      const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
-      const snap = await getDoc(doc(db, 'users', uid, 'attachments', safeId));
-      if (snap.exists()) {
-        const raw = snap.data() as {
-          dataUrl?: string;
-          chunkCount?: number;
-          fileName?: string;
-        };
-        let combinedDataUrl = raw.dataUrl || '';
-        if (!combinedDataUrl && raw.chunkCount && raw.chunkCount > 0) {
-          const chunksSnap = await getDocs(
-            query(
-              collection(db, 'users', uid, 'attachments', safeId, 'chunks'),
-              where('ownerId', '==', uid)
-            )
-          );
-          if (!chunksSnap.empty) {
-            combinedDataUrl = chunksSnap.docs
-              .map((d) => d.data() as { chunkIndex: number; data: string })
-              .sort((a, b) => a.chunkIndex - b.chunkIndex)
-              .map((c) => c.data)
-              .join('');
-          }
-        }
-        if (combinedDataUrl) {
-          const rawBytes = decodeDataUrlToBytes(combinedDataUrl);
-          if (rawBytes) {
-            const norm = normalizePdfBytes(rawBytes);
-            if (norm.valid) {
-              await saveLocalAttachment(options.resourceId, norm.blob, raw.fileName);
-              return {
-                ok: true,
-                data: norm.bytes,
-                blob: norm.blob,
-                mimeType: 'application/pdf',
-                source: 'firestore',
-                sizeBytes: norm.bytes.byteLength,
-              };
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('Failed reading attachment from Firestore:', err);
-    }
-  }
-
-  // 3. Firebase Storage SDK
-  let hadNetworkOrCorsError = false;
-  let hadPermissionError = false;
-
-  if (options.storagePath) {
-    try {
-      const blob = await getBlob(ref(storage, options.storagePath));
-      const ab = await blob.arrayBuffer();
-      const norm = normalizePdfBytes(new Uint8Array(ab));
-      if (norm.valid) {
-        if (options.resourceId) {
-          await saveLocalAttachment(options.resourceId, norm.blob);
-        }
-        return {
-          ok: true,
-          data: norm.bytes,
-          blob: norm.blob,
-          mimeType: 'application/pdf',
-          source: 'storage',
-          sizeBytes: norm.bytes.byteLength,
-        };
-      }
-      return {
-        ok: false,
-        errorCode: 'INVALID_PDF',
-        message: 'الملف المسترجع من التخزين لا يبدو كملف PDF صالح.',
-        fallbackUrl: options.downloadUrl,
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message.toLowerCase() : '';
-      if (msg.includes('unauthorized') || msg.includes('permission')) {
-        hadPermissionError = true;
-      } else {
-        hadNetworkOrCorsError = true;
-      }
-      console.warn('Failed reading PDF via Storage SDK:', err);
-    }
-  }
-
-  // 4. Direct downloadUrl / external / local public asset URL
-  if (options.downloadUrl) {
-    try {
-      const res = await fetch(options.downloadUrl, {
-        credentials: options.downloadUrl.startsWith('/') ? 'same-origin' : 'omit',
-      });
-      if (!res.ok) {
-        return {
-          ok: false,
-          errorCode: res.status === 401 || res.status === 403 ? 'PERMISSION' : 'NETWORK_OR_CORS',
-          message:
-            res.status === 401 || res.status === 403
-              ? 'ليست لديك صلاحية قراءة هذا الملف مباشرة عبر الرابط.'
-              : `تعذّر تحميل الملف من الخادم (رمز ${res.status}).`,
-          fallbackUrl: options.downloadUrl,
-        };
-      }
-      const ab = await res.arrayBuffer();
-      const norm = normalizePdfBytes(new Uint8Array(ab));
-      if (!norm.valid) {
-        return {
-          ok: false,
-          errorCode: 'INVALID_PDF',
-          message:
-            'الرابط المرفق لم يرجع ملف PDF صالحًا (قد يكون صفحة ويب أو رابطًا يتطلب فتحه خارجيًا).',
-          fallbackUrl: options.downloadUrl,
-        };
-      }
-      if (options.resourceId) {
-        await saveLocalAttachment(options.resourceId, norm.blob);
-      }
-      return {
-        ok: true,
-        data: norm.bytes,
-        blob: norm.blob,
-        mimeType: 'application/pdf',
-        source: 'url',
-        sizeBytes: norm.bytes.byteLength,
-      };
-    } catch (err) {
-      hadNetworkOrCorsError = true;
-      console.warn('Failed fetching PDF URL:', err);
-    }
-  }
-
-  if (hadPermissionError) {
-    return {
-      ok: false,
-      errorCode: 'PERMISSION',
-      message: 'تعذّر الوصول للملف بسبب صلاحيات التخزين. تأكد من تسجيل الدخول بنفس الحساب المالك.',
-      fallbackUrl: options.downloadUrl,
-    };
-  }
-
-  if (hadNetworkOrCorsError) {
-    return {
-      ok: false,
-      errorCode: 'NETWORK_OR_CORS',
-      message:
-        'منع المتصفح تحميل الملف مباشرة عبر الشبكة (CORS أو انقطاع الاتصال). يمكنك تنزيله أو فتح الرابط الأصلي أدناه.',
-      fallbackUrl: options.downloadUrl,
-    };
-  }
-
-  return {
-    ok: false,
-    errorCode: 'NOT_FOUND',
-    message:
-      'تعذّر العثور على ملف PDF على هذا الجهاز أو في السحابة. إذا رُفع الملف على جهاز آخر قبل المزامنة، أعد رفعه أو تأكد من الاتصال.',
-    fallbackUrl: options.downloadUrl,
+    errorMessage,
   };
 }
 
 export async function getPdfBlobForViewing(options: {
+  uid?: string;
   resourceId?: string;
+  fileName?: string;
+  mimeType?: string;
   storagePath?: string;
   downloadUrl?: string;
 }): Promise<Blob | null> {
-  const res = await loadPdfBytesForViewing(options);
-  return res.ok ? res.blob : null;
-}
+  const inferredMime = inferMimeTypeFromFileName(
+    options.fileName,
+    options.mimeType
+  );
 
-export type UniversalAttachmentLoadResult =
-  | {
-      ok: true;
-      kind: 'pdf';
-      data: Uint8Array;
-      blob: Blob;
-      mimeType: string;
-      fileName: string;
-      source: 'local' | 'firestore' | 'storage' | 'url';
-      sizeBytes: number;
-    }
-  | {
-      ok: true;
-      kind: 'docx' | 'text' | 'image';
-      blob: Blob;
-      mimeType: string;
-      fileName: string;
-      html?: string;
-      plainText?: string;
-      source: 'local' | 'firestore' | 'storage' | 'url';
-      sizeBytes: number;
-    }
-  | {
-      ok: false;
-      errorCode: 'NOT_FOUND' | 'INVALID_PDF' | 'NETWORK_OR_CORS' | 'PERMISSION';
-      message: string;
-      fallbackUrl?: string;
-    };
-
-async function fetchRawAttachmentBlob(options: {
-  resourceId?: string;
-  storagePath?: string;
-  downloadUrl?: string;
-}): Promise<
-  | { ok: true; blob: Blob; fileName?: string; mimeType?: string; source: 'local' | 'firestore' | 'storage' | 'url' }
-  | { ok: false; errorCode: 'NOT_FOUND' | 'NETWORK_OR_CORS' | 'PERMISSION'; message: string; fallbackUrl?: string }
-> {
+  // 1) Local IndexedDB cache (same device / previously downloaded)
   if (options.resourceId) {
     const local = await getLocalAttachmentBlob(options.resourceId);
     if (local?.blob) {
-      return {
-        ok: true,
-        blob: local.blob,
-        fileName: local.name,
-        mimeType: local.type || local.blob.type,
-        source: 'local',
-      };
+      if (
+        inferredMime !== 'application/octet-stream' &&
+        local.blob.type !== inferredMime
+      ) {
+        return new Blob([local.blob], { type: inferredMime });
+      }
+      return local.blob;
     }
   }
 
-  const uid = auth?.currentUser?.uid;
-  if (uid && options.resourceId) {
+  // 2) Firestore `attachments` (inline dataUrl OR multi-chunk subcollection)
+  const effectiveUid = options.uid || auth?.currentUser?.uid;
+  if (db && effectiveUid && options.resourceId) {
+    const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
     try {
-      const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
-      const snap = await getDoc(doc(db, 'users', uid, 'attachments', safeId));
+      const snap = await getDoc(
+        doc(db, 'users', effectiveUid, 'attachments', safeId)
+      );
       if (snap.exists()) {
         const raw = snap.data() as {
           dataUrl?: string;
@@ -656,274 +572,208 @@ async function fetchRawAttachmentBlob(options: {
           fileName?: string;
           mimeType?: string;
         };
-        let combinedDataUrl = raw.dataUrl || '';
-        if (!combinedDataUrl && raw.chunkCount && raw.chunkCount > 0) {
+        const resolvedMime = inferMimeTypeFromFileName(
+          raw.fileName || options.fileName,
+          raw.mimeType || options.mimeType
+        );
+
+        if (raw.dataUrl) {
+          const blob = await dataUrlToBlob(raw.dataUrl, resolvedMime);
+          if (blob) {
+            await saveLocalAttachment(
+              options.resourceId,
+              blob,
+              raw.fileName || options.fileName
+            );
+            return blob;
+          }
+        } else if ((raw.chunkCount ?? 0) >= 1) {
           const chunksSnap = await getDocs(
-            query(
-              collection(db, 'users', uid, 'attachments', safeId, 'chunks'),
-              where('ownerId', '==', uid)
-            )
+            collection(db, 'users', effectiveUid, 'attachments', safeId, 'chunks')
           );
           if (!chunksSnap.empty) {
-            combinedDataUrl = chunksSnap.docs
-              .map((d) => d.data() as { chunkIndex: number; data: string })
-              .sort((a, b) => a.chunkIndex - b.chunkIndex)
-              .map((c) => c.data)
-              .join('');
-          }
-        }
-        if (combinedDataUrl) {
-          const rawBytes = decodeDataUrlToBytes(combinedDataUrl);
-          if (rawBytes) {
-            const mime = raw.mimeType || 'application/octet-stream';
-            const blob = new Blob([new Uint8Array(rawBytes)], { type: mime });
-            await saveLocalAttachment(options.resourceId, blob, raw.fileName);
-            return {
-              ok: true,
-              blob,
-              fileName: raw.fileName,
-              mimeType: mime,
-              source: 'firestore',
-            };
+            const orderedChunks = chunksSnap.docs
+              .map(
+                (d) =>
+                  d.data() as {
+                    chunkIndex?: number;
+                    data?: string;
+                  }
+              )
+              .filter((c) => typeof c.data === 'string' && c.data.length > 0)
+              .sort((a, b) => (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0));
+
+            if (orderedChunks.length > 0) {
+              const byteParts: ArrayBuffer[] = orderedChunks.map((c) => {
+                const decoded = base64ToUint8Array(c.data!);
+                const buf = new ArrayBuffer(decoded.byteLength);
+                new Uint8Array(buf).set(decoded);
+                return buf;
+              });
+              const assembled = new Blob(byteParts, { type: resolvedMime });
+              await saveLocalAttachment(
+                options.resourceId,
+                assembled,
+                raw.fileName || options.fileName
+              );
+              return assembled;
+            }
           }
         }
       }
     } catch (err) {
-      console.warn('Failed reading attachment from Firestore:', err);
+      try {
+        handleFirestoreError(
+          err,
+          OperationType.GET,
+          `users/${effectiveUid}/attachments/${safeId}`
+        );
+      } catch {
+        // Logged via handleFirestoreError; continue to Storage fallback
+      }
     }
   }
 
-  let hadNetworkOrCorsError = false;
-  let hadPermissionError = false;
-
-  if (options.storagePath) {
+  // 3) Firebase Storage SDK `getBlob`
+  if (storage && options.storagePath) {
     try {
-      const blob = await getBlob(ref(storage, options.storagePath));
-      if (options.resourceId) {
-        await saveLocalAttachment(options.resourceId, blob);
+      const rawBlob = await getBlob(ref(storage, options.storagePath));
+      const blob =
+        inferredMime !== 'application/octet-stream' &&
+        rawBlob.type !== inferredMime
+          ? new Blob([rawBlob], { type: inferredMime })
+          : rawBlob;
+      if (options.resourceId && blob) {
+        await saveLocalAttachment(options.resourceId, blob, options.fileName);
       }
-      return {
-        ok: true,
-        blob,
-        mimeType: blob.type || undefined,
-        source: 'storage',
-      };
+      return blob;
     } catch (err) {
-      const msg = err instanceof Error ? err.message.toLowerCase() : '';
-      if (msg.includes('unauthorized') || msg.includes('permission')) {
-        hadPermissionError = true;
-      } else {
-        hadNetworkOrCorsError = true;
-      }
       console.warn('Failed reading attachment via Storage SDK:', err);
     }
   }
 
+  // 4) Direct HTTPS downloadUrl fetch fallback
   if (options.downloadUrl) {
     try {
-      const res = await fetch(options.downloadUrl, {
-        credentials: options.downloadUrl.startsWith('/') ? 'same-origin' : 'omit',
-      });
-      if (!res.ok) {
-        return {
-          ok: false,
-          errorCode: res.status === 401 || res.status === 403 ? 'PERMISSION' : 'NETWORK_OR_CORS',
-          message:
-            res.status === 401 || res.status === 403
-              ? 'ليست لديك صلاحية قراءة هذا الملف مباشرة عبر الرابط.'
-              : `تعذّر تحميل الملف من الخادم (رمز ${res.status}).`,
-          fallbackUrl: options.downloadUrl,
-        };
+      const res = await fetch(options.downloadUrl);
+      if (res.ok) {
+        const rawBlob = await res.blob();
+        const blob =
+          inferredMime !== 'application/octet-stream' &&
+          rawBlob.type !== inferredMime
+            ? new Blob([rawBlob], { type: inferredMime })
+            : rawBlob;
+        if (options.resourceId && blob) {
+          await saveLocalAttachment(options.resourceId, blob, options.fileName);
+        }
+        return blob;
       }
-      const blob = await res.blob();
-      if (options.resourceId) {
-        await saveLocalAttachment(options.resourceId, blob);
-      }
-      return {
-        ok: true,
-        blob,
-        mimeType: blob.type || undefined,
-        source: 'url',
-      };
     } catch (err) {
-      hadNetworkOrCorsError = true;
       console.warn('Failed fetching attachment URL:', err);
     }
   }
 
-  if (hadPermissionError) {
-    return {
-      ok: false,
-      errorCode: 'PERMISSION',
-      message: 'تعذّر الوصول للملف بسبب صلاحيات التخزين. تأكد من تسجيل الدخول بنفس الحساب المالك.',
-      fallbackUrl: options.downloadUrl,
-    };
-  }
-
-  if (hadNetworkOrCorsError) {
-    return {
-      ok: false,
-      errorCode: 'NETWORK_OR_CORS',
-      message:
-        'منع المتصفح تحميل الملف مباشرة عبر الشبكة (CORS أو انقطاع الاتصال). يمكنك معاينته عبر الرابط أو تنزيله أدناه.',
-      fallbackUrl: options.downloadUrl,
-    };
-  }
-
-  return {
-    ok: false,
-    errorCode: 'NOT_FOUND',
-    message:
-      'تعذّر العثور على الملف على هذا الجهاز أو في السحابة. إذا رُفع الملف على جهاز آخر قبل تفعيل قواعد المزامنة، أعد رفعه.',
-    fallbackUrl: options.downloadUrl,
-  };
+  return null;
 }
 
-export async function loadAnyAttachmentForViewing(options: {
+export interface DownloadAttachmentResult {
+  ok: boolean;
+  openedExternal?: boolean;
+  errorMessage?: string;
+}
+
+export async function downloadResourceAttachmentResult(options: {
+  uid?: string;
   resourceId?: string;
-  fileName?: string;
+  fileName: string;
   mimeType?: string;
   storagePath?: string;
   downloadUrl?: string;
-  fallbackText?: string;
-}): Promise<UniversalAttachmentLoadResult> {
-  const rawRes = await fetchRawAttachmentBlob(options);
-  if (!rawRes.ok) {
-    if (options.fallbackText?.trim()) {
-      const textBlob = new Blob([options.fallbackText], { type: 'text/plain;charset=utf-8' });
-      return {
-        ok: true,
-        kind: 'text',
-        blob: textBlob,
-        mimeType: 'text/plain;charset=utf-8',
-        fileName: options.fileName || 'document.txt',
-        plainText: options.fallbackText,
-        source: 'local',
-        sizeBytes: textBlob.size,
-      };
-    }
-    return rawRes;
-  }
-
-  const effectiveName = rawRes.fileName || options.fileName || 'document';
-  const effectiveMime = (rawRes.mimeType || options.mimeType || rawRes.blob.type || '').toLowerCase();
-  const ab = await rawRes.blob.arrayBuffer();
-  const bytes = new Uint8Array(ab);
-  const normPdf = normalizePdfBytes(bytes);
-  const looksLikePdf =
-    normPdf.valid ||
-    isPdfAttachment(effectiveName, effectiveMime);
-
-  if (normPdf.valid) {
-    return {
-      ok: true,
-      kind: 'pdf',
-      data: normPdf.bytes,
-      blob: normPdf.blob,
-      mimeType: 'application/pdf',
-      fileName: effectiveName,
-      source: rawRes.source,
-      sizeBytes: normPdf.bytes.byteLength,
-    };
-  }
-
-  if (looksLikePdf) {
-    return {
-      ok: false,
-      errorCode: 'INVALID_PDF',
-      message:
-        'الرابط أو الملف المرفق لا يحمل ترويسة PDF صالحة (قد يكون صفحة ويب خارجية). يمكنك فتحه في نافذة جديدة.',
-      fallbackUrl: options.downloadUrl,
-    };
-  }
-
-  const lowerName = effectiveName.toLowerCase();
-  if (effectiveMime.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(lowerName)) {
-    return {
-      ok: true,
-      kind: 'image',
-      blob: rawRes.blob,
-      mimeType: effectiveMime || 'image/png',
-      fileName: effectiveName,
-      source: rawRes.source,
-      sizeBytes: rawRes.blob.size,
-    };
-  }
-
-  if (lowerName.endsWith('.docx') || effectiveMime.includes('wordprocessingml')) {
-    try {
-      const mRes = await mammoth.convertToHtml({ arrayBuffer: ab });
-      const html = ensureRichHtml(mRes.value || '');
-      const plainText = richHtmlToPlainText(html);
-      return {
-        ok: true,
-        kind: 'docx',
-        blob: rawRes.blob,
-        mimeType: effectiveMime || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        fileName: effectiveName,
-        html,
-        plainText,
-        source: rawRes.source,
-        sizeBytes: rawRes.blob.size,
-      };
-    } catch {
-      // Fallback to text extraction below
-    }
-  }
-
-  const textStr = await rawRes.blob.text();
-  return {
-    ok: true,
-    kind: 'text',
-    blob: rawRes.blob,
-    mimeType: effectiveMime || 'text/plain;charset=utf-8',
-    fileName: effectiveName,
-    plainText: textStr || options.fallbackText || '',
-    source: rawRes.source,
-    sizeBytes: rawRes.blob.size,
-  };
-}
-
-export async function downloadResourceAttachment(options: {
-  resourceId?: string;
-  fileName: string;
-  storagePath?: string;
-  downloadUrl?: string;
-}): Promise<boolean> {
+}): Promise<DownloadAttachmentResult> {
   const triggerBlobDownload = (blob: Blob) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = options.fileName || 'document';
+    a.download = options.fileName || 'document.pdf';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1500);
   };
 
-  const rawRes = await fetchRawAttachmentBlob({
+  const blob = await getPdfBlobForViewing({
+    uid: options.uid,
     resourceId: options.resourceId,
+    fileName: options.fileName,
+    mimeType: options.mimeType,
     storagePath: options.storagePath,
     downloadUrl: options.downloadUrl,
   });
-  if (rawRes.ok) {
-    triggerBlobDownload(rawRes.blob);
-    return true;
+
+  if (blob) {
+    triggerBlobDownload(blob);
+    return { ok: true };
   }
 
   if (options.downloadUrl) {
     const a = document.createElement('a');
     a.href = options.downloadUrl;
-    a.download = options.fileName || 'document';
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    return true;
+    return { ok: true, openedExternal: true };
   }
 
-  return false;
+  return {
+    ok: false,
+    errorMessage:
+      'لم يُعثر على محتوى هذا الملف في السحابة أو على هذا الجهاز. إذا كنت قد رفعته قبل تحديث المزامنة، أعد رفعه مرة واحدة من الجهاز الأصلي ليظهر تلقائيًا على كل أجهزتك.',
+  };
+}
+
+export async function downloadResourceAttachment(options: {
+  uid?: string;
+  resourceId?: string;
+  fileName: string;
+  mimeType?: string;
+  storagePath?: string;
+  downloadUrl?: string;
+}): Promise<boolean> {
+  const res = await downloadResourceAttachmentResult(options);
+  return res.ok;
+}
+
+export async function deleteCloudAttachment(
+  uid: string | undefined,
+  resourceId?: string,
+  storagePath?: string
+): Promise<void> {
+  const effectiveUid = uid || auth?.currentUser?.uid;
+  if (effectiveUid && resourceId && db) {
+    const safeId = resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+    try {
+      const chunksSnap = await getDocs(
+        collection(db, 'users', effectiveUid, 'attachments', safeId, 'chunks')
+      );
+      if (!chunksSnap.empty) {
+        const batch = writeBatch(db);
+        chunksSnap.docs.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+      }
+      await deleteDoc(doc(db, 'users', effectiveUid, 'attachments', safeId));
+    } catch {
+      // Non-fatal cleanup
+    }
+  }
+  if (storage && storagePath) {
+    try {
+      await deleteObject(ref(storage, storagePath));
+    } catch {
+      // Non-fatal cleanup
+    }
+  }
 }
 
 // --- Export Notes to Word (.doc) ---
@@ -961,7 +811,7 @@ function triggerWordDownload(fileName: string, htmlDocument: string) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  URL.revokeObjectURL(url);
 }
 
 export function exportSingleBookNoteAsWord(note: BookNote): void {

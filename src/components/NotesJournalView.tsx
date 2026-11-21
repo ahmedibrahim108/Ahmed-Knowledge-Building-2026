@@ -43,8 +43,9 @@ import {
   getTodayDateKey,
 } from '../data/curriculumData';
 import {
-  downloadResourceAttachment,
+  downloadResourceAttachmentResult,
   isPdfAttachment,
+  isViewableDocumentAttachment,
   parseDocumentFile,
 } from '../utils/documentImportExport';
 import {
@@ -228,6 +229,7 @@ export default function NotesJournalView({
   const [selectedExportIds, setSelectedExportIds] = useState<string[]>([]);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [importingFile, setImportingFile] = useState(false);
+  const [fileDownloadError, setFileDownloadError] = useState<string | null>(null);
   const newNoteFileInputRef = useRef<HTMLInputElement | null>(null);
   const appendFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -709,8 +711,11 @@ export default function NotesJournalView({
     const activeHubMeta = getHubMeta(
       isEditingNote && draftNote ? draftNote.hubId : standaloneNote.hubId
     );
-    const linkedCoursePdfs = (standaloneCourse?.resources ?? []).filter((r) =>
-      isPdfAttachment(r.attachmentName, r.mimeType)
+    const linkedCoursePdfs = (standaloneCourse?.resources ?? []).filter(
+      (r) =>
+        isPdfAttachment(r.attachmentName, r.mimeType) ||
+        isViewableDocumentAttachment(r.attachmentName, r.mimeType) ||
+        Boolean(r.attachmentName || r.storagePath || r.downloadUrl)
     );
     const activeDraft = draftNote ?? buildDraftFromNote(standaloneNote);
     const activeColorKey: NoteColorKey = isEditingNote
@@ -1047,53 +1052,87 @@ export default function NotesJournalView({
             )}
           </div>
 
-          {/* Linked Course PDFs quick viewer (opens PDFViewerModal without downloading or leaving note) */}
+          {/* Linked Course PDFs & Word Files quick viewer (opens PDFViewerModal without downloading or leaving note) */}
           {linkedCoursePdfs.length > 0 && onOpenPdf && (
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
               <p className="text-xs font-bold text-[#1E3A5F]">
-                ملفات الـ PDF المرفقة بالكورس المرتبط (افتح للقراءة داخل نافذة مستقلة):
+                الملفات المرفقة بالكورس المرتبط (افتح PDF أو Word للقراءة داخل نافذة مستقلة):
               </p>
-              <div className="flex flex-wrap gap-2">
-                {linkedCoursePdfs.map((pdfRes) => (
-                  <div
-                    key={pdfRes.id}
-                    className="inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5"
+              {fileDownloadError && (
+                <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-center justify-between gap-2">
+                  <span>{fileDownloadError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setFileDownloadError(null)}
+                    className="font-semibold text-amber-700 hover:text-amber-950 cursor-pointer"
                   >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpenPdf({
-                          title: pdfRes.title,
-                          fileName: pdfRes.attachmentName || `${pdfRes.title}.pdf`,
-                          resourceId: pdfRes.id,
-                          storagePath: pdfRes.storagePath,
-                          downloadUrl: pdfRes.downloadUrl,
-                          contextLabel: standaloneCourse?.title,
-                        })
-                      }
-                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                    إغلاق
+                  </button>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {linkedCoursePdfs.map((docRes) => {
+                  const isPdf = isPdfAttachment(
+                    docRes.attachmentName,
+                    docRes.mimeType
+                  );
+                  return (
+                    <div
+                      key={docRes.id}
+                      className="inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5"
                     >
-                      <Eye className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>فتح PDF: {pdfRes.title}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void downloadResourceAttachment({
-                          resourceId: pdfRes.id,
-                          fileName:
-                            pdfRes.attachmentName || `${pdfRes.title}.pdf`,
-                          storagePath: pdfRes.storagePath,
-                          downloadUrl: pdfRes.downloadUrl,
-                        })
-                      }
-                      title="تنزيل الملف"
-                      className="p-1 text-slate-500 hover:text-slate-900 cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                    </button>
-                  </div>
-                ))}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFileDownloadError(null);
+                          onOpenPdf({
+                            uid,
+                            title: docRes.title,
+                            fileName:
+                              docRes.attachmentName ||
+                              (isPdf
+                                ? `${docRes.title}.pdf`
+                                : `${docRes.title}.docx`),
+                            resourceId: docRes.id,
+                            storagePath: docRes.storagePath,
+                            downloadUrl: docRes.downloadUrl,
+                            mimeType: docRes.mimeType,
+                            extractedPreview: docRes.extractedPreview,
+                            contextLabel: standaloneCourse?.title,
+                          });
+                        }}
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                      >
+                        <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>
+                          {isPdf ? 'فتح PDF' : 'فتح الملف'}: {docRes.title}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setFileDownloadError(null);
+                          const result = await downloadResourceAttachmentResult({
+                            uid,
+                            resourceId: docRes.id,
+                            fileName:
+                              docRes.attachmentName || `${docRes.title}.pdf`,
+                            mimeType: docRes.mimeType,
+                            storagePath: docRes.storagePath,
+                            downloadUrl: docRes.downloadUrl,
+                          });
+                          if (!result.ok && result.errorMessage) {
+                            setFileDownloadError(result.errorMessage);
+                          }
+                        }}
+                        title="تنزيل الملف"
+                        className="p-1 text-slate-500 hover:text-slate-900 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
