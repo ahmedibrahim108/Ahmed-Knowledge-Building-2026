@@ -19,6 +19,7 @@ import {
 } from '../data/curriculumData';
 import { storage } from '../firebase';
 import { uploadDentalCaseCover } from '../utils/imageStorage';
+import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
 
@@ -774,12 +775,15 @@ export default function DentalCasesView({
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" aria-hidden="true" />
                   <span>تفاصيل ما تم إجراؤه في الحالة</span>
                 </h3>
-                <div
-                  dir="auto"
-                  className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 whitespace-pre-wrap leading-relaxed"
-                >
-                  {selectedCase.procedureDetails || 'لم يتم إضافة تفاصيل إضافية بعد.'}
-                </div>
+                <BidiText
+                  text={
+                    selectedCase.procedureDetails ||
+                    'لم يتم إضافة تفاصيل إضافية بعد.'
+                  }
+                  as="div"
+                  multiline
+                  className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 leading-relaxed"
+                />
               </div>
 
               {/* Additional Clinical & Radiograph Gallery Synced Cross-Device */}

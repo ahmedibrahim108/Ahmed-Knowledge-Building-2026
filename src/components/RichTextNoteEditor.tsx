@@ -19,9 +19,11 @@ import {
   Undo2,
 } from 'lucide-react';
 import { HighlightColorKey, UserPreferences } from '../data/curriculumData';
+import { TextDir, detectTextDirection } from '../utils/bidi';
 import {
   HIGHLIGHT_SWATCHES,
   ensureRichHtml,
+  sanitizePastedHtml,
   sanitizeRichHtml,
 } from '../utils/richText';
 
@@ -93,6 +95,78 @@ export default function RichTextNoteEditor({
     setActiveHighlight(preferences.noteHighlightColor);
   }, [preferences.noteHighlightColor]);
 
+  const STRONG_CHAR_RE =
+    /[A-Za-z\u00C0-\u024F\u0370-\u052F\u0590-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u1E00-\u1EFF]/;
+
+  const syncBlocksBidi = (el: HTMLElement, mode: 'auto' | 'rtl' | 'ltr') => {
+    const blockSelector = 'p,div,h1,h2,h3,h4,blockquote,li,th,td';
+    const blocks = Array.from(el.querySelectorAll(blockSelector)) as HTMLElement[];
+
+    for (const block of blocks) {
+      const tag = block.tagName.toUpperCase();
+      if (
+        tag === 'DIV' &&
+        Array.from(block.children).some((c) =>
+          /^(P|DIV|H1|H2|H3|H4|UL|OL|BLOCKQUOTE|TABLE)$/i.test(c.tagName)
+        )
+      ) {
+        if (block.hasAttribute('dir')) block.removeAttribute('dir');
+        continue;
+      }
+
+      if (mode === 'auto' && block.getAttribute('data-manual-dir') === 'true') {
+        continue;
+      }
+
+      const text = (block.textContent || '').trim();
+      let nextDir: TextDir;
+      if (mode === 'ltr' || mode === 'rtl') {
+        nextDir = mode;
+      } else if (STRONG_CHAR_RE.test(text)) {
+        nextDir = detectTextDirection(text, 'rtl');
+      } else if (tag === 'LI') {
+        // Inherit previous list item direction while typing a brand new empty bullet
+        const prevLi = block.previousElementSibling as HTMLElement | null;
+        const prevDir = (prevLi?.getAttribute('dir') || '').toLowerCase();
+        nextDir = prevDir === 'ltr' || prevDir === 'rtl' ? prevDir : 'rtl';
+      } else {
+        const currentDir = (block.getAttribute('dir') || '').toLowerCase();
+        nextDir = currentDir === 'ltr' || currentDir === 'rtl' ? currentDir : 'rtl';
+      }
+
+      if (block.getAttribute('dir') !== nextDir) {
+        block.setAttribute('dir', nextDir);
+      }
+    }
+
+    const lists = Array.from(el.querySelectorAll('ul,ol')) as HTMLElement[];
+    for (const list of lists) {
+      const liChildren = Array.from(list.children).filter(
+        (c) => c.tagName.toUpperCase() === 'LI'
+      ) as HTMLElement[];
+      if (liChildren.length === 0) continue;
+
+      const dirs = liChildren.map((li) =>
+        (li.getAttribute('dir') || '').toLowerCase() === 'ltr' ? 'ltr' : 'rtl'
+      );
+      const allLtr = dirs.every((d) => d === 'ltr');
+      const allRtl = dirs.every((d) => d === 'rtl');
+
+      if (allLtr) {
+        if (list.getAttribute('dir') !== 'ltr') list.setAttribute('dir', 'ltr');
+        if (list.hasAttribute('data-mixed')) list.removeAttribute('data-mixed');
+      } else if (allRtl) {
+        if (list.getAttribute('dir') !== 'rtl') list.setAttribute('dir', 'rtl');
+        if (list.hasAttribute('data-mixed')) list.removeAttribute('data-mixed');
+      } else {
+        if (list.getAttribute('dir') !== dirs[0]) list.setAttribute('dir', dirs[0]);
+        if (list.getAttribute('data-mixed') !== 'true') {
+          list.setAttribute('data-mixed', 'true');
+        }
+      }
+    }
+  };
+
   // Safely synchronize DOM ONLY on noteKey change or genuine external change when not actively typing
   useEffect(() => {
     const el = editorRef.current;
@@ -102,6 +176,7 @@ export default function RichTextNoteEditor({
     if (noteChanged) {
       const normalized = ensureRichHtml(value);
       el.innerHTML = normalized;
+      syncBlocksBidi(el, editorDir);
       lastEmittedRef.current = value;
       lastNoteKeyRef.current = noteKey;
       setInsideTable(false);
@@ -127,10 +202,12 @@ export default function RichTextNoteEditor({
     // Only apply external updates (e.g., voice dictation or file import or cancel reset)
     if (!isFocused) {
       el.innerHTML = normalized;
+      syncBlocksBidi(el, editorDir);
       lastEmittedRef.current = value;
     } else {
       // External update happened while focused: replace content and place caret cleanly at end
       el.innerHTML = normalized;
+      syncBlocksBidi(el, editorDir);
       lastEmittedRef.current = value;
       try {
         const sel = window.getSelection();
@@ -198,6 +275,7 @@ export default function RichTextNoteEditor({
   const emitChange = (normalizeEmptyOnBlur = false) => {
     const el = editorRef.current;
     if (!el) return;
+    syncBlocksBidi(el, editorDir);
     let cleaned = sanitizeRichHtml(el.innerHTML);
     const plainCheck = cleaned
       .replace(/<[^>]+>/g, '')
@@ -239,6 +317,81 @@ export default function RichTextNoteEditor({
     el.focus();
     document.execCommand(command, false, commandVal);
     emitChange();
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    if (!guardEdit()) {
+      e.preventDefault();
+      return;
+    }
+    const el = editorRef.current;
+    if (!el) return;
+
+    const clipboard = e.clipboardData;
+    if (!clipboard) return;
+    const html = clipboard.getData('text/html');
+    const plain = clipboard.getData('text/plain');
+
+    if (!html && !plain) return;
+    e.preventDefault();
+    el.focus();
+
+    if (html && html.trim()) {
+      const cleaned = sanitizePastedHtml(html, plain);
+      if (cleaned) {
+        // If pasting a single plain paragraph inside an existing block/list item without block tags, unwrap <p>
+        const singlePMatch = cleaned.match(/^<p(?:\s+dir="(?:ltr|rtl)")?>([\s\S]*)<\/p>$/i);
+        const sel = window.getSelection();
+        let insideBlockWithText = false;
+        if (sel && sel.anchorNode) {
+          let cur: Node | null = sel.anchorNode;
+          while (cur && cur !== el) {
+            if (
+              cur.nodeType === Node.ELEMENT_NODE &&
+              /^(LI|P|H1|H2|H3|H4|BLOCKQUOTE|TD|TH)$/i.test(
+                (cur as HTMLElement).tagName
+              ) &&
+              ((cur as HTMLElement).textContent || '').trim().length > 0
+            ) {
+              insideBlockWithText = true;
+              break;
+            }
+            cur = cur.parentNode;
+          }
+        }
+        const toInsert =
+          singlePMatch && insideBlockWithText ? singlePMatch[1] : cleaned;
+        const ok = document.execCommand('insertHTML', false, toInsert);
+        if (!ok && sel && sel.rangeCount > 0) {
+          const range = sel.getRangeAt(0);
+          range.deleteContents();
+          const frag = range.createContextualFragment(toInsert);
+          range.insertNode(frag);
+          range.collapse(false);
+        }
+        emitChange(false);
+        return;
+      }
+    }
+
+    if (plain) {
+      const hasStructuredLines =
+        /\r?\n/.test(plain) ||
+        /^[\s]*(?:[-•*▪◦‣]\s+|\d{1,3}[.)]\s+|#{1,4}\s+|>\s+)/m.test(plain);
+      if (hasStructuredLines) {
+        const richFromPlain = ensureRichHtml(plain);
+        if (richFromPlain) {
+          const ok = document.execCommand('insertHTML', false, richFromPlain);
+          if (!ok) {
+            document.execCommand('insertText', false, plain);
+          }
+          emitChange(false);
+          return;
+        }
+      }
+      document.execCommand('insertText', false, plain);
+      emitChange(false);
+    }
   };
 
   const applyHighlight = (colorKey: HighlightColorKey) => {
@@ -321,7 +474,18 @@ export default function RichTextNoteEditor({
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     let node: Node | null = sel.anchorNode;
-    const blockTags = new Set(['P', 'DIV', 'H3', 'H4', 'LI', 'BLOCKQUOTE']);
+    const blockTags = new Set([
+      'P',
+      'DIV',
+      'H1',
+      'H2',
+      'H3',
+      'H4',
+      'LI',
+      'BLOCKQUOTE',
+      'TH',
+      'TD',
+    ]);
     let targetBlock: HTMLElement | null = null;
     while (node && node !== el) {
       if (node.nodeType === Node.ELEMENT_NODE) {
@@ -335,12 +499,14 @@ export default function RichTextNoteEditor({
     }
     if (targetBlock && targetBlock !== el) {
       targetBlock.setAttribute('dir', targetDir);
+      targetBlock.setAttribute('data-manual-dir', 'true');
       emitChange();
       return;
     }
     // Wrap current line or insert a clean directed paragraph
     const p = document.createElement('p');
     p.setAttribute('dir', targetDir);
+    p.setAttribute('data-manual-dir', 'true');
     const range = sel.getRangeAt(0);
     if (!range.collapsed) {
       try {
@@ -853,9 +1019,22 @@ export default function RichTextNoteEditor({
               disabled={!canEdit}
               onMouseDown={(e) => {
                 e.preventDefault();
-                setEditorDir((prev) =>
-                  prev === 'auto' ? 'rtl' : prev === 'rtl' ? 'ltr' : 'auto'
-                );
+                const nextMode =
+                  editorDir === 'auto'
+                    ? 'rtl'
+                    : editorDir === 'rtl'
+                    ? 'ltr'
+                    : 'auto';
+                setEditorDir(nextMode);
+                if (editorRef.current) {
+                  if (nextMode === 'auto') {
+                    editorRef.current
+                      .querySelectorAll('[data-manual-dir="true"]')
+                      .forEach((n) => n.removeAttribute('data-manual-dir'));
+                  }
+                  syncBlocksBidi(editorRef.current, nextMode);
+                  emitChange(false);
+                }
               }}
               title="تبديل اتجاه المحرر العام (تلقائي ثنائي اللغة / عربي RTL / إنجليزي LTR)"
               className="px-2 py-1 min-h-[28px] text-[11px] font-semibold text-slate-700 hover:bg-slate-100 rounded cursor-pointer disabled:opacity-45"
@@ -1040,13 +1219,14 @@ export default function RichTextNoteEditor({
           style={{ caretColor: '#1E3A5F' }}
           onInput={() => emitChange(false)}
           onBlur={() => emitChange(true)}
+          onPaste={handlePaste}
           onKeyUp={syncFormatState}
           onMouseUp={syncFormatState}
-          className={`w-full p-3.5 sm:p-4 ${minHeightClass} ${
+          className={`prose-bidi w-full p-3.5 sm:p-4 ${minHeightClass} ${
             FONT_SIZE_CLASS[preferences.noteFontSize]
           } ${
             editorDir === 'ltr' ? 'text-left' : editorDir === 'rtl' ? 'text-right' : 'text-start'
-          } text-slate-800 break-words [overflow-wrap:anywhere] focus:outline-none rounded-b-xl touch-manipulation [&_[dir="ltr"]]:text-left [&_[dir="rtl"]]:text-right [&_ul]:list-disc [&_ul]:ps-6 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:ps-6 [&_ol]:my-2 [&_li]:my-1 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:border-s-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:ps-3 [&_blockquote]:my-2 [&_blockquote]:text-slate-700 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-start [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white/60 ${
+          } text-slate-800 break-words focus:outline-none rounded-b-xl touch-manipulation [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white/60 ${
             !canEdit ? 'cursor-not-allowed opacity-85' : ''
           }`}
         />

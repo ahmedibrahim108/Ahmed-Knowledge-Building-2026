@@ -1,4 +1,10 @@
 import { HighlightColorKey } from '../data/curriculumData';
+import {
+  TextDir,
+  applyBidiToHtml,
+  detectTextDirection,
+  parsePlainTextToBidiBlocks,
+} from './bidi';
 
 export const HIGHLIGHT_SWATCHES: Record<
   HighlightColorKey,
@@ -65,6 +71,23 @@ const ALLOWED_BG_COLORS = new Set([
   'rgb(254, 205, 211)',
 ]);
 
+const BLOCK_DIR_TAGS = new Set([
+  'P',
+  'DIV',
+  'H1',
+  'H2',
+  'H3',
+  'H4',
+  'LI',
+  'BLOCKQUOTE',
+  'TH',
+  'TD',
+  'TABLE',
+]);
+
+const STRONG_CHAR_RE =
+  /[A-Za-z\u00C0-\u024F\u0370-\u052F\u0590-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u1E00-\u1EFF]/;
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -74,14 +97,14 @@ function escapeHtml(text: string): string {
 }
 
 export function looksLikeHtml(value: string): boolean {
-  return /<\/?(p|div|br|b|strong|i|em|u|ul|ol|li|blockquote|h3|h4|mark|span|table|thead|tbody|tfoot|tr|th|td)\b/i.test(
+  return /<\/?(p|div|br|b|strong|i|em|u|ul|ol|li|blockquote|h1|h2|h3|h4|mark|span|table|thead|tbody|tfoot|tr|th|td)\b/i.test(
     value
   );
 }
 
 /**
- * Converts legacy plain-text notes (with newlines or bullet prefixes) into safe HTML
- * when opening them in the rich text editor.
+ * Converts legacy plain-text notes (with newlines, bullet prefixes, numbered lists,
+ * headings, or quotes) into clean bidirectional HTML with automatic per-block direction.
  */
 export function ensureRichHtml(raw: string): string {
   const trimmed = (raw ?? '').trim();
@@ -89,41 +112,83 @@ export function ensureRichHtml(raw: string): string {
   if (looksLikeHtml(trimmed)) {
     return sanitizeRichHtml(trimmed);
   }
-  const lines = trimmed.split(/\r?\n/);
-  const htmlParts: string[] = [];
-  let inList = false;
 
-  for (const line of lines) {
-    const t = line.trim();
-    if (!t) {
-      if (inList) {
-        htmlParts.push('</ul>');
-        inList = false;
+  const blocks = parsePlainTextToBidiBlocks(trimmed);
+  return blocks
+    .map((block) => {
+      if (block.type === 'ul' && block.items) {
+        const itemsHtml = block.items
+          .map((item) => `<li dir="${item.dir}">${escapeHtml(item.text)}</li>`)
+          .join('');
+        return `<ul dir="${block.dir}">${itemsHtml}</ul>`;
       }
-      continue;
-    }
-    if (t.startsWith('- ') || t.startsWith('• ')) {
-      if (!inList) {
-        htmlParts.push('<ul>');
-        inList = true;
+      if (block.type === 'ol' && block.items) {
+        const itemsHtml = block.items
+          .map((item) => `<li dir="${item.dir}">${escapeHtml(item.text)}</li>`)
+          .join('');
+        const mixedAttr = block.mixed ? ' data-mixed="true"' : '';
+        const startAttr =
+          block.startNumber && block.startNumber > 1
+            ? ` start="${block.startNumber}"`
+            : '';
+        return `<ol dir="${block.dir}"${mixedAttr}${startAttr}>${itemsHtml}</ol>`;
       }
-      htmlParts.push(`<li>${escapeHtml(t.slice(2))}</li>`);
-    } else {
-      if (inList) {
-        htmlParts.push('</ul>');
-        inList = false;
+      if (block.type === 'heading') {
+        const tag = `h${block.headingLevel ?? 3}`;
+        return `<${tag} dir="${block.dir}">${escapeHtml(block.text ?? '')}</${tag}>`;
       }
-      htmlParts.push(`<p>${escapeHtml(t)}</p>`);
-    }
-  }
-  if (inList) htmlParts.push('</ul>');
-  return htmlParts.join('');
+      if (block.type === 'quote') {
+        return `<blockquote dir="${block.dir}">${escapeHtml(block.text ?? '')}</blockquote>`;
+      }
+      return `<p dir="${block.dir}">${escapeHtml(block.text ?? '')}</p>`;
+    })
+    .join('');
 }
 
-/**
- * Sanitizes editor HTML so only safe structural, bold, italic, list, quote, table, and highlight tags remain.
- */
-export function sanitizeRichHtml(dirtyHtml: string): string {
+function hasDirectBlockChild(el: HTMLElement): boolean {
+  return Array.from(el.children).some((c) => {
+    const t = c.tagName.toUpperCase();
+    return (
+      t === 'P' ||
+      t === 'DIV' ||
+      t === 'H1' ||
+      t === 'H2' ||
+      t === 'H3' ||
+      t === 'H4' ||
+      t === 'UL' ||
+      t === 'OL' ||
+      t === 'BLOCKQUOTE' ||
+      t === 'TABLE'
+    );
+  });
+}
+
+function resolveSanitizedBlockDir(
+  el: HTMLElement,
+  ignoreExternalDir: boolean
+): TextDir | '' {
+  const isManual = !ignoreExternalDir && el.getAttribute('data-manual-dir') === 'true';
+  const rawDir = (el.getAttribute('dir') || '').toLowerCase();
+  if (isManual && (rawDir === 'ltr' || rawDir === 'rtl')) {
+    return rawDir;
+  }
+
+  const text = (el.textContent || '').trim();
+  if (STRONG_CHAR_RE.test(text)) {
+    return detectTextDirection(text, 'rtl');
+  }
+
+  if (!ignoreExternalDir && (rawDir === 'ltr' || rawDir === 'rtl')) {
+    return rawDir;
+  }
+  return '';
+}
+
+function runSanitizeHtml(
+  dirtyHtml: string,
+  options: { ignoreExternalDir?: boolean; unwrapContainerDivs?: boolean } = {}
+): string {
+  const { ignoreExternalDir = false, unwrapContainerDivs = false } = options;
   if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
     return dirtyHtml;
   }
@@ -139,6 +204,11 @@ export function sanitizeRichHtml(dirtyHtml: string): string {
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const el = node as HTMLElement;
     const tag = el.tagName.toUpperCase();
+
+    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'META' || tag === 'LINK') {
+      return '';
+    }
+
     const childrenHtml = Array.from(el.childNodes).map(walk).join('');
 
     if (!ALLOWED_TAGS.has(tag)) {
@@ -156,12 +226,21 @@ export function sanitizeRichHtml(dirtyHtml: string): string {
       } else if (ALLOWED_BG_COLORS.has(rawBg)) {
         bgHex = rawBg;
       }
+      const spanDir = (el.getAttribute('dir') || '').toLowerCase();
+      const spanDirAttr =
+        !ignoreExternalDir && (spanDir === 'ltr' || spanDir === 'rtl')
+          ? ` dir="${spanDir}" class="bidi-isolate"`
+          : '';
+
       if (tag === 'MARK') {
         const finalBg = bgHex || HIGHLIGHT_SWATCHES.amber.bgHex;
-        return `<mark style="background-color: ${finalBg};">${childrenHtml}</mark>`;
+        return `<mark${spanDirAttr} style="background-color: ${finalBg};">${childrenHtml}</mark>`;
       }
       if (bgHex) {
-        return `<mark style="background-color: ${bgHex};">${childrenHtml}</mark>`;
+        return `<mark${spanDirAttr} style="background-color: ${bgHex};">${childrenHtml}</mark>`;
+      }
+      if (spanDirAttr) {
+        return `<span${spanDirAttr}>${childrenHtml}</span>`;
       }
       return childrenHtml;
     }
@@ -176,6 +255,13 @@ export function sanitizeRichHtml(dirtyHtml: string): string {
       if (!Number.isNaN(rowspan) && rowspan > 1 && rowspan <= 20) {
         attrs.push(`rowspan="${rowspan}"`);
       }
+      const cellDir = resolveSanitizedBlockDir(el, ignoreExternalDir);
+      if (cellDir) {
+        attrs.push(`dir="${cellDir}"`);
+      }
+      if (!ignoreExternalDir && el.getAttribute('data-manual-dir') === 'true') {
+        attrs.push('data-manual-dir="true"');
+      }
       const attrStr = attrs.length > 0 ? ` ${attrs.join(' ')}` : '';
       const lowerCell = tag.toLowerCase();
       return `<${lowerCell}${attrStr}>${childrenHtml || '<br>'}</${lowerCell}>`;
@@ -185,27 +271,119 @@ export function sanitizeRichHtml(dirtyHtml: string): string {
     if (lower === 'b') return `<strong>${childrenHtml}</strong>`;
     if (lower === 'i') return `<em>${childrenHtml}</em>`;
 
-    const rawDir = (el.getAttribute('dir') || '').toLowerCase();
-    const dirAttr =
-      (rawDir === 'ltr' || rawDir === 'rtl' || rawDir === 'auto') &&
-      (tag === 'P' ||
-        tag === 'DIV' ||
-        tag === 'H1' ||
-        tag === 'H2' ||
-        tag === 'H3' ||
-        tag === 'H4' ||
-        tag === 'UL' ||
-        tag === 'OL' ||
-        tag === 'LI' ||
-        tag === 'BLOCKQUOTE' ||
-        tag === 'TABLE')
-        ? ` dir="${rawDir}"`
-        : '';
+    if (tag === 'DIV' && unwrapContainerDivs) {
+      if (hasDirectBlockChild(el)) {
+        return childrenHtml;
+      }
+      const pDir = resolveSanitizedBlockDir(el, ignoreExternalDir);
+      return `<p${pDir ? ` dir="${pDir}"` : ''}>${childrenHtml}</p>`;
+    }
 
-    return `<${lower}${dirAttr}>${childrenHtml}</${lower}>`;
+    if (tag === 'UL' || tag === 'OL') {
+      const liChildren = Array.from(el.children).filter(
+        (c) => c.tagName.toUpperCase() === 'LI'
+      ) as HTMLElement[];
+      const liDirs = liChildren
+        .map((li) => resolveSanitizedBlockDir(li, ignoreExternalDir))
+        .filter((d): d is TextDir => d === 'rtl' || d === 'ltr');
+
+      let listDirAttr = '';
+      let mixedAttr = '';
+      if (liDirs.length > 0) {
+        const allRtl = liDirs.every((d) => d === 'rtl');
+        const allLtr = liDirs.every((d) => d === 'ltr');
+        if (allRtl) {
+          listDirAttr = ' dir="rtl"';
+        } else if (allLtr) {
+          listDirAttr = ' dir="ltr"';
+        } else {
+          listDirAttr = ` dir="${liDirs[0]}"`;
+          mixedAttr = ' data-mixed="true"';
+        }
+      } else {
+        const rawDir = (el.getAttribute('dir') || '').toLowerCase();
+        if (!ignoreExternalDir && (rawDir === 'ltr' || rawDir === 'rtl')) {
+          listDirAttr = ` dir="${rawDir}"`;
+        }
+      }
+
+      const startVal =
+        tag === 'OL' ? parseInt(el.getAttribute('start') || '', 10) : NaN;
+      const startAttr =
+        !Number.isNaN(startVal) && startVal > 1 ? ` start="${startVal}"` : '';
+
+      return `<${lower}${listDirAttr}${mixedAttr}${startAttr}>${childrenHtml}</${lower}>`;
+    }
+
+    if (BLOCK_DIR_TAGS.has(tag)) {
+      if (tag === 'DIV' && hasDirectBlockChild(el)) {
+        return `<${lower}>${childrenHtml}</${lower}>`;
+      }
+      const resolvedDir = resolveSanitizedBlockDir(el, ignoreExternalDir);
+      const dirAttr = resolvedDir ? ` dir="${resolvedDir}"` : '';
+      const manualAttr =
+        !ignoreExternalDir && el.getAttribute('data-manual-dir') === 'true'
+          ? ' data-manual-dir="true"'
+          : '';
+      return `<${lower}${dirAttr}${manualAttr}>${childrenHtml}</${lower}>`;
+    }
+
+    return `<${lower}>${childrenHtml}</${lower}>`;
   };
 
   return walk(root).trim();
+}
+
+/**
+ * Sanitizes editor HTML so only safe structural, bold, italic, list, quote, table,
+ * highlight, and bidirectional attributes remain.
+ */
+export function sanitizeRichHtml(dirtyHtml: string): string {
+  return runSanitizeHtml(dirtyHtml, {
+    ignoreExternalDir: false,
+    unwrapContainerDivs: false,
+  });
+}
+
+/**
+ * Sanitizes clipboard HTML on paste, stripping external wrapper directions/styles
+ * and re-detecting Arabic/English direction per pasted paragraph and list item.
+ */
+export function sanitizePastedHtml(
+  dirtyHtml: string,
+  fallbackPlainText = ''
+): string {
+  const hasMeaningfulMarkup =
+    /<(ul|ol|li|table|thead|tbody|tr|th|td|h1|h2|h3|h4|blockquote|strong|b|em|i|u|mark)\b/i.test(
+      dirtyHtml
+    );
+
+  if (!hasMeaningfulMarkup && fallbackPlainText.trim()) {
+    return ensureRichHtml(fallbackPlainText);
+  }
+
+  return runSanitizeHtml(dirtyHtml, {
+    ignoreExternalDir: true,
+    unwrapContainerDivs: true,
+  });
+}
+
+/**
+ * Renders stored notes, quotes, or extracted document HTML/plain-text into safe,
+ * display-ready bilingual HTML with:
+ * - Automatic per-block RTL/LTR direction detection
+ * - Clean RTL/LTR list grouping so bullets/numbers align strictly on the right for Arabic
+ *   and strictly on the left for English (even in mixed Arabic+English sections)
+ * - Isolated inline opposite-script runs (`<span dir="ltr|rtl" class="bidi-isolate">`)
+ *   preserving parentheses, punctuation, and exact original wording verbatim.
+ */
+export function renderSafeBidiHtml(raw: string): string {
+  const rich = ensureRichHtml(raw);
+  if (!rich) return '';
+  return applyBidiToHtml(rich, {
+    inlineIsolation: true,
+    splitMixedLists: true,
+  });
 }
 
 /**
@@ -245,6 +423,20 @@ export function richHtmlToPlainText(raw: string): string {
       if (cells.length > 0) {
         lines.push(`\n${cells.join(' | ')}`);
       }
+      return;
+    }
+    if (tag === 'OL') {
+      const startNum = parseInt(el.getAttribute('start') || '1', 10) || 1;
+      let idx = startNum;
+      Array.from(el.children).forEach((child) => {
+        if (child.tagName.toUpperCase() === 'LI') {
+          lines.push(`\n${idx++}. `);
+          child.childNodes.forEach(walk);
+        } else {
+          walk(child);
+        }
+      });
+      lines.push('\n');
       return;
     }
     if (tag === 'LI') {
@@ -319,7 +511,7 @@ export function richHtmlToMarkdown(raw: string): string {
       case 'UL':
         return `\n${inner}\n`;
       case 'OL': {
-        let idx = 1;
+        let idx = parseInt(el.getAttribute('start') || '1', 10) || 1;
         return (
           '\n' +
           Array.from(el.children)

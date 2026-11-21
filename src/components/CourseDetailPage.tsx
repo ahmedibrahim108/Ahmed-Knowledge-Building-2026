@@ -52,7 +52,13 @@ import {
   parseDocumentFile,
   uploadResourceAttachment,
 } from '../utils/documentImportExport';
-import { ensureRichHtml, richHtmlToPlainText, sanitizeRichHtml } from '../utils/richText';
+import {
+  ensureRichHtml,
+  renderSafeBidiHtml,
+  richHtmlToPlainText,
+  sanitizeRichHtml,
+} from '../utils/richText';
+import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
 import type { ActivePdfTarget } from './PDFViewerModal';
@@ -104,6 +110,7 @@ interface CourseDetailPageProps {
   onJumpToMonth: (monthId: number) => void;
   onOpenPaths: () => void;
   onOpenTasksTab: () => void;
+  onOpenCalendar?: () => void;
   onOpenNoteById: (noteId: string) => void;
   onAddStructuredNote: (payload: {
     hubId?: LearningHubId;
@@ -878,7 +885,7 @@ export default function CourseDetailPage({
                 </div>
 
                 <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900 leading-snug">
-                  {course.title}
+                  <BidiText text={course.title} />
                 </h1>
 
                 {(course.instructor ||
@@ -1145,7 +1152,7 @@ export default function CourseDetailPage({
                       المرجع المكمل
                     </span>
                     <p className="text-sm font-semibold text-slate-900">
-                      {course.complementaryBook || '—'}
+                      <BidiText text={course.complementaryBook || '—'} />
                     </p>
                     {course.bookAuthor && (
                       <p className="text-slate-600">{course.bookAuthor}</p>
@@ -1158,9 +1165,12 @@ export default function CourseDetailPage({
                     <span className="font-semibold text-slate-500 block">
                       هدف التطبيق العملي
                     </span>
-                    <p className="text-slate-800 leading-relaxed">
-                      {course.applicationMilestone}
-                    </p>
+                    <BidiText
+                      text={course.applicationMilestone}
+                      as="div"
+                      multiline
+                      className="text-slate-800 leading-relaxed"
+                    />
                   </div>
                 )}
               </div>
@@ -1589,9 +1599,12 @@ export default function CourseDetailPage({
 
                         {isPreviewOpen && res.extractedPreview && (
                           <div className="px-3.5 pb-3">
-                            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed">
-                              {res.extractedPreview}
-                            </div>
+                            <BidiText
+                              text={res.extractedPreview}
+                              as="div"
+                              multiline
+                              className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 max-h-48 overflow-y-auto leading-relaxed"
+                            />
                           </div>
                         )}
                       </div>
@@ -1661,7 +1674,7 @@ export default function CourseDetailPage({
                                 : 'text-slate-800'
                             }`}
                           >
-                            {task.text}
+                            <BidiText text={task.text} />
                           </span>
                         </button>
 
@@ -1745,11 +1758,11 @@ export default function CourseDetailPage({
                         >
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-slate-900 truncate">
-                              {proj.title}
+                              <BidiText text={proj.title} />
                             </p>
                             {proj.deliverables && (
                               <p className="text-[11px] text-slate-600 truncate">
-                                المخرجات: {proj.deliverables}
+                                المخرجات: <BidiText text={proj.deliverables} />
                               </p>
                             )}
                           </div>
@@ -1799,7 +1812,7 @@ export default function CourseDetailPage({
                                   : 'text-slate-800 font-medium'
                               }`}
                             >
-                              {ut.title}
+                              <BidiText text={ut.title} />
                             </span>
                           </button>
                           {ut.dueDate && (
@@ -1983,11 +1996,11 @@ export default function CourseDetailPage({
                         </span>
                       </div>
                       <p className="text-xs font-bold text-slate-900 line-clamp-1">
-                        {bn.bookTitle}
+                        <BidiText text={bn.bookTitle} />
                       </p>
                       {snippet && (
                         <p className="text-[11px] text-slate-600 line-clamp-2 leading-relaxed">
-                          {snippet}
+                          <BidiText text={snippet} />
                         </p>
                       )}
                       <div className="pt-1 flex items-center justify-between gap-2">
@@ -2194,12 +2207,9 @@ export default function CourseDetailPage({
                       {richHtmlToPlainText(activeNote.content) ? (
                         <div className="p-4 bg-white border border-slate-200 rounded-xl overflow-x-auto">
                           <div
-                            dir="auto"
-                            className="text-sm text-slate-800 leading-relaxed [&_[dir='ltr']]:text-left [&_[dir='rtl']]:text-right [&_ul]:list-disc [&_ul]:pr-6 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:pr-6 [&_ol]:my-2 [&_li]:my-1 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:border-r-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:pr-3 [&_blockquote]:my-2 [&_blockquote]:text-slate-700 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-right [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white"
+                            className="prose-bidi text-sm text-slate-800 leading-relaxed [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white"
                             dangerouslySetInnerHTML={{
-                              __html: sanitizeRichHtml(
-                                ensureRichHtml(activeNote.content)
-                              ),
+                              __html: renderSafeBidiHtml(activeNote.content),
                             }}
                           />
                         </div>

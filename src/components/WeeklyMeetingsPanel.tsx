@@ -33,6 +33,7 @@ import {
   getHubMeta,
   getTodayDateKey,
 } from '../data/curriculumData';
+import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 
 interface WeeklyMeetingsPanelProps {
@@ -741,12 +742,15 @@ export default function WeeklyMeetingsPanel({
                     )}
                   </div>
                   <h3 className="text-base sm:text-lg font-bold text-slate-900">
-                    {activeOccurrence.title}
+                    <BidiText text={activeOccurrence.title} />
                   </h3>
                   {activeOccurrence.meeting.description && (
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      {activeOccurrence.meeting.description}
-                    </p>
+                    <BidiText
+                      text={activeOccurrence.meeting.description}
+                      as="div"
+                      multiline
+                      className="text-xs text-slate-600 leading-relaxed"
+                    />
                   )}
                 </div>
 

@@ -21,7 +21,7 @@ import {
   getPdfBlobForViewing,
   renderDocumentBlobToHtml,
 } from '../utils/documentImportExport';
-import { ensureRichHtml, sanitizeRichHtml } from '../utils/richText';
+import { renderSafeBidiHtml } from '../utils/richText';
 import ErrorBoundary from './ErrorBoundary';
 
 // Safe runtime shim for older Android Chrome / WebViews when PDF modal is opened
@@ -155,10 +155,10 @@ export default function PDFViewerModal({
               target.mimeType
             );
             if (cancelled) return;
-            setDocHtml(sanitizeRichHtml(rawHtml));
+            setDocHtml(renderSafeBidiHtml(rawHtml));
             setPreviewOnlyNotice(false);
           } else if (target.extractedPreview?.trim()) {
-            setDocHtml(sanitizeRichHtml(ensureRichHtml(target.extractedPreview)));
+            setDocHtml(renderSafeBidiHtml(target.extractedPreview));
             setPreviewOnlyNotice(true);
           } else {
             setLoadError(
@@ -169,7 +169,7 @@ export default function PDFViewerModal({
       } catch {
         if (!cancelled) {
           if (!isPdfMode && target.extractedPreview?.trim()) {
-            setDocHtml(sanitizeRichHtml(ensureRichHtml(target.extractedPreview)));
+            setDocHtml(renderSafeBidiHtml(target.extractedPreview));
             setPreviewOnlyNotice(true);
           } else {
             setLoadError('تعذر فتح الملف مباشرة. حاول تنزيله أو إعادة رفعه.');
@@ -524,9 +524,8 @@ export default function PDFViewerModal({
                 </div>
               )}
               <div
-                dir="auto"
                 style={{ fontSize: `${Math.round(15 * zoom)}px` }}
-                className="p-5 sm:p-10 text-slate-800 leading-relaxed space-y-3 [&_h1]:text-xl [&_h1]:font-bold [&_h1]:text-[#1E3A5F] [&_h1]:mb-3 [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-[#1E3A5F] [&_h2]:mt-5 [&_h2]:mb-2 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-4 [&_ul]:list-disc [&_ul]:ps-6 [&_ol]:list-decimal [&_ol]:ps-6 [&_blockquote]:border-s-4 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:ps-3 [&_blockquote]:bg-slate-50 [&_blockquote]:py-2 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:p-2 [&_th]:text-start [&_td]:border [&_td]:border-slate-300 [&_td]:p-2 [&_mark]:px-1 [&_mark]:rounded"
+                className="prose-bidi p-5 sm:p-10 text-slate-800 leading-relaxed space-y-3 [&_h1]:text-xl [&_h1]:font-bold [&_h1]:text-[#1E3A5F] [&_h1]:mb-3 [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-[#1E3A5F] [&_h2]:mt-5 [&_h2]:mb-2 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-4 [&_blockquote]:not-italic [&_blockquote]:border-s-4 [&_blockquote]:bg-slate-50 [&_blockquote]:py-2 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:p-2 [&_td]:border [&_td]:border-slate-300 [&_td]:p-2 [&_mark]:px-1 [&_mark]:rounded"
                 dangerouslySetInnerHTML={{ __html: docHtml }}
               />
             </div>

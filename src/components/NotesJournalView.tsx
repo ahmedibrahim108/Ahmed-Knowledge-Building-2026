@@ -61,9 +61,11 @@ import {
 import {
   HIGHLIGHT_SWATCHES,
   ensureRichHtml,
+  renderSafeBidiHtml,
   richHtmlToPlainText,
   sanitizeRichHtml,
 } from '../utils/richText';
+import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
 import type { ActivePdfTarget } from './PDFViewerModal';
@@ -1222,14 +1224,11 @@ export default function NotesJournalView({
               <div className="p-4 sm:p-6 bg-slate-50/70 border border-slate-200 rounded-xl min-h-[140px] overflow-x-auto">
                 {richHtmlToPlainText(standaloneNote.content) ? (
                 <div
-                  dir="auto"
-                  className="text-sm sm:text-base leading-relaxed text-slate-800 [&_[dir='ltr']]:text-left [&_[dir='rtl']]:text-right [&_ul]:list-disc [&_ul]:pr-6 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:pr-6 [&_ol]:my-2 [&_li]:my-1 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:border-r-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:pr-3 [&_blockquote]:my-2 [&_blockquote]:text-slate-700 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:text-right [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white"
-                    dangerouslySetInnerHTML={{
-                      __html: sanitizeRichHtml(
-                        ensureRichHtml(standaloneNote.content)
-                      ),
-                    }}
-                  />
+                  className="prose-bidi text-sm sm:text-base leading-relaxed text-slate-800 [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white"
+                  dangerouslySetInnerHTML={{
+                    __html: renderSafeBidiHtml(standaloneNote.content),
+                  }}
+                />
                 ) : (
                   <div className="text-center py-6 space-y-2">
                     <p className="text-xs text-slate-500">
@@ -1302,12 +1301,9 @@ export default function NotesJournalView({
                 />
               ) : (
                 <div
-                  dir="auto"
-                  className="p-4 bg-amber-50/40 border border-amber-200 rounded-xl text-sm text-slate-800 leading-relaxed [&_[dir='ltr']]:text-left [&_[dir='rtl']]:text-right [&_blockquote]:border-r-2 [&_blockquote]:border-[#1E3A5F] [&_blockquote]:pr-3 [&_mark]:px-1 [&_mark]:rounded-xs [&_strong]:font-bold"
+                  className="prose-bidi p-4 bg-amber-50/40 border border-amber-200 rounded-xl text-sm text-slate-800 leading-relaxed [&_mark]:px-1 [&_mark]:rounded-xs [&_strong]:font-bold"
                   dangerouslySetInnerHTML={{
-                    __html: sanitizeRichHtml(
-                      ensureRichHtml(standaloneNote.quotes)
-                    ),
+                    __html: renderSafeBidiHtml(standaloneNote.quotes),
                   }}
                 />
               )}
@@ -1918,10 +1914,12 @@ export default function NotesJournalView({
                               <span>{bn.updatedAt}</span>
                             </div>
                             <h3 className="text-sm font-bold text-slate-900">
-                              {bn.bookTitle}
+                              <BidiText text={bn.bookTitle} />
                             </h3>
                             <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                              {snippet || 'محاضرة جاهزة للكتابة والتلخيص...'}
+                              <BidiText
+                                text={snippet || 'محاضرة جاهزة للكتابة والتلخيص...'}
+                              />
                             </p>
                           </div>
 
@@ -2278,14 +2276,18 @@ export default function NotesJournalView({
                           </div>
 
                           <h4 className="text-base font-bold text-slate-900 leading-snug">
-                            {idx + 1}. {course.title}
+                            <BidiText text={`${idx + 1}. ${course.title}`} />
                           </h4>
 
                           <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                            {snippet ||
-                              (course.complementaryBook
-                                ? `المرجع المكمّل: ${course.complementaryBook}`
-                                : course.category || 'دفتر محاضرات الكورس')}
+                            <BidiText
+                              text={
+                                snippet ||
+                                (course.complementaryBook
+                                  ? `المرجع المكمّل: ${course.complementaryBook}`
+                                  : course.category || 'دفتر محاضرات الكورس')
+                              }
+                            />
                           </p>
                         </div>
 
@@ -2385,7 +2387,7 @@ export default function NotesJournalView({
                               onClick={() => openNoteStandalone(bn, false)}
                               className="text-base font-bold text-slate-900 leading-snug cursor-pointer hover:text-[#1E3A5F]"
                             >
-                              {bn.bookTitle}
+                              <BidiText text={bn.bookTitle} />
                             </h4>
 
                             {(bn.author || bn.progressMarker || bn.categoryLabel) && (
@@ -2410,7 +2412,9 @@ export default function NotesJournalView({
                             </div>
 
                             <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                              {snippet || 'دفتر جاهز للتدوين وتلخيص الفصول...'}
+                              <BidiText
+                                text={snippet || 'دفتر جاهز للتدوين وتلخيص الفصول...'}
+                              />
                             </p>
                           </div>
 
@@ -2502,10 +2506,12 @@ export default function NotesJournalView({
                               onClick={() => openNoteStandalone(bn, false)}
                               className="text-base font-bold text-slate-900 leading-snug cursor-pointer hover:text-[#1E3A5F]"
                             >
-                              {bn.bookTitle}
+                              <BidiText text={bn.bookTitle} />
                             </h4>
                             <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                              {snippet || 'دفتر موضوع عام جاهز للتلخيص...'}
+                              <BidiText
+                                text={snippet || 'دفتر موضوع عام جاهز للتلخيص...'}
+                              />
                             </p>
                           </div>
 
@@ -2770,7 +2776,7 @@ export default function NotesJournalView({
                           onClick={() => openNoteStandalone(bn, false)}
                           className="text-base font-bold text-slate-900 leading-snug cursor-pointer hover:text-[#1E3A5F]"
                         >
-                          {bn.bookTitle}
+                          <BidiText text={bn.bookTitle} />
                         </h3>
 
                         {(bn.courseTitle || bn.author || bn.categoryLabel) && (
@@ -2782,7 +2788,9 @@ export default function NotesJournalView({
                         )}
 
                         <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                          {snippet || 'ملاحظة جاهزة للفتح والتحرير...'}
+                          <BidiText
+                            text={snippet || 'ملاحظة جاهزة للفتح والتحرير...'}
+                          />
                         </p>
                       </div>
 

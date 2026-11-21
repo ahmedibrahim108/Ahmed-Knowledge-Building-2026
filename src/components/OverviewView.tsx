@@ -83,6 +83,7 @@ import {
   downloadResourceAttachment,
 } from '../utils/documentImportExport';
 import { moveImagesScope } from '../utils/imageStorage';
+import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import { ActiveTab } from './Header';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
@@ -1272,7 +1273,7 @@ export default function OverviewView({
                                     downloadUrl: pdf.downloadUrl,
                                     storagePath: pdf.storagePath,
                                     mimeType: pdf.mimeType,
-                                    fallbackText: pdf.fallbackText,
+                                    extractedPreview: pdf.fallbackText,
                                   })
                                 }
                                 className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded cursor-pointer"
@@ -2251,12 +2252,15 @@ export default function OverviewView({
                         <>
                           {refItem.title && (
                             <h3 className="text-sm font-bold text-slate-900">
-                              {refItem.title}
+                              <BidiText text={refItem.title} />
                             </h3>
                           )}
-                          <p className="text-xs sm:text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
-                            {refItem.content}
-                          </p>
+                          <BidiText
+                            text={refItem.content}
+                            as="div"
+                            multiline
+                            className="text-xs sm:text-sm text-slate-700 leading-relaxed"
+                          />
                           <ImageAttachmentGallery
                             uid={user?.uid}
                             scopeKey={`reflection:${refItem.id}`}
@@ -2392,9 +2396,12 @@ export default function OverviewView({
                       </button>
                     )}
                   </div>
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    {cat.description}
-                  </p>
+                  <BidiText
+                    text={cat.description}
+                    as="div"
+                    multiline
+                    className="text-xs text-slate-600 leading-relaxed"
+                  />
                   <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500">
                     <span className="tabular-nums">
                       {linkedNotesCount}{' '}

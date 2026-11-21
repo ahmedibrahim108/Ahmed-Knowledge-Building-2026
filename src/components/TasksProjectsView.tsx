@@ -31,6 +31,7 @@ import {
   getHubMeta,
   getTodayDateKey,
 } from '../data/curriculumData';
+import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 
 interface TasksProjectsViewProps {
@@ -759,7 +760,7 @@ export default function TasksProjectsView({
                                 : 'text-slate-900'
                             }`}
                           >
-                            {t.title}
+                            <BidiText text={t.title} />
                           </p>
                           {overdue && (
                             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold bg-rose-50 text-rose-800 border border-rose-200 rounded">
@@ -803,7 +804,12 @@ export default function TasksProjectsView({
                           {t.categoryLabel && <span>· {t.categoryLabel}</span>}
                         </div>
                         {t.description && (
-                          <p className="text-xs text-slate-600">{t.description}</p>
+                          <BidiText
+                            text={t.description}
+                            as="div"
+                            multiline
+                            className="text-xs text-slate-600"
+                          />
                         )}
                       </div>
                     </div>
@@ -1283,7 +1289,7 @@ export default function TasksProjectsView({
                           </span>
                         </div>
                         <h3 className="text-base font-bold text-slate-900">
-                          {proj.title}
+                          <BidiText text={proj.title} />
                         </h3>
                       </div>
                       {canEdit && (
@@ -1299,14 +1305,18 @@ export default function TasksProjectsView({
                     </div>
 
                     {proj.description && (
-                      <p className="text-xs text-slate-600 leading-relaxed">
-                        {proj.description}
-                      </p>
+                      <BidiText
+                        text={proj.description}
+                        as="div"
+                        multiline
+                        className="text-xs text-slate-600 leading-relaxed"
+                      />
                     )}
                     {proj.deliverables && (
-                      <p className="text-xs text-slate-700 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
-                        <strong>المخرجات:</strong> {proj.deliverables}
-                      </p>
+                      <div className="text-xs text-slate-700 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200 space-y-1">
+                        <strong>المخرجات:</strong>{' '}
+                        <BidiText text={proj.deliverables} as="div" multiline />
+                      </div>
                     )}
 
                     <div className="space-y-1.5">

@@ -27,6 +27,7 @@ import {
   isPdfAttachment,
   isViewableDocumentAttachment,
 } from '../utils/documentImportExport';
+import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import DentalCasesView from './DentalCasesView';
 
@@ -835,7 +836,7 @@ export default function CoursesView({
                       </div>
 
                       <h2 className="text-base font-bold text-slate-900 group-hover:text-[#1E3A5F] leading-snug">
-                        {course.title}
+                        <BidiText text={course.title} />
                       </h2>
 
                       {(course.instructor || course.platform) && (
@@ -848,7 +849,7 @@ export default function CoursesView({
 
                       {course.applicationMilestone && (
                         <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                          {course.applicationMilestone}
+                          <BidiText text={course.applicationMilestone} />
                         </p>
                       )}
 

@@ -35,6 +35,17 @@ export interface ParsedImportedDocument {
 
 export type DocumentAttachmentKind = 'pdf' | 'docx' | 'doc' | 'text' | 'other';
 
+export interface BundledAppDocument {
+  id: string;
+  title: string;
+  subtitle: string;
+  fileName: string;
+  downloadUrl: string;
+  mimeType: string;
+}
+
+export const BUNDLED_APP_DOCUMENTS: BundledAppDocument[] = [];
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')

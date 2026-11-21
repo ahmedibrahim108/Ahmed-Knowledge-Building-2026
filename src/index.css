@@ -24,8 +24,28 @@
     unicode-bidi: plaintext;
   }
 
-  p, span, div, li, label, button, h1, h2, h3, h4, h5, h6 {
+  p, div, li, label, button, h1, h2, h3, h4, h5, h6, blockquote {
     unicode-bidi: plaintext;
+  }
+
+  [dir="rtl"] {
+    direction: rtl;
+    text-align: start;
+  }
+
+  [dir="ltr"] {
+    direction: ltr;
+    text-align: start;
+  }
+
+  span[dir="ltr"] {
+    direction: ltr;
+    unicode-bidi: isolate;
+  }
+
+  span[dir="rtl"] {
+    direction: rtl;
+    unicode-bidi: isolate;
   }
 
   input, textarea, select {
@@ -60,6 +80,131 @@
   unicode-bidi: plaintext;
 }
 
+/* Bilingual rich-text prose & list layout (RTL Arabic + LTR English + Mixed) */
+@layer components {
+  .prose-bidi {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .prose-bidi h1,
+  .prose-bidi h2,
+  .prose-bidi h3,
+  .prose-bidi h4,
+  .prose-bidi p,
+  .prose-bidi blockquote,
+  .prose-bidi li,
+  .prose-bidi th,
+  .prose-bidi td {
+    unicode-bidi: plaintext;
+  }
+
+  .prose-bidi [dir="rtl"],
+  .prose-bidi h1:dir(rtl),
+  .prose-bidi h2:dir(rtl),
+  .prose-bidi h3:dir(rtl),
+  .prose-bidi h4:dir(rtl),
+  .prose-bidi p:dir(rtl),
+  .prose-bidi blockquote:dir(rtl),
+  .prose-bidi li:dir(rtl),
+  .prose-bidi th:dir(rtl),
+  .prose-bidi td:dir(rtl) {
+    direction: rtl;
+    text-align: right;
+  }
+
+  .prose-bidi [dir="ltr"],
+  .prose-bidi h1:dir(ltr),
+  .prose-bidi h2:dir(ltr),
+  .prose-bidi h3:dir(ltr),
+  .prose-bidi h4:dir(ltr),
+  .prose-bidi p:dir(ltr),
+  .prose-bidi blockquote:dir(ltr),
+  .prose-bidi li:dir(ltr),
+  .prose-bidi th:dir(ltr),
+  .prose-bidi td:dir(ltr) {
+    direction: ltr;
+    text-align: left;
+  }
+
+  .prose-bidi span[dir="ltr"] {
+    direction: ltr;
+    unicode-bidi: isolate;
+    text-align: initial;
+  }
+
+  .prose-bidi span[dir="rtl"] {
+    direction: rtl;
+    unicode-bidi: isolate;
+    text-align: initial;
+  }
+
+  .prose-bidi ul {
+    list-style-type: disc;
+    list-style-position: outside;
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .prose-bidi ol {
+    list-style-type: decimal;
+    list-style-position: outside;
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .prose-bidi ul[dir="rtl"],
+  .prose-bidi ol[dir="rtl"] {
+    direction: rtl;
+    text-align: right;
+    padding-inline-start: 1.5rem;
+    padding-inline-end: 0;
+  }
+
+  .prose-bidi ul[dir="ltr"],
+  .prose-bidi ol[dir="ltr"] {
+    direction: ltr;
+    text-align: left;
+    padding-inline-start: 1.5rem;
+    padding-inline-end: 0;
+  }
+
+  .prose-bidi ul:not([dir]),
+  .prose-bidi ol:not([dir]),
+  .prose-bidi ul[data-mixed="true"],
+  .prose-bidi ol[data-mixed="true"],
+  .prose-bidi ul[dir="rtl"]:has(> li[dir="ltr"]),
+  .prose-bidi ol[dir="rtl"]:has(> li[dir="ltr"]),
+  .prose-bidi ul[dir="ltr"]:has(> li[dir="rtl"]),
+  .prose-bidi ol[dir="ltr"]:has(> li[dir="rtl"]) {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+
+  .prose-bidi li {
+    margin-top: 0.25rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .prose-bidi blockquote {
+    border-inline-start: 2px solid #1E3A5F;
+    border-inline-end: 0;
+    padding-inline-start: 0.75rem;
+    padding-inline-end: 0;
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+    color: #334155;
+    font-style: italic;
+  }
+
+  .prose-bidi th {
+    text-align: start;
+  }
+
+  .prose-bidi td {
+    text-align: start;
+  }
+}
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;

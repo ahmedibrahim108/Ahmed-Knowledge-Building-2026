@@ -43,6 +43,7 @@ import {
   parseDocumentFile,
   uploadResourceAttachment,
 } from '../utils/documentImportExport';
+import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
 import type { ActivePdfTarget } from './PDFViewerModal';
@@ -1689,9 +1690,12 @@ export default function TwelveMonthPlanView({
 
                       {isPreviewOpen && res.extractedPreview && (
                         <div className="px-4 pb-3 pt-1">
-                          <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 whitespace-pre-wrap max-h-48 overflow-y-auto leading-relaxed">
-                            {res.extractedPreview}
-                          </div>
+                          <BidiText
+                            text={res.extractedPreview}
+                            as="div"
+                            multiline
+                            className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 max-h-48 overflow-y-auto leading-relaxed"
+                          />
                         </div>
                       )}
                     </div>

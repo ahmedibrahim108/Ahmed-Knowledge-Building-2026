@@ -13,6 +13,8 @@ import {
 import {
   LEARNING_HUBS,
   LearningHubId,
+  MonthPlan,
+  PersonalCourse,
   READING_MODES_META,
   ReadingItemStatus,
   ReadingItemType,
@@ -22,12 +24,14 @@ import {
   getTodayDateKey,
 } from '../data/curriculumData';
 import { auth } from '../firebase';
+import { CloudAttachmentItem } from '../services/firestoreSync';
 import {
   downloadResourceAttachmentResult,
   isPdfAttachment,
   isViewableDocumentAttachment,
   uploadResourceAttachment,
 } from '../utils/documentImportExport';
+import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import type { ActivePdfTarget } from './PDFViewerModal';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
@@ -37,6 +41,9 @@ interface LibraryViewProps {
   canEdit: boolean;
   onRequireAuth: () => void;
   items: ReadingLibraryItem[];
+  cloudAttachments?: CloudAttachmentItem[];
+  courses?: PersonalCourse[];
+  months?: MonthPlan[];
   hubCategories: Record<LearningHubId, string[]>;
   activeHubFilter: LearningHubId | 'all';
   onChangeHubFilter: (hub: LearningHubId | 'all') => void;
@@ -759,12 +766,14 @@ export default function LibraryView({
                     className="text-right block w-full cursor-pointer group"
                   >
                     <h2 className="text-base font-bold text-slate-900 group-hover:text-[#1E3A5F]">
-                      {item.title}
+                      <BidiText text={item.title} />
                     </h2>
                   </button>
 
                   {item.author && (
-                    <p className="text-xs text-slate-500">{item.author}</p>
+                    <p className="text-xs text-slate-500">
+                      <BidiText text={item.author} />
+                    </p>
                   )}
 
                   {(item.readingModes?.length ?? 0) > 0 && (

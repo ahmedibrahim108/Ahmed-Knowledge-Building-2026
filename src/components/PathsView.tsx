@@ -25,6 +25,7 @@ import {
   getHubMeta,
   getTodayDateKey,
 } from '../data/curriculumData';
+import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
 
@@ -380,17 +381,20 @@ export default function PathsView({
                 </span>
               </div>
               <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900">
-                {selectedPath.title}
+                <BidiText text={selectedPath.title} />
               </h1>
               {selectedPath.description && (
-                <p className="text-sm text-slate-600 leading-relaxed">
-                  {selectedPath.description}
-                </p>
+                <BidiText
+                  text={selectedPath.description}
+                  as="div"
+                  multiline
+                  className="text-sm text-slate-600 leading-relaxed"
+                />
               )}
               {selectedPath.objectives && (
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700">
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 space-y-1">
                   <strong className="text-slate-900">أهداف التعلم:</strong>{' '}
-                  {selectedPath.objectives}
+                  <BidiText text={selectedPath.objectives} as="div" multiline />
                 </div>
               )}
             </div>
@@ -1166,7 +1170,7 @@ export default function PathsView({
                     className="text-right block w-full cursor-pointer group"
                   >
                     <h2 className="text-base font-bold text-slate-900 group-hover:text-[#1E3A5F] transition-colors">
-                      {path.title}
+                      <BidiText text={path.title} />
                     </h2>
                   </button>
 
@@ -1176,7 +1180,7 @@ export default function PathsView({
 
                   {path.description && (
                     <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                      {path.description}
+                      <BidiText text={path.description} />
                     </p>
                   )}
                 </div>
