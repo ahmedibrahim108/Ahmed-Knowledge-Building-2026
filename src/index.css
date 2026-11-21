@@ -95,11 +95,13 @@
   .prose-bidi blockquote,
   .prose-bidi li,
   .prose-bidi th,
-  .prose-bidi td {
+  .prose-bidi td,
+  .prose-bidi div {
     unicode-bidi: plaintext;
   }
 
   .prose-bidi [dir="rtl"],
+  .prose-bidi [dir="auto"]:dir(rtl),
   .prose-bidi h1:dir(rtl),
   .prose-bidi h2:dir(rtl),
   .prose-bidi h3:dir(rtl),
@@ -114,6 +116,7 @@
   }
 
   .prose-bidi [dir="ltr"],
+  .prose-bidi [dir="auto"]:dir(ltr),
   .prose-bidi h1:dir(ltr),
   .prose-bidi h2:dir(ltr),
   .prose-bidi h3:dir(ltr),
@@ -153,6 +156,22 @@
     margin-bottom: 0.5rem;
   }
 
+  .prose-bidi ul ul {
+    list-style-type: circle;
+    margin-top: 0.25rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .prose-bidi ul ul ul {
+    list-style-type: square;
+  }
+
+  .prose-bidi ol ol {
+    list-style-type: lower-alpha;
+    margin-top: 0.25rem;
+    margin-bottom: 0.25rem;
+  }
+
   .prose-bidi ul[dir="rtl"],
   .prose-bidi ol[dir="rtl"] {
     direction: rtl;
@@ -173,10 +192,12 @@
   .prose-bidi ol:not([dir]),
   .prose-bidi ul[data-mixed="true"],
   .prose-bidi ol[data-mixed="true"],
-  .prose-bidi ul[dir="rtl"]:has(> li[dir="ltr"]),
-  .prose-bidi ol[dir="rtl"]:has(> li[dir="ltr"]),
-  .prose-bidi ul[dir="ltr"]:has(> li[dir="rtl"]),
-  .prose-bidi ol[dir="ltr"]:has(> li[dir="rtl"]) {
+  .prose-bidi ul:has(> li:dir(ltr)):has(> li:dir(rtl)),
+  .prose-bidi ol:has(> li:dir(ltr)):has(> li:dir(rtl)),
+  .prose-bidi ul[dir="rtl"]:has(> li:dir(ltr)),
+  .prose-bidi ol[dir="rtl"]:has(> li:dir(ltr)),
+  .prose-bidi ul[dir="ltr"]:has(> li:dir(rtl)),
+  .prose-bidi ol[dir="ltr"]:has(> li:dir(rtl)) {
     padding-left: 1.5rem;
     padding-right: 1.5rem;
   }
@@ -203,6 +224,40 @@
 
   .prose-bidi td {
     text-align: start;
+  }
+
+  /* Explicit user block alignment overrides */
+  .prose-bidi [data-align="right"] {
+    text-align: right !important;
+  }
+
+  .prose-bidi [data-align="center"] {
+    text-align: center !important;
+  }
+
+  .prose-bidi [data-align="left"] {
+    text-align: left !important;
+  }
+
+  /* Block indentation steps (direction-aware via logical inline-start) */
+  .prose-bidi [data-indent="1"] {
+    margin-inline-start: 1.5rem;
+  }
+
+  .prose-bidi [data-indent="2"] {
+    margin-inline-start: 3rem;
+  }
+
+  .prose-bidi [data-indent="3"] {
+    margin-inline-start: 4.5rem;
+  }
+
+  .prose-bidi [data-indent="4"] {
+    margin-inline-start: 6rem;
+  }
+
+  .prose-bidi [data-indent="5"] {
+    margin-inline-start: 7.5rem;
   }
 }
 

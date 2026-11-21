@@ -810,6 +810,9 @@ export function expandWeeklyMeetingsInRange(
 }
 
 export type HighlightColorKey = 'amber' | 'emerald' | 'sky' | 'rose';
+export type NoteMarginMode = 'compact' | 'normal' | 'wide' | 'spacious';
+export type NoteWidthMode = 'focused' | 'balanced' | 'full';
+export type NoteBorderMode = 'none' | 'subtle' | 'medium' | 'framed';
 export type VoiceDialectMode = 'standard_arabic' | 'egyptian_arabic' | 'bilingual';
 export type VoiceInsertMode = 'append_paragraph' | 'append_bullet' | 'append_quote';
 export type ReadAloudVoiceName = 'Kore' | 'Puck' | 'Charon' | 'Fenrir' | 'Zephyr';
@@ -818,6 +821,9 @@ export interface UserPreferences {
   noteFontSize: 'sm' | 'base' | 'lg';
   noteHighlightColor: HighlightColorKey;
   notePaperTone: 'clean' | 'warm' | 'slate';
+  noteMargin?: NoteMarginMode;
+  noteWidth?: NoteWidthMode;
+  noteBorder?: NoteBorderMode;
   autoAddTimestampOnVoice: boolean;
   voiceDialect: VoiceDialectMode;
   voiceInsertMode: VoiceInsertMode;
@@ -838,6 +844,9 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   noteFontSize: 'base',
   noteHighlightColor: 'amber',
   notePaperTone: 'clean',
+  noteMargin: 'normal',
+  noteWidth: 'full',
+  noteBorder: 'subtle',
   autoAddTimestampOnVoice: false,
   voiceDialect: 'standard_arabic',
   voiceInsertMode: 'append_paragraph',

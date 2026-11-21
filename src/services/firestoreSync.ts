@@ -531,6 +531,22 @@ function buildUserPreferencesPayload(uid: string, prefs: UserPreferences) {
       ? prefs.readAloudVoice
       : 'Kore';
   const readAloudSpeed = prefs.readAloudSpeed === 'calm' ? 'calm' : 'normal';
+  const noteMargin =
+    prefs.noteMargin === 'compact' ||
+    prefs.noteMargin === 'wide' ||
+    prefs.noteMargin === 'spacious'
+      ? prefs.noteMargin
+      : 'normal';
+  const noteWidth =
+    prefs.noteWidth === 'focused' || prefs.noteWidth === 'balanced'
+      ? prefs.noteWidth
+      : 'full';
+  const noteBorder =
+    prefs.noteBorder === 'none' ||
+    prefs.noteBorder === 'medium' ||
+    prefs.noteBorder === 'framed'
+      ? prefs.noteBorder
+      : 'subtle';
 
   return {
     id: 'settings',
@@ -538,6 +554,9 @@ function buildUserPreferencesPayload(uid: string, prefs: UserPreferences) {
     noteFontSize: fontSize,
     noteHighlightColor: highlightColor,
     notePaperTone: paperTone,
+    noteMargin,
+    noteWidth,
+    noteBorder,
     autoAddTimestampOnVoice: Boolean(prefs.autoAddTimestampOnVoice),
     voiceDialect: dialect,
     voiceInsertMode: insertMode,

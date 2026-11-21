@@ -1,10 +1,67 @@
-import { HighlightColorKey } from '../data/curriculumData';
+import {
+  HighlightColorKey,
+  NoteBorderMode,
+  NoteMarginMode,
+  NoteWidthMode,
+  UserPreferences,
+} from '../data/curriculumData';
 import {
   TextDir,
   applyBidiToHtml,
   detectTextDirection,
   parsePlainTextToBidiBlocks,
 } from './bidi';
+
+export function getNoteLayoutClasses(
+  prefs?: Partial<
+    Pick<
+      UserPreferences,
+      'noteMargin' | 'noteWidth' | 'noteBorder' | 'notePaperTone'
+    >
+  >
+) {
+  const margin: NoteMarginMode = prefs?.noteMargin ?? 'normal';
+  const width: NoteWidthMode = prefs?.noteWidth ?? 'full';
+  const border: NoteBorderMode = prefs?.noteBorder ?? 'subtle';
+  const paperTone = prefs?.notePaperTone ?? 'clean';
+
+  const canvasPaddingClass: Record<NoteMarginMode, string> = {
+    compact: 'p-2.5 sm:p-3',
+    normal: 'p-3.5 sm:p-5',
+    wide: 'p-5 sm:p-7',
+    spacious: 'p-6 sm:p-10',
+  };
+
+  const widthClass: Record<NoteWidthMode, string> = {
+    focused: 'max-w-2xl mx-auto w-full',
+    balanced: 'max-w-4xl mx-auto w-full',
+    full: 'w-full',
+  };
+
+  const borderClass: Record<NoteBorderMode, string> = {
+    none: 'border border-transparent shadow-none',
+    subtle: 'border border-slate-200',
+    medium: 'border-2 border-slate-300 shadow-xs',
+    framed: 'border-2 border-[#1E3A5F]/45 shadow-sm ring-2 ring-[#1E3A5F]/10',
+  };
+
+  const paperToneClass: Record<UserPreferences['notePaperTone'], string> = {
+    clean: 'bg-white',
+    warm: 'bg-[#FFFDF7]',
+    slate: 'bg-slate-50/90',
+  };
+
+  return {
+    margin,
+    width,
+    border,
+    paperTone,
+    canvasPaddingClass: canvasPaddingClass[margin],
+    widthClass: widthClass[width],
+    borderClass: borderClass[border],
+    paperToneClass: paperToneClass[paperTone],
+  };
+}
 
 export const HIGHLIGHT_SWATCHES: Record<
   HighlightColorKey,
@@ -163,6 +220,21 @@ function hasDirectBlockChild(el: HTMLElement): boolean {
   });
 }
 
+function getOwnElementText(el: HTMLElement): string {
+  if (el.tagName.toUpperCase() !== 'LI') {
+    return (el.textContent || '').trim();
+  }
+  const parts: string[] = [];
+  Array.from(el.childNodes).forEach((child) => {
+    if (child.nodeType === Node.ELEMENT_NODE) {
+      const tag = (child as HTMLElement).tagName.toUpperCase();
+      if (tag === 'UL' || tag === 'OL') return;
+    }
+    parts.push(child.textContent || '');
+  });
+  return parts.join('').trim();
+}
+
 function resolveSanitizedBlockDir(
   el: HTMLElement,
   ignoreExternalDir: boolean
@@ -173,13 +245,48 @@ function resolveSanitizedBlockDir(
     return rawDir;
   }
 
-  const text = (el.textContent || '').trim();
+  const text = getOwnElementText(el);
   if (STRONG_CHAR_RE.test(text)) {
     return detectTextDirection(text, 'rtl');
   }
 
   if (!ignoreExternalDir && (rawDir === 'ltr' || rawDir === 'rtl')) {
     return rawDir;
+  }
+  return '';
+}
+
+function resolveSanitizedAlignAttr(
+  el: HTMLElement,
+  ignoreExternalDir: boolean
+): string {
+  const rawData = (el.getAttribute('data-align') || '').toLowerCase();
+  if (
+    !ignoreExternalDir &&
+    (rawData === 'right' || rawData === 'center' || rawData === 'left')
+  ) {
+    return ` data-align="${rawData}"`;
+  }
+  const rawStyleAlign = (el.style?.textAlign || '').toLowerCase();
+  const rawLegacyAlign = (el.getAttribute('align') || '').toLowerCase();
+  const candidate = rawStyleAlign || rawLegacyAlign;
+  if (ignoreExternalDir) {
+    return candidate === 'center' ? ' data-align="center"' : '';
+  }
+  if (candidate === 'right' || candidate === 'center' || candidate === 'left') {
+    return ` data-align="${candidate}"`;
+  }
+  return '';
+}
+
+function resolveSanitizedIndentAttr(
+  el: HTMLElement,
+  ignoreExternalDir: boolean
+): string {
+  if (ignoreExternalDir) return '';
+  const indentNum = parseInt(el.getAttribute('data-indent') || '', 10);
+  if (!Number.isNaN(indentNum) && indentNum >= 1 && indentNum <= 5) {
+    return ` data-indent="${indentNum}"`;
   }
   return '';
 }
@@ -262,6 +369,10 @@ function runSanitizeHtml(
       if (!ignoreExternalDir && el.getAttribute('data-manual-dir') === 'true') {
         attrs.push('data-manual-dir="true"');
       }
+      const cellAlign = resolveSanitizedAlignAttr(el, ignoreExternalDir).trim();
+      if (cellAlign) {
+        attrs.push(cellAlign);
+      }
       const attrStr = attrs.length > 0 ? ` ${attrs.join(' ')}` : '';
       const lowerCell = tag.toLowerCase();
       return `<${lowerCell}${attrStr}>${childrenHtml || '<br>'}</${lowerCell}>`;
@@ -276,7 +387,8 @@ function runSanitizeHtml(
         return childrenHtml;
       }
       const pDir = resolveSanitizedBlockDir(el, ignoreExternalDir);
-      return `<p${pDir ? ` dir="${pDir}"` : ''}>${childrenHtml}</p>`;
+      const pAlign = resolveSanitizedAlignAttr(el, ignoreExternalDir);
+      return `<p${pDir ? ` dir="${pDir}"` : ''}${pAlign}>${childrenHtml}</p>`;
     }
 
     if (tag === 'UL' || tag === 'OL') {
@@ -311,8 +423,9 @@ function runSanitizeHtml(
         tag === 'OL' ? parseInt(el.getAttribute('start') || '', 10) : NaN;
       const startAttr =
         !Number.isNaN(startVal) && startVal > 1 ? ` start="${startVal}"` : '';
+      const listIndentAttr = resolveSanitizedIndentAttr(el, ignoreExternalDir);
 
-      return `<${lower}${listDirAttr}${mixedAttr}${startAttr}>${childrenHtml}</${lower}>`;
+      return `<${lower}${listDirAttr}${mixedAttr}${startAttr}${listIndentAttr}>${childrenHtml}</${lower}>`;
     }
 
     if (BLOCK_DIR_TAGS.has(tag)) {
@@ -325,7 +438,9 @@ function runSanitizeHtml(
         !ignoreExternalDir && el.getAttribute('data-manual-dir') === 'true'
           ? ' data-manual-dir="true"'
           : '';
-      return `<${lower}${dirAttr}${manualAttr}>${childrenHtml}</${lower}>`;
+      const alignAttr = resolveSanitizedAlignAttr(el, ignoreExternalDir);
+      const indentAttr = resolveSanitizedIndentAttr(el, ignoreExternalDir);
+      return `<${lower}${dirAttr}${manualAttr}${alignAttr}${indentAttr}>${childrenHtml}</${lower}>`;
     }
 
     return `<${lower}>${childrenHtml}</${lower}>`;

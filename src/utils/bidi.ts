@@ -746,13 +746,28 @@ export function applyBidiToHtml(
   const root = doc.body.firstElementChild as HTMLElement | null;
   if (!root) return html;
 
+  const getOwnElementText = (el: HTMLElement): string => {
+    if (el.tagName.toUpperCase() !== 'LI') {
+      return (el.textContent || '').trim();
+    }
+    const parts: string[] = [];
+    Array.from(el.childNodes).forEach((child) => {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        const tag = (child as HTMLElement).tagName.toUpperCase();
+        if (tag === 'UL' || tag === 'OL') return;
+      }
+      parts.push(child.textContent || '');
+    });
+    return parts.join('').trim();
+  };
+
   const resolveElDir = (el: HTMLElement, fallback: TextDir = 'rtl'): TextDir => {
     const isManual = el.getAttribute('data-manual-dir') === 'true';
     const existing = (el.getAttribute('dir') || '').toLowerCase();
     if (isManual && (existing === 'rtl' || existing === 'ltr')) {
       return existing;
     }
-    const text = (el.textContent || '').trim();
+    const text = getOwnElementText(el);
     if (!text) {
       return existing === 'rtl' || existing === 'ltr' ? existing : fallback;
     }
@@ -831,6 +846,8 @@ export function applyBidiToHtml(
     } else if (tag === 'UL' && splitMixedLists && list.parentNode) {
       // Split mixed UL into consecutive same-direction ULs
       const frag = doc.createDocumentFragment();
+      const parentIndent = list.getAttribute('data-indent');
+      const parentAlign = list.getAttribute('data-align');
       let currentDir: TextDir | null = null;
       let currentUl: HTMLElement | null = null;
       listItems.forEach((li, idx) => {
@@ -839,6 +856,8 @@ export function applyBidiToHtml(
         if (!currentUl || currentDir !== d) {
           currentUl = doc.createElement('ul');
           currentUl.setAttribute('dir', d);
+          if (parentIndent) currentUl.setAttribute('data-indent', parentIndent);
+          if (parentAlign) currentUl.setAttribute('data-align', parentAlign);
           frag.appendChild(currentUl);
           currentDir = d;
         }

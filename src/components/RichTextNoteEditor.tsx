@@ -1,31 +1,48 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
   Bold,
   Columns3,
   Eraser,
   Heading3,
   Highlighter,
+  IndentDecrease,
+  IndentIncrease,
   Italic,
   Languages,
   List,
   ListOrdered,
   Lock,
+  Maximize2,
+  Minimize2,
   Plus,
   Quote,
   Redo2,
   Rows3,
+  SlidersHorizontal,
   Table2,
   Trash2,
   Undo2,
 } from 'lucide-react';
-import { HighlightColorKey, UserPreferences } from '../data/curriculumData';
+import {
+  HighlightColorKey,
+  NoteBorderMode,
+  NoteMarginMode,
+  NoteWidthMode,
+  UserPreferences,
+} from '../data/curriculumData';
 import { TextDir, detectTextDirection } from '../utils/bidi';
 import {
   HIGHLIGHT_SWATCHES,
   ensureRichHtml,
+  getNoteLayoutClasses,
   sanitizePastedHtml,
   sanitizeRichHtml,
 } from '../utils/richText';
+
+export type BlockAlign = 'right' | 'center' | 'left';
 
 interface RichTextNoteEditorProps {
   noteKey: string;
@@ -35,6 +52,7 @@ interface RichTextNoteEditorProps {
   canEdit: boolean;
   onRequireAuth?: () => void;
   preferences: UserPreferences;
+  onUpdatePreferences?: (updates: Partial<UserPreferences>) => void;
   onSelectDefaultHighlight?: (color: HighlightColorKey) => void;
   minHeightClass?: string;
 }
@@ -45,11 +63,25 @@ const FONT_SIZE_CLASS: Record<UserPreferences['noteFontSize'], string> = {
   lg: 'text-base leading-loose',
 };
 
-const PAPER_TONE_CLASS: Record<UserPreferences['notePaperTone'], string> = {
-  clean: 'bg-white',
-  warm: 'bg-[#FFFDF7]',
-  slate: 'bg-slate-50/90',
-};
+const MARGIN_OPTIONS: Array<{ id: NoteMarginMode; label: string }> = [
+  { id: 'compact', label: 'ضيق' },
+  { id: 'normal', label: 'عادي' },
+  { id: 'wide', label: 'واسع' },
+  { id: 'spacious', label: 'مفتوح' },
+];
+
+const WIDTH_OPTIONS: Array<{ id: NoteWidthMode; label: string }> = [
+  { id: 'focused', label: 'محدود' },
+  { id: 'balanced', label: 'متوازن' },
+  { id: 'full', label: 'مفتوح كامل' },
+];
+
+const BORDER_OPTIONS: Array<{ id: NoteBorderMode; label: string }> = [
+  { id: 'none', label: 'بدون إطار' },
+  { id: 'subtle', label: 'خفيف' },
+  { id: 'medium', label: 'متوسط' },
+  { id: 'framed', label: 'بارز' },
+];
 
 const QUICK_TABLE_PRESETS: Array<{ rows: number; cols: number; label: string }> = [
   { rows: 2, cols: 2, label: '2 × 2' },
@@ -57,6 +89,37 @@ const QUICK_TABLE_PRESETS: Array<{ rows: number; cols: number; label: string }> 
   { rows: 4, cols: 3, label: '4 × 3' },
   { rows: 4, cols: 4, label: '4 × 4' },
 ];
+
+const STRONG_CHAR_RE =
+  /[A-Za-z\u00C0-\u024F\u0370-\u052F\u0590-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u1E00-\u1EFF]/;
+
+const EDITABLE_BLOCK_TAGS = new Set([
+  'P',
+  'DIV',
+  'H1',
+  'H2',
+  'H3',
+  'H4',
+  'LI',
+  'BLOCKQUOTE',
+  'TH',
+  'TD',
+]);
+
+function getOwnBlockText(block: HTMLElement): string {
+  if (block.tagName.toUpperCase() !== 'LI') {
+    return (block.textContent || '').trim();
+  }
+  const parts: string[] = [];
+  Array.from(block.childNodes).forEach((child) => {
+    if (child.nodeType === Node.ELEMENT_NODE) {
+      const tag = (child as HTMLElement).tagName.toUpperCase();
+      if (tag === 'UL' || tag === 'OL') return;
+    }
+    parts.push(child.textContent || '');
+  });
+  return parts.join('').trim();
+}
 
 export default function RichTextNoteEditor({
   noteKey,
@@ -66,9 +129,11 @@ export default function RichTextNoteEditor({
   canEdit,
   onRequireAuth,
   preferences,
+  onUpdatePreferences,
   onSelectDefaultHighlight,
   minHeightClass = 'min-h-[220px]',
 }: RichTextNoteEditorProps) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   // Tracks the exact string emitted by this editor so we NEVER overwrite innerHTML while user types/deletes
   const lastEmittedRef = useRef<string>('');
@@ -80,10 +145,22 @@ export default function RichTextNoteEditor({
   );
   const [showHighlightMenu, setShowHighlightMenu] = useState(false);
   const [showTableMenu, setShowTableMenu] = useState(false);
+  const [showLayoutMenu, setShowLayoutMenu] = useState(false);
   const [tableRows, setTableRows] = useState(3);
   const [tableCols, setTableCols] = useState(3);
   const [insideTable, setInsideTable] = useState(false);
   const [editorDir, setEditorDir] = useState<'auto' | 'rtl' | 'ltr'>('auto');
+  const [activeAlign, setActiveAlign] = useState<BlockAlign | null>(null);
+  const [activeIndent, setActiveIndent] = useState(0);
+  const [localMargin, setLocalMargin] = useState<NoteMarginMode>(
+    preferences.noteMargin ?? 'normal'
+  );
+  const [localWidth, setLocalWidth] = useState<NoteWidthMode>(
+    preferences.noteWidth ?? 'full'
+  );
+  const [localBorder, setLocalBorder] = useState<NoteBorderMode>(
+    preferences.noteBorder ?? 'subtle'
+  );
   const [activeFormats, setActiveFormats] = useState({
     bold: false,
     italic: false,
@@ -95,12 +172,48 @@ export default function RichTextNoteEditor({
     setActiveHighlight(preferences.noteHighlightColor);
   }, [preferences.noteHighlightColor]);
 
-  const STRONG_CHAR_RE =
-    /[A-Za-z\u00C0-\u024F\u0370-\u052F\u0590-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u1E00-\u1EFF]/;
+  useEffect(() => {
+    setLocalMargin(preferences.noteMargin ?? 'normal');
+  }, [preferences.noteMargin]);
+
+  useEffect(() => {
+    setLocalWidth(preferences.noteWidth ?? 'full');
+  }, [preferences.noteWidth]);
+
+  useEffect(() => {
+    setLocalBorder(preferences.noteBorder ?? 'subtle');
+  }, [preferences.noteBorder]);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (
+        wrapperRef.current &&
+        !wrapperRef.current.contains(e.target as Node)
+      ) {
+        setShowHighlightMenu(false);
+        setShowTableMenu(false);
+        setShowLayoutMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
+
+  const updateLayoutPrefs = (updates: {
+    noteMargin?: NoteMarginMode;
+    noteWidth?: NoteWidthMode;
+    noteBorder?: NoteBorderMode;
+  }) => {
+    if (updates.noteMargin) setLocalMargin(updates.noteMargin);
+    if (updates.noteWidth) setLocalWidth(updates.noteWidth);
+    if (updates.noteBorder) setLocalBorder(updates.noteBorder);
+    onUpdatePreferences?.(updates);
+  };
 
   const syncBlocksBidi = (el: HTMLElement, mode: 'auto' | 'rtl' | 'ltr') => {
     const blockSelector = 'p,div,h1,h2,h3,h4,blockquote,li,th,td';
     const blocks = Array.from(el.querySelectorAll(blockSelector)) as HTMLElement[];
+    const resolvedDirMap = new Map<HTMLElement, TextDir>();
 
     for (const block of blocks) {
       const tag = block.tagName.toUpperCase();
@@ -115,30 +228,52 @@ export default function RichTextNoteEditor({
       }
 
       if (mode === 'auto' && block.getAttribute('data-manual-dir') === 'true') {
+        const manualDir =
+          (block.getAttribute('dir') || '').toLowerCase() === 'ltr'
+            ? 'ltr'
+            : 'rtl';
+        resolvedDirMap.set(block, manualDir);
         continue;
       }
 
-      const text = (block.textContent || '').trim();
-      let nextDir: TextDir;
+      const text = getOwnBlockText(block);
       if (mode === 'ltr' || mode === 'rtl') {
-        nextDir = mode;
-      } else if (STRONG_CHAR_RE.test(text)) {
-        nextDir = detectTextDirection(text, 'rtl');
-      } else if (tag === 'LI') {
-        // Inherit previous list item direction while typing a brand new empty bullet
-        const prevLi = block.previousElementSibling as HTMLElement | null;
-        const prevDir = (prevLi?.getAttribute('dir') || '').toLowerCase();
-        nextDir = prevDir === 'ltr' || prevDir === 'rtl' ? prevDir : 'rtl';
-      } else {
-        const currentDir = (block.getAttribute('dir') || '').toLowerCase();
-        nextDir = currentDir === 'ltr' || currentDir === 'rtl' ? currentDir : 'rtl';
+        resolvedDirMap.set(block, mode);
+        if (block.getAttribute('dir') !== mode) {
+          block.setAttribute('dir', mode);
+        }
+        continue;
       }
 
-      if (block.getAttribute('dir') !== nextDir) {
-        block.setAttribute('dir', nextDir);
+      // Dynamic 'auto' mode
+      if (STRONG_CHAR_RE.test(text)) {
+        const detected = detectTextDirection(text, 'rtl');
+        resolvedDirMap.set(block, detected);
+        // Set dir="auto" so the browser natively & instantaneously adapts direction & bullet placement as text changes
+        if (block.getAttribute('dir') !== 'auto') {
+          block.setAttribute('dir', 'auto');
+        }
+      } else {
+        // Empty line/bullet (or digits/punctuation only): inherit previous sibling block direction so caret/bullet doesn't jump to left
+        const prevSib = block.previousElementSibling as HTMLElement | null;
+        const prevResolved = prevSib ? resolvedDirMap.get(prevSib) : undefined;
+        const prevAttr = (prevSib?.getAttribute('dir') || '').toLowerCase();
+        const currAttr = (block.getAttribute('dir') || '').toLowerCase();
+        const inherited: TextDir =
+          prevResolved ??
+          (prevAttr === 'ltr' || prevAttr === 'rtl'
+            ? prevAttr
+            : currAttr === 'ltr' || currAttr === 'rtl'
+            ? currAttr
+            : 'rtl');
+        resolvedDirMap.set(block, inherited);
+        if (block.getAttribute('dir') !== inherited) {
+          block.setAttribute('dir', inherited);
+        }
       }
     }
 
+    // Keep every UL/OL synchronized so bullets sit on the RIGHT for Arabic and on the LEFT for English
     const lists = Array.from(el.querySelectorAll('ul,ol')) as HTMLElement[];
     for (const list of lists) {
       const liChildren = Array.from(list.children).filter(
@@ -146,9 +281,16 @@ export default function RichTextNoteEditor({
       ) as HTMLElement[];
       if (liChildren.length === 0) continue;
 
-      const dirs = liChildren.map((li) =>
-        (li.getAttribute('dir') || '').toLowerCase() === 'ltr' ? 'ltr' : 'rtl'
-      );
+      const dirs = liChildren.map((li) => {
+        const mapped = resolvedDirMap.get(li);
+        if (mapped) return mapped;
+        const txt = getOwnBlockText(li);
+        if (STRONG_CHAR_RE.test(txt)) return detectTextDirection(txt, 'rtl');
+        return (li.getAttribute('dir') || '').toLowerCase() === 'ltr'
+          ? 'ltr'
+          : 'rtl';
+      });
+
       const allLtr = dirs.every((d) => d === 'ltr');
       const allRtl = dirs.every((d) => d === 'rtl');
 
@@ -242,6 +384,80 @@ export default function RichTextNoteEditor({
     return null;
   };
 
+  const findClosestEditableBlock = (startNode: Node | null): HTMLElement | null => {
+    const el = editorRef.current;
+    if (!el || !startNode) return null;
+    let node: Node | null = startNode;
+    while (node && node !== el) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const htmlEl = node as HTMLElement;
+        const tag = htmlEl.tagName.toUpperCase();
+        if (EDITABLE_BLOCK_TAGS.has(tag)) {
+          if (
+            tag === 'DIV' &&
+            Array.from(htmlEl.children).some((c) =>
+              /^(P|DIV|H1|H2|H3|H4|UL|OL|BLOCKQUOTE|TABLE)$/i.test(c.tagName)
+            )
+          ) {
+            node = node.parentNode;
+            continue;
+          }
+          return htmlEl;
+        }
+      }
+      node = node.parentNode;
+    }
+    return null;
+  };
+
+  const getSelectedBlocks = (): HTMLElement[] => {
+    const el = editorRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.rangeCount === 0) return [];
+    const range = sel.getRangeAt(0);
+    if (!el.contains(range.commonAncestorContainer)) return [];
+
+    const allBlocks = Array.from(
+      el.querySelectorAll('p,h1,h2,h3,h4,blockquote,li,th,td,div')
+    ).filter((node) => {
+      const htmlEl = node as HTMLElement;
+      if (
+        htmlEl.tagName.toUpperCase() === 'DIV' &&
+        Array.from(htmlEl.children).some((c) =>
+          /^(P|DIV|H1|H2|H3|H4|UL|OL|BLOCKQUOTE|TABLE)$/i.test(c.tagName)
+        )
+      ) {
+        return false;
+      }
+      return true;
+    }) as HTMLElement[];
+
+    const matched: HTMLElement[] = [];
+    for (const block of allBlocks) {
+      // Skip outer LI if an inner nested LI is also matched? Actually range intersectsBlock check works cleanly
+      try {
+        if (range.intersectsNode(block)) {
+          // Avoid picking parent LI when selection is strictly inside a nested UL's child LI
+          if (
+            block.tagName.toUpperCase() === 'LI' &&
+            Array.from(block.querySelectorAll('li')).some((childLi) =>
+              range.intersectsNode(childLi)
+            )
+          ) {
+            continue;
+          }
+          matched.push(block);
+        }
+      } catch {
+        // ignore invalid range intersections
+      }
+    }
+
+    if (matched.length > 0) return matched;
+    const single = findClosestEditableBlock(sel.anchorNode);
+    return single ? [single] : [];
+  };
+
   const syncFormatState = () => {
     try {
       setActiveFormats({
@@ -251,6 +467,22 @@ export default function RichTextNoteEditor({
         ol: document.queryCommandState('insertOrderedList'),
       });
       setInsideTable(Boolean(getActiveTableCell()));
+
+      const sel = window.getSelection();
+      const activeBlock = findClosestEditableBlock(sel?.anchorNode ?? null);
+      if (activeBlock) {
+        const alignAttr = (activeBlock.getAttribute('data-align') || '').toLowerCase();
+        setActiveAlign(
+          alignAttr === 'right' || alignAttr === 'center' || alignAttr === 'left'
+            ? alignAttr
+            : null
+        );
+        const indentVal = parseInt(activeBlock.getAttribute('data-indent') || '0', 10);
+        setActiveIndent(!Number.isNaN(indentVal) ? Math.max(0, Math.min(5, indentVal)) : 0);
+      } else {
+        setActiveAlign(null);
+        setActiveIndent(0);
+      }
     } catch {
       // ignore if unsupported in current selection
     }
@@ -310,13 +542,124 @@ export default function RichTextNoteEditor({
     }
   };
 
+  const ensureParagraphSeparator = () => {
+    try {
+      document.execCommand('defaultParagraphSeparator', false, 'p');
+    } catch {
+      // ignore unsupported browsers
+    }
+  };
+
   const runExec = (command: string, commandVal?: string) => {
     if (!guardEdit()) return;
     const el = editorRef.current;
     if (!el) return;
     el.focus();
+    ensureParagraphSeparator();
     document.execCommand(command, false, commandVal);
     emitChange();
+  };
+
+  const wrapLooseSelectionInParagraph = (): HTMLElement | null => {
+    const el = editorRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.rangeCount === 0) return null;
+    const p = document.createElement('p');
+    p.setAttribute('dir', editorDir === 'ltr' ? 'ltr' : 'rtl');
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed) {
+      try {
+        const frag = range.extractContents();
+        p.appendChild(frag);
+        range.insertNode(p);
+        return p;
+      } catch {
+        // fallback below
+      }
+    }
+    if (el.childNodes.length === 0) {
+      p.innerHTML = '<br>';
+      el.appendChild(p);
+      placeCaretInNode(p, true);
+      return p;
+    }
+    return null;
+  };
+
+  const applyBlockAlignment = (align: BlockAlign) => {
+    if (!guardEdit()) return;
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+    let blocks = getSelectedBlocks();
+    if (blocks.length === 0) {
+      const wrapped = wrapLooseSelectionInParagraph();
+      if (wrapped) blocks = [wrapped];
+    }
+    if (blocks.length === 0) return;
+
+    const allSame = blocks.every(
+      (b) => (b.getAttribute('data-align') || '').toLowerCase() === align
+    );
+    blocks.forEach((b) => {
+      if (allSame) {
+        b.removeAttribute('data-align');
+      } else {
+        b.setAttribute('data-align', align);
+      }
+    });
+    emitChange(false);
+  };
+
+  const adjustIndent = (delta: 1 | -1) => {
+    if (!guardEdit()) return;
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+
+    let blocks = getSelectedBlocks();
+    if (blocks.length === 0) {
+      const wrapped = wrapLooseSelectionInParagraph();
+      if (wrapped) blocks = [wrapped];
+    }
+
+    const insideListItem = blocks.some(
+      (b) => b.tagName.toUpperCase() === 'LI'
+    );
+    if (insideListItem) {
+      if (delta < 0) {
+        // If any selected LI still has data-indent, step that down before outdenting out of the list
+        const hasManualIndent = blocks.some(
+          (b) => parseInt(b.getAttribute('data-indent') || '0', 10) > 0
+        );
+        if (hasManualIndent) {
+          blocks.forEach((b) => {
+            const cur = parseInt(b.getAttribute('data-indent') || '0', 10) || 0;
+            const next = Math.max(0, cur - 1);
+            if (next === 0) b.removeAttribute('data-indent');
+            else b.setAttribute('data-indent', String(next));
+          });
+          emitChange(false);
+          return;
+        }
+      }
+      const cmd = delta > 0 ? 'indent' : 'outdent';
+      document.execCommand(cmd, false);
+      emitChange(false);
+      return;
+    }
+
+    if (blocks.length === 0) return;
+    blocks.forEach((b) => {
+      const current = parseInt(b.getAttribute('data-indent') || '0', 10) || 0;
+      const next = Math.max(0, Math.min(5, current + delta));
+      if (next === 0) {
+        b.removeAttribute('data-indent');
+      } else {
+        b.setAttribute('data-indent', String(next));
+      }
+    });
+    emitChange(false);
   };
 
   const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
@@ -712,6 +1055,18 @@ export default function RichTextNoteEditor({
     emitChange();
   };
 
+  const layout = getNoteLayoutClasses({
+    noteMargin: localMargin,
+    noteWidth: localWidth,
+    noteBorder: localBorder,
+    notePaperTone: preferences.notePaperTone,
+  });
+
+  const currentMarginIdx = Math.max(
+    0,
+    MARGIN_OPTIONS.findIndex((o) => o.id === localMargin)
+  );
+
   const isEmpty =
     (!value ||
       value
@@ -721,7 +1076,10 @@ export default function RichTextNoteEditor({
     !/<table\b/i.test(value || '');
 
   return (
-    <div className="border border-slate-200 rounded-xl overflow-visible bg-white">
+    <div
+      ref={wrapperRef}
+      className={`${layout.widthClass} ${layout.borderClass} rounded-xl overflow-visible bg-white transition-all`}
+    >
       {/* Main Formatting Toolbar (touch-friendly & wraps cleanly on mobile) */}
       <div className="px-2.5 sm:px-3 py-2 bg-slate-50 border-b border-slate-200 rounded-t-xl flex flex-wrap items-center justify-between gap-1.5 sm:gap-2">
         <div className="flex flex-wrap items-center gap-1">
@@ -833,6 +1191,101 @@ export default function RichTextNoteEditor({
             <Quote className="w-3.5 h-3.5" aria-hidden="true" />
           </button>
 
+          <span aria-hidden="true" className="w-px h-4 bg-slate-300 mx-0.5 sm:mx-1" />
+
+          {/* Alignment & Indentation Controls (Right / Center / Left + Indent In / Out) */}
+          <div className="inline-flex items-center gap-0.5 bg-white border border-slate-200 rounded-md p-0.5">
+            <button
+              type="button"
+              disabled={!canEdit}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                applyBlockAlignment('right');
+              }}
+              title="محاذاة لليمين"
+              aria-label="محاذاة لليمين"
+              aria-pressed={activeAlign === 'right'}
+              className={`min-h-[28px] min-w-[28px] inline-flex items-center justify-center p-1 rounded transition-colors cursor-pointer disabled:opacity-45 ${
+                activeAlign === 'right'
+                  ? 'bg-[#1E3A5F] text-white'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <AlignRight className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              disabled={!canEdit}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                applyBlockAlignment('center');
+              }}
+              title="توسيط الفقرة"
+              aria-label="توسيط"
+              aria-pressed={activeAlign === 'center'}
+              className={`min-h-[28px] min-w-[28px] inline-flex items-center justify-center p-1 rounded transition-colors cursor-pointer disabled:opacity-45 ${
+                activeAlign === 'center'
+                  ? 'bg-[#1E3A5F] text-white'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <AlignCenter className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              disabled={!canEdit}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                applyBlockAlignment('left');
+              }}
+              title="محاذاة لليسار"
+              aria-label="محاذاة لليسار"
+              aria-pressed={activeAlign === 'left'}
+              className={`min-h-[28px] min-w-[28px] inline-flex items-center justify-center p-1 rounded transition-colors cursor-pointer disabled:opacity-45 ${
+                activeAlign === 'left'
+                  ? 'bg-[#1E3A5F] text-white'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <AlignLeft className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+
+            <span aria-hidden="true" className="w-px h-4 bg-slate-200 mx-0.5" />
+
+            <button
+              type="button"
+              disabled={!canEdit}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                adjustIndent(1);
+              }}
+              title="إزاحة للداخل (إضافة مسافة بادئة أو تداخل قائمة)"
+              aria-label="إزاحة للداخل"
+              className={`min-h-[28px] min-w-[28px] inline-flex items-center justify-center p-1 rounded transition-colors cursor-pointer disabled:opacity-45 ${
+                activeIndent > 0
+                  ? 'bg-slate-100 text-[#1E3A5F] font-semibold'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <IndentIncrease className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              disabled={!canEdit}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                adjustIndent(-1);
+              }}
+              title="تقليل الإزاحة (إخراج للخارج)"
+              aria-label="إخراج للخارج"
+              className="min-h-[28px] min-w-[28px] inline-flex items-center justify-center p-1 text-slate-700 hover:bg-slate-100 rounded transition-colors cursor-pointer disabled:opacity-45"
+            >
+              <IndentDecrease className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </div>
+
+          <span aria-hidden="true" className="w-px h-4 bg-slate-300 mx-0.5 sm:mx-1" />
+
           {/* Insert Table Button + Popover */}
           <div className="relative inline-flex items-center">
             <button
@@ -842,6 +1295,7 @@ export default function RichTextNoteEditor({
                 e.preventDefault();
                 saveCurrentRange();
                 setShowHighlightMenu(false);
+                setShowLayoutMenu(false);
                 setShowTableMenu((v) => !v);
               }}
               title="إدراج جدول داخل الملاحظة"
@@ -858,7 +1312,7 @@ export default function RichTextNoteEditor({
             </button>
 
             {showTableMenu && canEdit && (
-              <div className="absolute right-0 top-full mt-1.5 w-60 bg-white border border-slate-200 rounded-xl shadow-lg p-3 z-30 space-y-3">
+              <div className="absolute right-0 top-full mt-1.5 w-60 max-w-[calc(100vw-2rem)] bg-white border border-slate-200 rounded-xl shadow-lg p-3 z-30 space-y-3">
                 <div className="flex items-center justify-between">
                   <p className="text-[11px] font-bold text-[#1E3A5F]">
                     إدراج جدول في الملاحظة
@@ -954,6 +1408,7 @@ export default function RichTextNoteEditor({
               onMouseDown={(e) => {
                 e.preventDefault();
                 setShowTableMenu(false);
+                setShowLayoutMenu(false);
                 setShowHighlightMenu((v) => !v);
               }}
               aria-label="اختيار لون التظليل"
@@ -1070,6 +1525,168 @@ export default function RichTextNoteEditor({
               ع ↲
             </button>
           </div>
+
+          {/* Note Margins, Width (Limit/Open) & Borders Popover */}
+          <div className="relative inline-flex items-center">
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setShowTableMenu(false);
+                setShowHighlightMenu(false);
+                setShowLayoutMenu((v) => !v);
+              }}
+              title="التحكم في هوامش الملاحظة، الحدود (Borders)، والاتساع"
+              aria-label="الهوامش والإطار"
+              aria-expanded={showLayoutMenu}
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[34px] text-xs font-medium rounded-md border transition-colors cursor-pointer ${
+                showLayoutMenu
+                  ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                  : 'bg-white text-slate-800 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>الهوامش والإطار</span>
+            </button>
+
+            {showLayoutMenu && (
+              <div className="absolute left-0 sm:right-0 sm:left-auto top-full mt-1.5 w-72 max-w-[calc(100vw-2rem)] bg-white border border-slate-200 rounded-xl shadow-lg p-3 z-30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-bold text-[#1E3A5F]">
+                    تخطيط الملاحظة (الهوامش والحدود)
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowLayoutMenu(false)}
+                    className="text-[11px] text-slate-400 hover:text-slate-700 cursor-pointer"
+                  >
+                    إغلاق
+                  </button>
+                </div>
+
+                {/* Margins Stepper + Presets */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-slate-700">
+                      الهوامش الداخلية (Margins)
+                    </span>
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={currentMarginIdx <= 0}
+                        onClick={() => {
+                          const prev = MARGIN_OPTIONS[Math.max(0, currentMarginIdx - 1)];
+                          updateLayoutPrefs({ noteMargin: prev.id });
+                        }}
+                        title="تقليل الهامش"
+                        className="w-6 h-6 inline-flex items-center justify-center rounded border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 cursor-pointer"
+                      >
+                        -
+                      </button>
+                      <button
+                        type="button"
+                        disabled={currentMarginIdx >= MARGIN_OPTIONS.length - 1}
+                        onClick={() => {
+                          const next =
+                            MARGIN_OPTIONS[
+                              Math.min(MARGIN_OPTIONS.length - 1, currentMarginIdx + 1)
+                            ];
+                          updateLayoutPrefs({ noteMargin: next.id });
+                        }}
+                        title="توسيع الهامش"
+                        className="w-6 h-6 inline-flex items-center justify-center rounded border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40 cursor-pointer"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {MARGIN_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => updateLayoutPrefs({ noteMargin: opt.id })}
+                        className={`py-1.5 text-[11px] font-medium rounded-md border transition-colors cursor-pointer ${
+                          localMargin === opt.id
+                            ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Width Limit / Open Controls */}
+                <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                  <span className="text-[11px] font-semibold text-slate-700 block">
+                    اتساع الصفحة (تحديد / فتح العرض)
+                  </span>
+                  <div className="grid grid-cols-3 gap-1">
+                    {WIDTH_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => updateLayoutPrefs({ noteWidth: opt.id })}
+                        className={`inline-flex items-center justify-center gap-1 py-1.5 px-1 text-[11px] font-medium rounded-md border transition-colors cursor-pointer ${
+                          localWidth === opt.id
+                            ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {opt.id === 'focused' ? (
+                          <Minimize2 className="w-3 h-3 shrink-0" aria-hidden="true" />
+                        ) : opt.id === 'full' ? (
+                          <Maximize2 className="w-3 h-3 shrink-0" aria-hidden="true" />
+                        ) : null}
+                        <span>{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Note Borders Controls */}
+                <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                  <span className="text-[11px] font-semibold text-slate-700 block">
+                    إطار الملاحظة (Borders)
+                  </span>
+                  <div className="grid grid-cols-2 gap-1">
+                    {BORDER_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => updateLayoutPrefs({ noteBorder: opt.id })}
+                        className={`py-1.5 text-[11px] font-medium rounded-md border transition-colors cursor-pointer ${
+                          localBorder === opt.id
+                            ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateLayoutPrefs({
+                        noteMargin: 'normal',
+                        noteWidth: 'full',
+                        noteBorder: 'subtle',
+                      })
+                    }
+                    className="text-[11px] font-medium text-slate-500 hover:text-[#1E3A5F] cursor-pointer"
+                  >
+                    إعادة للافتراضي
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right Controls: Clear / Undo / Redo */}
@@ -1183,7 +1800,7 @@ export default function RichTextNoteEditor({
 
       {/* Editable Rich Canvas */}
       <div
-        className={`relative rounded-b-xl overflow-x-auto ${PAPER_TONE_CLASS[preferences.notePaperTone]}`}
+        className={`relative rounded-b-xl overflow-x-auto transition-all ${layout.paperToneClass}`}
         onClick={() => {
           if (!canEdit) onRequireAuth?.();
         }}
@@ -1191,7 +1808,7 @@ export default function RichTextNoteEditor({
         {isEmpty && (
           <div
             aria-hidden="true"
-            className={`pointer-events-none absolute top-4 right-4 left-4 text-slate-400 ${
+            className={`pointer-events-none absolute inset-0 ${layout.canvasPaddingClass} text-slate-400 ${
               FONT_SIZE_CLASS[preferences.noteFontSize]
             }`}
           >
@@ -1217,16 +1834,26 @@ export default function RichTextNoteEditor({
           aria-multiline="true"
           aria-label="محرر الملاحظات المنسّق ثنائي اللغة"
           style={{ caretColor: '#1E3A5F' }}
+          onFocus={ensureParagraphSeparator}
           onInput={() => emitChange(false)}
+          onCompositionEnd={() => emitChange(false)}
           onBlur={() => emitChange(true)}
           onPaste={handlePaste}
-          onKeyUp={syncFormatState}
+          onKeyUp={(e) => {
+            if (
+              editorRef.current &&
+              (e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Delete')
+            ) {
+              syncBlocksBidi(editorRef.current, editorDir);
+            }
+            syncFormatState();
+          }}
           onMouseUp={syncFormatState}
-          className={`prose-bidi w-full p-3.5 sm:p-4 ${minHeightClass} ${
+          className={`prose-bidi w-full ${layout.canvasPaddingClass} ${minHeightClass} ${
             FONT_SIZE_CLASS[preferences.noteFontSize]
           } ${
             editorDir === 'ltr' ? 'text-left' : editorDir === 'rtl' ? 'text-right' : 'text-start'
-          } text-slate-800 break-words focus:outline-none rounded-b-xl touch-manipulation [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white/60 ${
+          } text-slate-800 break-words focus:outline-none rounded-b-xl touch-manipulation transition-all [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white/60 ${
             !canEdit ? 'cursor-not-allowed opacity-85' : ''
           }`}
         />

@@ -61,6 +61,7 @@ import {
 import {
   HIGHLIGHT_SWATCHES,
   ensureRichHtml,
+  getNoteLayoutClasses,
   renderSafeBidiHtml,
   richHtmlToPlainText,
   sanitizeRichHtml,
@@ -178,6 +179,7 @@ export default function NotesJournalView({
   onLogVoiceNote,
   onExportExcel,
 }: NotesJournalViewProps) {
+  const noteLayout = getNoteLayoutClasses(preferences);
   const [subTab, setSubTab] = useState<'cards' | 'all' | 'units'>('cards');
   const [selectedCourseNotebookId, setSelectedCourseNotebookId] = useState<
     number | null
@@ -1215,13 +1217,16 @@ export default function NotesJournalView({
                 canEdit={canEdit}
                 onRequireAuth={onRequireAuth}
                 preferences={preferences}
+                onUpdatePreferences={onUpdatePreferences}
                 onSelectDefaultHighlight={(color) => {
                   if (canEdit) onUpdatePreferences({ noteHighlightColor: color });
                 }}
                 minHeightClass="min-h-[280px]"
               />
             ) : (
-              <div className="p-4 sm:p-6 bg-slate-50/70 border border-slate-200 rounded-xl min-h-[140px] overflow-x-auto">
+              <div
+                className={`${noteLayout.widthClass} ${noteLayout.canvasPaddingClass} ${noteLayout.borderClass} ${noteLayout.paperToneClass} rounded-xl min-h-[140px] overflow-x-auto transition-all`}
+              >
                 {richHtmlToPlainText(standaloneNote.content) ? (
                 <div
                   className="prose-bidi text-sm sm:text-base leading-relaxed text-slate-800 [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 [&_table]:w-full [&_table]:border-collapse [&_table]:my-3 [&_table]:text-xs [&_table]:sm:text-sm [&_th]:bg-slate-100 [&_th]:font-bold [&_th]:text-slate-900 [&_th]:border [&_th]:border-slate-300 [&_th]:px-2.5 [&_th]:py-2 [&_th]:min-w-[80px] [&_td]:border [&_td]:border-slate-300 [&_td]:px-2.5 [&_td]:py-2 [&_td]:align-top [&_td]:min-w-[80px] [&_td]:bg-white"
@@ -1293,6 +1298,7 @@ export default function NotesJournalView({
                   canEdit={canEdit}
                   onRequireAuth={onRequireAuth}
                   preferences={preferences}
+                  onUpdatePreferences={onUpdatePreferences}
                   onSelectDefaultHighlight={(color) => {
                     if (canEdit)
                       onUpdatePreferences({ noteHighlightColor: color });
@@ -1301,7 +1307,7 @@ export default function NotesJournalView({
                 />
               ) : (
                 <div
-                  className="prose-bidi p-4 bg-amber-50/40 border border-amber-200 rounded-xl text-sm text-slate-800 leading-relaxed [&_mark]:px-1 [&_mark]:rounded-xs [&_strong]:font-bold"
+                  className={`prose-bidi ${noteLayout.widthClass} ${noteLayout.canvasPaddingClass} bg-amber-50/40 border border-amber-200 rounded-xl text-sm text-slate-800 leading-relaxed [&_mark]:px-1 [&_mark]:rounded-xs [&_strong]:font-bold`}
                   dangerouslySetInnerHTML={{
                     __html: renderSafeBidiHtml(standaloneNote.quotes),
                   }}
