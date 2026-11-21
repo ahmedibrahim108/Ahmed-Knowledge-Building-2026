@@ -13,6 +13,8 @@ import {
 import {
   LEARNING_HUBS,
   LearningHubId,
+  MonthPlan,
+  PersonalCourse,
   READING_MODES_META,
   ReadingItemStatus,
   ReadingItemType,
@@ -21,7 +23,9 @@ import {
   getHubMeta,
   getTodayDateKey,
 } from '../data/curriculumData';
+import { CloudAttachmentItem } from '../services/firestoreSync';
 import {
+  BUNDLED_APP_DOCUMENTS,
   downloadResourceAttachment,
   isPdfAttachment,
   uploadResourceAttachment,
@@ -35,6 +39,9 @@ interface LibraryViewProps {
   canEdit: boolean;
   onRequireAuth: () => void;
   items: ReadingLibraryItem[];
+  cloudAttachments?: CloudAttachmentItem[];
+  courses?: PersonalCourse[];
+  months?: MonthPlan[];
   hubCategories: Record<LearningHubId, string[]>;
   activeHubFilter: LearningHubId | 'all';
   onChangeHubFilter: (hub: LearningHubId | 'all') => void;
@@ -55,6 +62,9 @@ export default function LibraryView({
   canEdit,
   onRequireAuth,
   items,
+  cloudAttachments = [],
+  courses = [],
+  months = [],
   hubCategories,
   activeHubFilter,
   onChangeHubFilter,
@@ -80,6 +90,7 @@ export default function LibraryView({
   const [externalUrl, setExternalUrl] = useState('');
   const [takeaways, setTakeaways] = useState('');
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [uploadCloudNotice, setUploadCloudNotice] = useState<string | null>(null);
   const [pendingResId, setPendingResId] = useState('');
   const [pendingFileName, setPendingFileName] = useState('');
   const [pendingStoragePath, setPendingStoragePath] = useState<string | undefined>();
@@ -88,6 +99,91 @@ export default function LibraryView({
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const today = getTodayDateKey();
+
+  const syncedAndBundledFiles = useMemo(() => {
+    const out: Array<{
+      id: string;
+      resourceId?: string;
+      title: string;
+      fileName: string;
+      subtitle: string;
+      downloadUrl?: string;
+      storagePath?: string;
+      mimeType?: string;
+      fallbackText?: string;
+    }> = [];
+    const seen = new Set<string>();
+
+    for (const item of items) {
+      if (item.attachmentResourceId) seen.add(item.attachmentResourceId);
+      seen.add(item.id);
+    }
+
+    for (const c of courses) {
+      for (const r of c.resources) {
+        if (r.attachmentName || r.storagePath || r.downloadUrl || r.extractedPreview) {
+          seen.add(r.id);
+          out.push({
+            id: `course-${c.id}-${r.id}`,
+            resourceId: r.id,
+            title: r.title,
+            fileName: r.attachmentName || r.title,
+            subtitle: `كورس: ${c.title}`,
+            downloadUrl: r.downloadUrl,
+            storagePath: r.storagePath,
+            mimeType: r.mimeType,
+            fallbackText: r.extractedPreview,
+          });
+        }
+      }
+    }
+
+    for (const m of months) {
+      for (const r of m.resources) {
+        if (r.attachmentName || r.storagePath || r.downloadUrl || r.extractedPreview) {
+          seen.add(r.id);
+          out.push({
+            id: `month-${m.id}-${r.id}`,
+            resourceId: r.id,
+            title: r.title,
+            fileName: r.attachmentName || r.title,
+            subtitle: `الشهر ${m.id}: ${m.theme}`,
+            downloadUrl: r.downloadUrl,
+            storagePath: r.storagePath,
+            mimeType: r.mimeType,
+            fallbackText: r.extractedPreview,
+          });
+        }
+      }
+    }
+
+    for (const att of cloudAttachments) {
+      if (seen.has(att.id)) continue;
+      seen.add(att.id);
+      out.push({
+        id: `cloud-${att.id}`,
+        resourceId: att.id,
+        title: att.fileName,
+        fileName: att.fileName,
+        subtitle: 'مرفق محفوظ في قاعدة البيانات',
+        mimeType: att.mimeType,
+      });
+    }
+
+    for (const docItem of BUNDLED_APP_DOCUMENTS) {
+      out.push({
+        id: docItem.id,
+        resourceId: docItem.id,
+        title: docItem.title,
+        fileName: docItem.fileName,
+        subtitle: docItem.subtitle,
+        downloadUrl: docItem.downloadUrl,
+        mimeType: docItem.mimeType,
+      });
+    }
+
+    return out;
+  }, [items, courses, months, cloudAttachments]);
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
@@ -124,6 +220,7 @@ export default function LibraryView({
     e.target.value = '';
     if (!file) return;
     setUploadingFile(true);
+    setUploadCloudNotice(null);
     try {
       const resId = `lib-res-${Date.now()}`;
       const uploaded = await uploadResourceAttachment(uid, resId, file);
@@ -131,8 +228,13 @@ export default function LibraryView({
       setPendingFileName(file.name);
       setPendingStoragePath(uploaded.storagePath);
       setPendingDownloadUrl(uploaded.downloadUrl);
+      if (uploaded.cloudErrorCode === 'PERMISSION') {
+        setUploadCloudNotice(
+          'تم حفظ الملف محليًا على هذا الجهاز، لكن قواعد Firebase السحابية الحالية منعت رفعه للسحابة. حدث Firestore/Storage Rules لمزامنة الملفات بين اللابتوب والموبايل.'
+        );
+      }
       if (!title.trim()) {
-        setTitle(file.name.replace(/\.pdf$/i, ''));
+        setTitle(file.name.replace(/\.(pdf|docx?|txt|md)$/i, ''));
       }
       if (isPdfAttachment(file.name, file.type)) {
         setItemType('ملف PDF');
@@ -192,10 +294,16 @@ export default function LibraryView({
   // Dedicated Single Library Item View
   if (selectedItem) {
     const hubMeta = getHubMeta(selectedItem.hubId);
-    const hasPdf =
+    const hasViewable =
+      Boolean(selectedItem.attachmentName) ||
+      Boolean(selectedItem.downloadUrl) ||
+      Boolean(selectedItem.storagePath) ||
+      Boolean(selectedItem.takeaways?.trim());
+    const hasDownloadable =
       Boolean(selectedItem.attachmentName) ||
       Boolean(selectedItem.downloadUrl) ||
       Boolean(selectedItem.storagePath);
+    const selectedIsPdf = isPdfAttachment(selectedItem.attachmentName);
 
     return (
       <div className="space-y-6">
@@ -247,7 +355,7 @@ export default function LibraryView({
               )}
             </div>
 
-            {hasPdf && (
+            {hasViewable && (
               <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <button
                   type="button"
@@ -258,29 +366,35 @@ export default function LibraryView({
                       resourceId: selectedItem.attachmentResourceId,
                       storagePath: selectedItem.storagePath,
                       downloadUrl: selectedItem.downloadUrl,
+                      mimeType: selectedIsPdf ? 'application/pdf' : undefined,
+                      fallbackText: selectedItem.takeaways,
                       contextLabel: `مكتبة القراءة · ${hubMeta.title}`,
                     })
                   }
                   className="inline-flex items-center gap-1.5 px-4 py-2.5 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
                 >
                   <Eye className="w-4 h-4" aria-hidden="true" />
-                  <span>فتح وقراءة PDF داخل المنصة</span>
+                  <span>
+                    {selectedIsPdf ? 'عرض PDF داخل المنصة' : 'عرض الملف داخل المنصة'}
+                  </span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    void downloadResourceAttachment({
-                      resourceId: selectedItem.attachmentResourceId,
-                      fileName: selectedItem.attachmentName || `${selectedItem.title}.pdf`,
-                      storagePath: selectedItem.storagePath,
-                      downloadUrl: selectedItem.downloadUrl,
-                    })
-                  }
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>تنزيل PDF</span>
-                </button>
+                {hasDownloadable && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void downloadResourceAttachment({
+                        resourceId: selectedItem.attachmentResourceId,
+                        fileName: selectedItem.attachmentName || selectedItem.title,
+                        storagePath: selectedItem.storagePath,
+                        downloadUrl: selectedItem.downloadUrl,
+                      })
+                    }
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>تنزيل</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -564,11 +678,17 @@ export default function LibraryView({
             </label>
           </div>
 
+          {uploadCloudNotice && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900">
+              {uploadCloudNotice}
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-3">
             <input
               ref={fileRef}
               type="file"
-              accept=".pdf,.docx,.doc,.txt"
+              accept=".pdf,.docx,.doc,.txt,.md,image/*"
               className="hidden"
               onChange={(e) => void handlePickPdf(e)}
             />
@@ -584,7 +704,7 @@ export default function LibraryView({
                   ? 'جاري رفع الملف...'
                   : pendingFileName
                   ? `تم إرفاق: ${pendingFileName}`
-                  : 'رفع ملف PDF للقراءة داخل التطبيق (اختياري)'}
+                  : 'رفع ملف PDF أو Word أو نص للعرض والتنزيل'}
               </span>
             </button>
 
@@ -626,6 +746,73 @@ export default function LibraryView({
         </form>
       )}
 
+      {syncedAndBundledFiles.length > 0 && (
+        <section className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">
+                جميع الملفات والمرفقات المتزامنة والمضمّنة ({syncedAndBundledFiles.length})
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                ملفات الكورسات ووحدات الخطة والمرفقات السحابية متاحة للعرض المباشر على اللابتوب والموبايل
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {syncedAndBundledFiles.map((f) => (
+              <div
+                key={f.id}
+                className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex flex-col justify-between gap-2.5"
+              >
+                <div className="space-y-0.5 min-w-0">
+                  <p className="text-xs font-bold text-slate-900 truncate">{f.title}</p>
+                  <p className="text-[11px] text-slate-500 truncate">{f.subtitle}</p>
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenPdf({
+                        title: f.title,
+                        fileName: f.fileName,
+                        resourceId: f.resourceId,
+                        storagePath: f.storagePath,
+                        downloadUrl: f.downloadUrl,
+                        mimeType: f.mimeType,
+                        fallbackText: f.fallbackText,
+                        contextLabel: f.subtitle,
+                      })
+                    }
+                    className="inline-flex items-center justify-center gap-1.5 flex-1 px-3 py-2 min-h-[36px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                  >
+                    <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>عرض</span>
+                  </button>
+                  {(f.downloadUrl || f.storagePath || f.resourceId) && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void downloadResourceAttachment({
+                          resourceId: f.resourceId,
+                          fileName: f.fileName,
+                          storagePath: f.storagePath,
+                          downloadUrl: f.downloadUrl,
+                        })
+                      }
+                      aria-label={`تنزيل ${f.title}`}
+                      className="inline-flex items-center justify-center gap-1 px-3 py-2 min-h-[36px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>تنزيل</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {filteredItems.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-2">
           <BookOpen className="w-8 h-8 text-slate-400 mx-auto" aria-hidden="true" />
@@ -640,10 +827,16 @@ export default function LibraryView({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredItems.map((item) => {
             const hubMeta = getHubMeta(item.hubId);
-            const hasPdf =
+            const hasViewable =
+              Boolean(item.attachmentName) ||
+              Boolean(item.downloadUrl) ||
+              Boolean(item.storagePath) ||
+              Boolean(item.takeaways?.trim());
+            const hasDownloadable =
               Boolean(item.attachmentName) ||
               Boolean(item.downloadUrl) ||
               Boolean(item.storagePath);
+            const itemIsPdf = isPdfAttachment(item.attachmentName);
             const due = Boolean(item.nextReviewDateKey && item.nextReviewDateKey <= today);
 
             return (
@@ -715,7 +908,7 @@ export default function LibraryView({
                 </div>
 
                 <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
                       onClick={() => setSelectedItemId(item.id)}
@@ -723,7 +916,7 @@ export default function LibraryView({
                     >
                       التفاصيل والتكرار ←
                     </button>
-                    {hasPdf && (
+                    {hasViewable && (
                       <button
                         type="button"
                         onClick={() =>
@@ -733,16 +926,35 @@ export default function LibraryView({
                             resourceId: item.attachmentResourceId,
                             storagePath: item.storagePath,
                             downloadUrl: item.downloadUrl,
+                            mimeType: itemIsPdf ? 'application/pdf' : undefined,
+                            fallbackText: item.takeaways,
                             contextLabel: `مكتبة القراءة · ${hubMeta.shortTitle}`,
                           })
                         }
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md cursor-pointer"
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md cursor-pointer"
                       >
                         <Eye className="w-3 h-3" aria-hidden="true" />
-                        <span>فتح PDF</span>
+                        <span>{itemIsPdf ? 'عرض PDF' : 'عرض الملف'}</span>
                       </button>
                     )}
-                    {!hasPdf && item.externalUrl && (
+                    {hasDownloadable && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void downloadResourceAttachment({
+                            resourceId: item.attachmentResourceId,
+                            fileName: item.attachmentName || item.title,
+                            storagePath: item.storagePath,
+                            downloadUrl: item.downloadUrl,
+                          })
+                        }
+                        aria-label={`تنزيل ${item.title}`}
+                        className="inline-flex items-center gap-1 px-2 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
+                      >
+                        <Download className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                    )}
+                    {!hasViewable && item.externalUrl && (
                       <a
                         href={item.externalUrl}
                         target="_blank"

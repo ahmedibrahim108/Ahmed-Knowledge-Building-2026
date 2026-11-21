@@ -8,7 +8,9 @@ import {
   ChevronRight,
   Download,
   ExternalLink,
+  FileText,
   FileWarning,
+  Globe,
   Loader2,
   Maximize2,
   RefreshCw,
@@ -18,8 +20,9 @@ import {
 } from 'lucide-react';
 import {
   downloadResourceAttachment,
-  loadPdfBytesForViewing,
+  loadAnyAttachmentForViewing,
 } from '../utils/documentImportExport';
+import { sanitizeRichHtml } from '../utils/richText';
 import ErrorBoundary from './ErrorBoundary';
 
 // Safe runtime shim for older Android Chrome / WebViews when PDF modal is opened
@@ -59,6 +62,8 @@ export interface ActivePdfTarget {
   storagePath?: string;
   downloadUrl?: string;
   contextLabel?: string;
+  mimeType?: string;
+  fallbackText?: string;
 }
 
 interface PDFViewerModalProps {
@@ -160,7 +165,11 @@ function LazyPdfPage({
 
 export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps) {
   const [loadingBytes, setLoadingBytes] = useState(false);
+  const [contentKind, setContentKind] = useState<'pdf' | 'docx' | 'text' | 'image' | 'iframe'>('pdf');
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
+  const [docHtml, setDocHtml] = useState<string>('');
+  const [docText, setDocText] = useState<string>('');
+  const [imageObjectUrl, setImageObjectUrl] = useState<string>('');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [fallbackUrl, setFallbackUrl] = useState<string | undefined>(undefined);
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -174,8 +183,13 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   useEffect(() => {
+    let activeImgUrl = '';
+
     if (!target) {
       setPdfBytes(null);
+      setDocHtml('');
+      setDocText('');
+      setImageObjectUrl('');
       setNumPages(0);
       setCurrentPage(1);
       setLoadError(null);
@@ -189,27 +203,47 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
       setLoadingBytes(true);
       setLoadError(null);
       setFallbackUrl(target.downloadUrl);
+      setPdfBytes(null);
+      setDocHtml('');
+      setDocText('');
+      setImageObjectUrl('');
       setNumPages(0);
       setCurrentPage(1);
       setZoom(1);
+
       try {
-        const res = await loadPdfBytesForViewing({
+        const res = await loadAnyAttachmentForViewing({
           resourceId: target.resourceId,
+          fileName: target.fileName,
+          mimeType: target.mimeType,
           storagePath: target.storagePath,
           downloadUrl: target.downloadUrl,
+          fallbackText: target.fallbackText,
         });
         if (cancelled) return;
+
         if (!res.ok) {
-          setPdfBytes(null);
           setLoadError(res.message);
           setFallbackUrl(res.fallbackUrl ?? target.downloadUrl);
-        } else {
+        } else if (res.kind === 'pdf') {
+          setContentKind('pdf');
           setPdfBytes(res.data);
+        } else if (res.kind === 'docx') {
+          setContentKind('docx');
+          setDocHtml(res.html || '');
+          setDocText(res.plainText || '');
+        } else if (res.kind === 'text') {
+          setContentKind('text');
+          setDocText(res.plainText || '');
+        } else if (res.kind === 'image') {
+          setContentKind('image');
+          activeImgUrl = URL.createObjectURL(res.blob);
+          setImageObjectUrl(activeImgUrl);
         }
       } catch {
         if (!cancelled) {
           setPdfBytes(null);
-          setLoadError('تعذّر تحميل ملف الـ PDF. حاول إعادة المحاولة أو تنزيله مباشرة.');
+          setLoadError('تعذّر تحميل الملف للعرض المباشر. حاول إعادة المحاولة أو تنزيله مباشرة.');
         }
       } finally {
         if (!cancelled) setLoadingBytes(false);
@@ -220,6 +254,7 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
 
     return () => {
       cancelled = true;
+      if (activeImgUrl) URL.revokeObjectURL(activeImgUrl);
     };
   }, [target, reloadNonce]);
 
@@ -298,13 +333,14 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
   };
 
   const pageRenderWidth = Math.max(240, Math.round(containerWidth * zoom));
+  const isPdfActive = contentKind === 'pdf' && !loadError && Boolean(documentFile);
 
   return (
     <div
       className="fixed inset-0 z-[80] bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4"
       role="dialog"
       aria-modal="true"
-      aria-label={`عارض PDF: ${target.title}`}
+      aria-label={`عارض المستندات: ${target.title}`}
       onClick={onClose}
     >
       <div
@@ -343,7 +379,7 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
               className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" aria-hidden="true" />
-              <span className="hidden sm:inline">تنزيل PDF</span>
+              <span className="hidden sm:inline">تنزيل الملف</span>
             </button>
             <button
               type="button"
@@ -356,99 +392,105 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
           </div>
         </div>
 
-        {/* Navigation & Zoom Toolbar */}
-        <div className="px-3 sm:px-5 py-2 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              disabled={currentPage <= 1 || numPages === 0}
-              onClick={() => goToPage(currentPage - 1)}
-              aria-label="الصفحة السابقة"
-              className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-            >
-              <ChevronRight className="w-4 h-4" aria-hidden="true" />
-            </button>
-            <div className="inline-flex items-center gap-1 px-1.5">
-              <input
-                type="number"
-                min={1}
-                max={Math.max(1, numPages)}
-                value={currentPage}
-                onChange={(e) => {
-                  const val = parseInt(e.target.value, 10);
-                  if (!Number.isNaN(val)) goToPage(val);
-                }}
-                aria-label="رقم الصفحة"
-                className="w-12 px-1.5 py-1.5 min-h-[36px] text-center text-xs bg-slate-50 border border-slate-300 rounded-md tabular-nums"
-              />
-              <span className="text-slate-600 tabular-nums">
-                / {numPages || '—'}
-              </span>
+        {/* Navigation & Zoom Toolbar (for PDF) */}
+        {isPdfActive && (
+          <div className="px-3 sm:px-5 py-2 bg-white border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={currentPage <= 1 || numPages === 0}
+                onClick={() => goToPage(currentPage - 1)}
+                aria-label="الصفحة السابقة"
+                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+              >
+                <ChevronRight className="w-4 h-4" aria-hidden="true" />
+              </button>
+              <div className="inline-flex items-center gap-1 px-1.5">
+                <input
+                  type="number"
+                  min={1}
+                  max={Math.max(1, numPages)}
+                  value={currentPage}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!Number.isNaN(val)) goToPage(val);
+                  }}
+                  aria-label="رقم الصفحة"
+                  className="w-12 px-1.5 py-1.5 min-h-[36px] text-center text-xs bg-slate-50 border border-slate-300 rounded-md tabular-nums"
+                />
+                <span className="text-slate-600 tabular-nums">
+                  / {numPages || '—'}
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={numPages === 0 || currentPage >= numPages}
+                onClick={() => goToPage(currentPage + 1)}
+                aria-label="الصفحة التالية"
+                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+              >
+                <ChevronLeft className="w-4 h-4" aria-hidden="true" />
+              </button>
             </div>
-            <button
-              type="button"
-              disabled={numPages === 0 || currentPage >= numPages}
-              onClick={() => goToPage(currentPage + 1)}
-              aria-label="الصفحة التالية"
-              className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-            >
-              <ChevronLeft className="w-4 h-4" aria-hidden="true" />
-            </button>
-          </div>
 
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setScrollMode((m) => (m === 'all' ? 'single' : 'all'))}
-              className="px-2.5 py-2 min-h-[40px] text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
-            >
-              {scrollMode === 'all' ? 'تمرير مستمر' : 'صفحة بصفحة'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.15).toFixed(2)))}
-              aria-label="تصغير"
-              className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
-            >
-              <ZoomOut className="w-4 h-4" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setZoom(1)}
-              title="ملاءمة عرض الشاشة (100%)"
-              className="inline-flex items-center gap-1 px-2.5 py-2 min-h-[40px] text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg tabular-nums cursor-pointer"
-            >
-              <Maximize2 className="w-3 h-3 text-slate-500 hidden sm:inline" aria-hidden="true" />
-              <span>{Math.round(zoom * 100)}%</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setZoom((z) => Math.min(2.4, +(z + 0.15).toFixed(2)))}
-              aria-label="تكبير"
-              className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
-            >
-              <ZoomIn className="w-4 h-4" aria-hidden="true" />
-            </button>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setScrollMode((m) => (m === 'all' ? 'single' : 'all'))}
+                className="px-2.5 py-2 min-h-[40px] text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+              >
+                {scrollMode === 'all' ? 'تمرير مستمر' : 'صفحة بصفحة'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.15).toFixed(2)))}
+                aria-label="تصغير"
+                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
+              >
+                <ZoomOut className="w-4 h-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom(1)}
+                title="ملاءمة عرض الشاشة (100%)"
+                className="inline-flex items-center gap-1 px-2.5 py-2 min-h-[40px] text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg tabular-nums cursor-pointer"
+              >
+                <Maximize2 className="w-3 h-3 text-slate-500 hidden sm:inline" aria-hidden="true" />
+                <span>{Math.round(zoom * 100)}%</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom((z) => Math.min(2.4, +(z + 0.15).toFixed(2)))}
+                aria-label="تكبير"
+                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer"
+              >
+                <ZoomIn className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Scrollable PDF Viewport */}
+        {/* Scrollable Document Viewport */}
         <div
           ref={bodyContainerRef}
-          className="flex-1 overflow-auto bg-slate-800 p-2 sm:p-5 flex flex-col items-center gap-4 touch-pan-x touch-pan-y"
+          className={`flex-1 overflow-auto ${
+            contentKind === 'docx' || contentKind === 'text'
+              ? 'bg-slate-50 p-3 sm:p-6'
+              : 'bg-slate-800 p-2 sm:p-5'
+          } flex flex-col items-center gap-4 touch-pan-x touch-pan-y`}
         >
           {loadingBytes && (
             <div className="my-auto flex flex-col items-center gap-3 text-slate-200 py-16">
               <Loader2 className="w-7 h-7 animate-spin" aria-hidden="true" />
-              <p className="text-sm">جاري تجهيز ملف الـ PDF للقراءة داخل التطبيق...</p>
+              <p className="text-sm">جاري تجهيز الملف للعرض داخل الموقع...</p>
             </div>
           )}
 
-          {!loadingBytes && loadError && (
+          {!loadingBytes && loadError && contentKind !== 'iframe' && (
             <div className="my-auto max-w-md bg-white rounded-xl p-6 text-center space-y-4">
               <FileWarning className="w-8 h-8 text-amber-600 mx-auto" aria-hidden="true" />
               <p className="text-sm font-semibold text-slate-900">
-                تعذّر عرض الملف مباشرة داخل الصفحة
+                تعذّر عرض الملف مباشرة عبر الجلب المحلي
               </p>
               <p className="text-xs text-slate-600 leading-relaxed">{loadError}</p>
               <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
@@ -460,13 +502,26 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
                   <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>إعادة المحاولة</span>
                 </button>
+                {fallbackUrl && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoadError(null);
+                      setContentKind('iframe');
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg cursor-pointer"
+                  >
+                    <Globe className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>عرض مدمج داخل الصفحة</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => void handleExplicitDownload()}
                   className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>تنزيل PDF</span>
+                  <span>تنزيل الملف</span>
                 </button>
                 {fallbackUrl && (
                   <a
@@ -483,11 +538,72 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
             </div>
           )}
 
-          {!loadingBytes && !loadError && documentFile && (
+          {!loadingBytes && contentKind === 'iframe' && fallbackUrl && (
+            <div className="w-full h-full flex flex-col gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-white rounded-lg text-xs text-slate-600">
+                <span>معاينة مدمجة عبر إطار الصفحة — إذا لم يظهر المستند بسبب إعدادات الموقع المصدر استخدم «فتح الأصل».</span>
+                <button
+                  type="button"
+                  onClick={() => setReloadNonce((n) => n + 1)}
+                  className="text-[#1E3A5F] font-semibold hover:underline cursor-pointer"
+                >
+                  العودة للعارض القياسي
+                </button>
+              </div>
+              <iframe
+                title={target.title || target.fileName}
+                src={fallbackUrl}
+                className="w-full flex-1 bg-white rounded-lg border border-slate-200 min-h-[70dvh]"
+              />
+            </div>
+          )}
+
+          {!loadingBytes && !loadError && contentKind === 'docx' && (
+            <article className="w-full max-w-3xl bg-white border border-slate-200 rounded-xl p-5 sm:p-8 shadow-sm space-y-4">
+              <div className="flex items-center gap-2 text-xs font-semibold text-[#1E3A5F] pb-3 border-b border-slate-200">
+                <FileText className="w-4 h-4" aria-hidden="true" />
+                <span>عرض مستند Word / نص منسق: {target.fileName}</span>
+              </div>
+              <div
+                dir="auto"
+                className="text-sm sm:text-base leading-relaxed text-slate-800 [&_h1]:text-xl [&_h1]:font-bold [&_h2]:text-lg [&_h2]:font-bold [&_h3]:text-base [&_h3]:font-bold [&_ul]:list-disc [&_ul]:pr-6 [&_ol]:list-decimal [&_ol]:pr-6 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-slate-300 [&_td]:p-2 [&_th]:border [&_th]:border-slate-300 [&_th]:bg-slate-100 [&_th]:p-2"
+                dangerouslySetInnerHTML={{
+                  __html: sanitizeRichHtml(docHtml || `<p>${docText}</p>`),
+                }}
+              />
+            </article>
+          )}
+
+          {!loadingBytes && !loadError && contentKind === 'text' && (
+            <article className="w-full max-w-3xl bg-white border border-slate-200 rounded-xl p-5 sm:p-8 shadow-sm space-y-4">
+              <div className="flex items-center gap-2 text-xs font-semibold text-[#1E3A5F] pb-3 border-b border-slate-200">
+                <FileText className="w-4 h-4" aria-hidden="true" />
+                <span>عرض محتوى الملف: {target.fileName}</span>
+              </div>
+              <pre
+                dir="auto"
+                className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-800"
+              >
+                {docText || 'لا يوجد نص قابل للعرض داخل هذا الملف.'}
+              </pre>
+            </article>
+          )}
+
+          {!loadingBytes && !loadError && contentKind === 'image' && imageObjectUrl && (
+            <div className="my-auto flex flex-col items-center gap-3">
+              <img
+                src={imageObjectUrl}
+                alt={target.title || target.fileName}
+                className="max-w-full max-h-[80dvh] rounded-lg shadow-lg bg-white object-contain"
+              />
+            </div>
+          )}
+
+          {!loadingBytes && !loadError && contentKind === 'pdf' && documentFile && (
             <ErrorBoundary
               inline
               fallbackTitle="تعذّر عرض ملف الـ PDF داخل المتصفح الحالي"
-              fallbackMessage="يمكنك استخدام زر «تنزيل PDF» أو «فتح الأصل» بالأعلى لفتح المستند."
+              fallbackMessage="يمكنك استخدام زر «تنزيل الملف» أو «فتح الأصل» بالأعلى لفتح المستند."
             >
               <Document
                 file={documentFile}
@@ -508,7 +624,7 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
                         className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
                       >
                         <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>تنزيل PDF</span>
+                        <span>تنزيل الملف</span>
                       </button>
                       {fallbackUrl && (
                         <a
@@ -554,8 +670,8 @@ export default function PDFViewerModal({ target, onClose }: PDFViewerModalProps)
           )}
         </div>
 
-        {/* Mobile Bottom Quick Pager when in single-page or multi-page mode */}
-        {numPages > 1 && !loadError && (
+        {/* Mobile Bottom Quick Pager when in PDF mode */}
+        {isPdfActive && numPages > 1 && (
           <div className="sm:hidden px-3 py-2 bg-white border-t border-slate-200 flex items-center justify-between gap-2 shrink-0">
             <button
               type="button"

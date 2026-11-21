@@ -79,6 +79,7 @@ import {
   signOutUser,
 } from './firebase';
 import {
+  CloudAttachmentItem,
   deleteBookNoteDoc,
   deleteCalendarEventDoc,
   deleteCourseDoc,
@@ -112,6 +113,7 @@ import {
   saveUnifiedTaskDoc,
   saveUserPreferencesDoc,
   saveWeeklyMeetingDoc,
+  subscribeCloudAttachments,
   subscribeUserWorkspace,
 } from './services/firestoreSync';
 import { exportPlanToExcel } from './utils/excelExport';
@@ -252,6 +254,7 @@ export default function App() {
   const [unifiedTasks, setUnifiedTasks] = useState<UnifiedTask[]>([]);
   const [dentalCases, setDentalCases] = useState<DentalCase[]>([]);
   const [weeklyMeetings, setWeeklyMeetings] = useState<WeeklyMeeting[]>([]);
+  const [cloudAttachments, setCloudAttachments] = useState<CloudAttachmentItem[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences>(
     DEFAULT_USER_PREFERENCES
   );
@@ -450,6 +453,7 @@ export default function App() {
     setUnifiedTasks([]);
     setDentalCases([]);
     setWeeklyMeetings([]);
+    setCloudAttachments([]);
     setPreferences(DEFAULT_USER_PREFERENCES);
     if (!preserveRoute) {
       setActiveBookNoteId(null);
@@ -479,6 +483,7 @@ export default function App() {
     }
 
     let unsubWorkspace: (() => void) | null = null;
+    let unsubAttachments: (() => void) | null = null;
 
     const unsubAuth = onAuthStateChanged(auth, async (nextUser) => {
       setUser(nextUser);
@@ -487,6 +492,10 @@ export default function App() {
       if (unsubWorkspace) {
         unsubWorkspace();
         unsubWorkspace = null;
+      }
+      if (unsubAttachments) {
+        unsubAttachments();
+        unsubAttachments = null;
       }
 
       // Always reset in-memory state first so switching accounts or signing out never bleeds prior account data
@@ -506,6 +515,9 @@ export default function App() {
             customCategories: INITIAL_CUSTOM_CATEGORIES,
             history: [],
             preferences: DEFAULT_USER_PREFERENCES,
+          });
+          unsubAttachments = subscribeCloudAttachments(nextUser.uid, (items) => {
+            setCloudAttachments(items);
           });
           unsubWorkspace = subscribeUserWorkspace(nextUser.uid, {
             onQuarters: (items) => {
@@ -572,6 +584,7 @@ export default function App() {
     return () => {
       unsubAuth();
       if (unsubWorkspace) unsubWorkspace();
+      if (unsubAttachments) unsubAttachments();
     };
   }, []);
 
@@ -942,6 +955,18 @@ export default function App() {
       })
     );
 
+    const canonicalProjectId = `month:${monthId}:${taskId}`;
+    setUnifiedTasks((prev) =>
+      prev.map((ut) => {
+        if (ut.projectId !== canonicalProjectId) return ut;
+        const nextStatus: UnifiedTask['status'] = willBeDone ? 'done' : 'todo';
+        if (ut.status === nextStatus) return ut;
+        const nextUt = { ...ut, status: nextStatus };
+        void saveUnifiedTaskDoc(user.uid, nextUt);
+        return nextUt;
+      })
+    );
+
     if (targetMonth && targetTask && willBeDone) {
       recordHistory({
         actionType: 'month',
@@ -1222,14 +1247,33 @@ export default function App() {
     setCourses((prev) =>
       prev.map((c) => {
         if (c.id !== courseId) return c;
+        const nextTasks = c.tasks.map((t) =>
+          t.id === taskId ? { ...t, done: !t.done } : t
+        );
+        const doneCount = nextTasks.filter((t) => t.done).length;
+        const progressPct =
+          nextTasks.length > 0
+            ? Math.round((doneCount / nextTasks.length) * 100)
+            : c.progressPct;
         const next = {
           ...c,
-          tasks: c.tasks.map((t) =>
-            t.id === taskId ? { ...t, done: !t.done } : t
-          ),
+          tasks: nextTasks,
+          progressPct,
         };
         syncCourse(next);
         return next;
+      })
+    );
+
+    const canonicalProjectId = `course:${courseId}:${taskId}`;
+    setUnifiedTasks((prev) =>
+      prev.map((ut) => {
+        if (ut.projectId !== canonicalProjectId) return ut;
+        const nextStatus: UnifiedTask['status'] = willBeDone ? 'done' : 'todo';
+        if (ut.status === nextStatus) return ut;
+        const nextUt = { ...ut, status: nextStatus };
+        void saveUnifiedTaskDoc(user.uid, nextUt);
+        return nextUt;
       })
     );
 
@@ -1730,6 +1774,67 @@ export default function App() {
     void deleteLearningPathDoc(user.uid, id);
   };
 
+  const handleTogglePathStage = (pathId: string, stageId: string) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    const targetPath = learningPaths.find((p) => p.id === pathId);
+    const targetStage = targetPath?.stages.find((s) => s.id === stageId);
+    const willBeDone = targetStage ? !targetStage.done : false;
+
+    setLearningPaths((prev) =>
+      prev.map((p) => {
+        if (p.id !== pathId) return p;
+        const nextStages = p.stages.map((s) =>
+          s.id === stageId ? { ...s, done: !s.done } : s
+        );
+        const doneCount = nextStages.filter((s) => s.done).length;
+        const progressPct =
+          nextStages.length > 0
+            ? Math.round((doneCount / nextStages.length) * 100)
+            : p.progressPct;
+        const nextStatus: LearningPath['status'] =
+          nextStages.length > 0 && doneCount === nextStages.length
+            ? 'completed'
+            : doneCount > 0
+            ? 'in_progress'
+            : p.status === 'completed'
+            ? 'in_progress'
+            : p.status;
+        const next: LearningPath = {
+          ...p,
+          stages: nextStages,
+          progressPct,
+          status: nextStatus,
+        };
+        void saveLearningPathDoc(user.uid, next);
+        return next;
+      })
+    );
+
+    const canonicalProjectId = `path:${pathId}:${stageId}`;
+    setUnifiedTasks((prev) =>
+      prev.map((ut) => {
+        if (ut.projectId !== canonicalProjectId) return ut;
+        const nextStatus: UnifiedTask['status'] = willBeDone ? 'done' : 'todo';
+        if (ut.status === nextStatus) return ut;
+        const nextUt = { ...ut, status: nextStatus };
+        void saveUnifiedTaskDoc(user.uid, nextUt);
+        return nextUt;
+      })
+    );
+
+    if (targetPath && targetStage && willBeDone) {
+      recordHistory({
+        actionType: 'task',
+        title: `أنجزت مرحلة في مسار ${targetPath.title}: ${targetStage.title}`,
+        detail: targetPath.categoryLabel,
+        targetTab: 'paths',
+      });
+    }
+  };
+
   // --- Reading Library CRUD ---
   const handleAddReadingItem = (payload: Omit<ReadingLibraryItem, 'id'>) => {
     if (!user) {
@@ -1853,6 +1958,8 @@ export default function App() {
       handleRequireAuth();
       return;
     }
+    const existingTask = unifiedTasks.find((t) => t.id === id);
+
     setUnifiedTasks((prev) =>
       prev.map((t) => {
         if (t.id !== id) return t;
@@ -1861,6 +1968,87 @@ export default function App() {
         return next;
       })
     );
+
+    // Bidirectional status sync back to Course Task / Path Stage / Month Task
+    const canonicalProjectId = updates.projectId ?? existingTask?.projectId;
+    if (updates.status !== undefined && canonicalProjectId) {
+      const isDone = updates.status === 'done';
+      const parts = canonicalProjectId.split(':');
+      if (parts[0] === 'course' && parts.length >= 3) {
+        const courseId = Number(parts[1]);
+        const cTaskId = parts.slice(2).join(':');
+        setCourses((prev) =>
+          prev.map((c) => {
+            if (c.id !== courseId) return c;
+            const target = c.tasks.find((ct) => ct.id === cTaskId);
+            if (!target || target.done === isDone) return c;
+            const nextTasks = c.tasks.map((ct) =>
+              ct.id === cTaskId ? { ...ct, done: isDone } : ct
+            );
+            const doneCount = nextTasks.filter((ct) => ct.done).length;
+            const progressPct =
+              nextTasks.length > 0
+                ? Math.round((doneCount / nextTasks.length) * 100)
+                : c.progressPct;
+            const nextCourse = { ...c, tasks: nextTasks, progressPct };
+            syncCourse(nextCourse);
+            return nextCourse;
+          })
+        );
+      } else if (parts[0] === 'path' && parts.length >= 3) {
+        const pathId = parts[1];
+        const stageId = parts.slice(2).join(':');
+        setLearningPaths((prev) =>
+          prev.map((p) => {
+            if (p.id !== pathId) return p;
+            const target = p.stages.find((s) => s.id === stageId);
+            if (!target || target.done === isDone) return p;
+            const nextStages = p.stages.map((s) =>
+              s.id === stageId ? { ...s, done: isDone } : s
+            );
+            const doneCount = nextStages.filter((s) => s.done).length;
+            const progressPct =
+              nextStages.length > 0
+                ? Math.round((doneCount / nextStages.length) * 100)
+                : p.progressPct;
+            const nextStatus: LearningPath['status'] =
+              nextStages.length > 0 && doneCount === nextStages.length
+                ? 'completed'
+                : doneCount > 0
+                ? 'in_progress'
+                : p.status === 'completed'
+                ? 'in_progress'
+                : p.status;
+            const nextPath = {
+              ...p,
+              stages: nextStages,
+              progressPct,
+              status: nextStatus,
+            };
+            void saveLearningPathDoc(user.uid, nextPath);
+            return nextPath;
+          })
+        );
+      } else if (parts[0] === 'month' && parts.length >= 3) {
+        const monthId = Number(parts[1]);
+        const mTaskId = parts.slice(2).join(':');
+        setMonths((prev) =>
+          prev.map((m) => {
+            if (m.id !== monthId) return m;
+            const target = m.tasks.find((mt) => mt.id === mTaskId);
+            if (!target || target.done === isDone) return m;
+            const nextMonth = {
+              ...m,
+              tasks: m.tasks.map((mt) =>
+                mt.id === mTaskId ? { ...mt, done: isDone } : mt
+              ),
+            };
+            syncMonth(nextMonth);
+            return nextMonth;
+          })
+        );
+      }
+    }
   };
 
   const handleDeleteUnifiedTask = (id: string) => {
@@ -2134,6 +2322,7 @@ export default function App() {
             reflections={reflections}
             calendarEvents={calendarEvents}
             weeklyMeetings={weeklyMeetings}
+            cloudAttachments={cloudAttachments}
             onGoogleSignIn={handleGoogleSignIn}
             onNavigateTab={navigateToTab}
             onSelectHub={(hub, targetTab) => {
@@ -2249,9 +2438,11 @@ export default function App() {
               if (!target) return [];
               return unifiedTasks.filter(
                 (t) =>
-                  t.linkedLabel &&
-                  t.linkedLabel.trim().toLowerCase() ===
-                    target.title.trim().toLowerCase()
+                  t.projectId === `course:${target.id}` ||
+                  t.projectId?.startsWith(`course:${target.id}:`) ||
+                  (t.linkedLabel &&
+                    t.linkedLabel.trim().toLowerCase() ===
+                      target.title.trim().toLowerCase())
               );
             })()}
             linkedPaths={learningPaths.filter((p) =>
@@ -2270,6 +2461,7 @@ export default function App() {
             onJumpToMonth={handleJumpToMonth}
             onOpenPaths={() => navigateToTab('paths')}
             onOpenTasksTab={() => navigateToTab('tasks')}
+            onOpenCalendar={() => navigateToTab('calendar')}
             onOpenNoteById={handleOpenNoteById}
             onAddStructuredNote={handleAddStructuredNote}
             onUpdateBookNote={handleUpdateBookNote}
@@ -2309,13 +2501,19 @@ export default function App() {
             onRequireAuth={handleRequireAuth}
             paths={learningPaths}
             courses={courses}
+            unifiedTasks={unifiedTasks}
             hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
             activeHubFilter={activeHubFilter}
             onChangeHubFilter={setActiveHubFilter}
             onAddPath={handleAddLearningPath}
             onUpdatePath={handleUpdateLearningPath}
             onDeletePath={handleDeleteLearningPath}
+            onTogglePathStage={handleTogglePathStage}
+            onAddUnifiedTask={handleAddUnifiedTask}
+            onUpdateUnifiedTask={handleUpdateUnifiedTask}
             onOpenCourse={(courseId) => navigateToCourseRoute(courseId)}
+            onOpenCalendar={() => navigateToTab('calendar')}
+            onOpenTasks={() => navigateToTab('tasks')}
           />
         )}
 
@@ -2325,6 +2523,9 @@ export default function App() {
             canEdit={canEdit}
             onRequireAuth={handleRequireAuth}
             items={readingItems}
+            cloudAttachments={cloudAttachments}
+            courses={courses}
+            months={months}
             hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
             activeHubFilter={activeHubFilter}
             onChangeHubFilter={setActiveHubFilter}
@@ -2343,6 +2544,7 @@ export default function App() {
             projects={projects}
             months={months}
             courses={courses}
+            learningPaths={learningPaths}
             hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
             activeHubFilter={activeHubFilter}
             onChangeHubFilter={setActiveHubFilter}
@@ -2354,8 +2556,10 @@ export default function App() {
             onDeleteProject={handleDeleteProject}
             onToggleMonthTask={handleToggleMonthTask}
             onToggleCourseTask={handleToggleCourseTask}
+            onTogglePathStage={handleTogglePathStage}
             onJumpToMonth={handleJumpToMonth}
             onOpenCourse={(courseId) => navigateToCourseRoute(courseId)}
+            onOpenPath={() => navigateToTab('paths')}
             onOpenCalendar={() => navigateToTab('calendar')}
           />
         )}
@@ -2404,11 +2608,13 @@ export default function App() {
 
         {activeTab === 'calendar' && (
           <CalendarView
+            uid={user?.uid}
             canEdit={canEdit}
             onRequireAuth={handleRequireAuth}
             events={calendarEvents}
             months={months}
             courses={courses}
+            learningPaths={learningPaths}
             unifiedTasks={unifiedTasks}
             projects={projects}
             weeklyMeetings={weeklyMeetings}
@@ -2421,6 +2627,9 @@ export default function App() {
             onUpdateUnifiedTask={handleUpdateUnifiedTask}
             onDeleteUnifiedTask={handleDeleteUnifiedTask}
             onUpdateWeeklyMeeting={handleUpdateWeeklyMeeting}
+            onToggleCourseTask={handleToggleCourseTask}
+            onTogglePathStage={handleTogglePathStage}
+            onToggleMonthTask={handleToggleMonthTask}
             onJumpToMonth={handleJumpToMonth}
             onOpenMeetingsSection={() => {
               navigateToTab('overview');

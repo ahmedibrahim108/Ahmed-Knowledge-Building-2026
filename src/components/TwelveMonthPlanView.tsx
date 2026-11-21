@@ -1486,25 +1486,28 @@ export default function TwelveMonthPlanView({
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 shrink-0">
-                          {isPdf && onOpenPdf && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onOpenPdf({
-                                  title: res.title,
-                                  fileName: res.attachmentName || `${res.title}.pdf`,
-                                  resourceId: res.id,
-                                  storagePath: res.storagePath,
-                                  downloadUrl: res.downloadUrl,
-                                  contextLabel: `الشهر ${activeMonth.id}: ${activeMonth.theme}`,
-                                })
-                              }
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded cursor-pointer"
-                            >
-                              <Eye className="w-3 h-3" aria-hidden="true" />
-                              <span>فتح PDF</span>
-                            </button>
-                          )}
+                          {(isPdf || hasAttachment || Boolean(res.extractedPreview)) &&
+                            onOpenPdf && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onOpenPdf({
+                                    title: res.title,
+                                    fileName: res.attachmentName || `${res.title}.pdf`,
+                                    resourceId: res.id,
+                                    storagePath: res.storagePath,
+                                    downloadUrl: res.downloadUrl,
+                                    mimeType: res.mimeType,
+                                    fallbackText: res.extractedPreview,
+                                    contextLabel: `الشهر ${activeMonth.id}: ${activeMonth.theme}`,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded cursor-pointer"
+                              >
+                                <Eye className="w-3 h-3" aria-hidden="true" />
+                                <span>{isPdf ? 'عرض PDF' : 'عرض الملف'}</span>
+                              </button>
+                            )}
 
                           {res.extractedPreview && (
                             <>

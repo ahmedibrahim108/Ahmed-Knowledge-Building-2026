@@ -33,6 +33,25 @@ function stripExtension(name: string): string {
   return name.replace(/\.(docx|doc|txt|md|markdown|pdf|html|htm)$/i, '').trim();
 }
 
+export const BUNDLED_APP_DOCUMENTS: Array<{
+  id: string;
+  title: string;
+  fileName: string;
+  downloadUrl: string;
+  subtitle: string;
+  mimeType: string;
+}> = [
+  {
+    id: 'bundled-zoho-notebook-pdf',
+    title: 'المستند المرفق بالتطبيق (Untitled PDF)',
+    fileName: '_data_user_0_com.zoho.notebook_files_Untitled__1__6ee5100a.pdf',
+    downloadUrl:
+      '/assets/aistudio/_data_user_0_com.zoho.notebook_files_Untitled__1__6ee5100a.pdf',
+    subtitle: 'ملف PDF مرفق بالتطبيق · جاهز للعرض والتنزيل',
+    mimeType: 'application/pdf',
+  },
+];
+
 export function isPdfAttachment(fileName?: string, mimeType?: string): boolean {
   if (mimeType && mimeType.toLowerCase().includes('pdf')) return true;
   if (!fileName) return false;
@@ -198,6 +217,7 @@ export interface UploadedAttachmentResult {
   mimeType: string;
   sizeBytes: number;
   uploadedToCloud: boolean;
+  cloudErrorCode?: 'PERMISSION' | 'NETWORK' | 'SIZE_LIMIT';
 }
 
 function fileToDataUrl(file: Blob): Promise<string> {
@@ -283,20 +303,22 @@ export async function uploadResourceAttachment(
     storagePath = undefined;
   }
 
-  // Persist PDFs <= 4.5MB directly in Firestore (single doc <= 640KB or chunked subcollection)
+  let cloudErrorCode: UploadedAttachmentResult['cloudErrorCode'];
+
+  // Persist files <= 4.5MB directly in Firestore (single doc <= 850KB or chunked subcollection)
   // so mobile Android Chrome never fails due to Storage CORS or blocked blob fetches.
   if (file.size <= 4.5 * 1024 * 1024) {
     try {
       const dataUrl = await fileToDataUrl(file);
       if (dataUrl.length <= 850_000) {
+        // Omit chunkCount when single doc so BOTH old and new firestore.rules accept it
         await setDoc(doc(db, 'users', uid, 'attachments', safeId), {
           id: safeId,
           ownerId: uid,
           fileName: file.name.slice(0, 200),
           mimeType: mimeType.slice(0, 120),
-          sizeBytes: file.size,
+          sizeBytes: Math.round(file.size),
           dataUrl,
-          chunkCount: 0,
           updatedAt: serverTimestamp(),
         });
         uploadedToCloud = true;
@@ -307,7 +329,7 @@ export async function uploadResourceAttachment(
           ownerId: uid,
           fileName: file.name.slice(0, 200),
           mimeType: mimeType.slice(0, 120),
-          sizeBytes: file.size,
+          sizeBytes: Math.round(file.size),
           dataUrl: '',
           chunkCount,
           updatedAt: serverTimestamp(),
@@ -329,10 +351,21 @@ export async function uploadResourceAttachment(
         }
         await batch.commit();
         uploadedToCloud = true;
+      } else {
+        cloudErrorCode = 'SIZE_LIMIT';
       }
     } catch (err) {
+      const code = (err as { code?: string })?.code ?? '';
+      const msg = err instanceof Error ? err.message.toLowerCase() : '';
+      if (code === 'permission-denied' || msg.includes('permission')) {
+        cloudErrorCode = 'PERMISSION';
+      } else {
+        cloudErrorCode = 'NETWORK';
+      }
       console.warn('Firestore attachment backup failed:', err);
     }
+  } else if (!uploadedToCloud) {
+    cloudErrorCode = 'SIZE_LIMIT';
   }
 
   return {
@@ -341,6 +374,7 @@ export async function uploadResourceAttachment(
     mimeType,
     sizeBytes: file.size,
     uploadedToCloud,
+    cloudErrorCode,
   };
 }
 
@@ -560,6 +594,296 @@ export async function getPdfBlobForViewing(options: {
   return res.ok ? res.blob : null;
 }
 
+export type UniversalAttachmentLoadResult =
+  | {
+      ok: true;
+      kind: 'pdf';
+      data: Uint8Array;
+      blob: Blob;
+      mimeType: string;
+      fileName: string;
+      source: 'local' | 'firestore' | 'storage' | 'url';
+      sizeBytes: number;
+    }
+  | {
+      ok: true;
+      kind: 'docx' | 'text' | 'image';
+      blob: Blob;
+      mimeType: string;
+      fileName: string;
+      html?: string;
+      plainText?: string;
+      source: 'local' | 'firestore' | 'storage' | 'url';
+      sizeBytes: number;
+    }
+  | {
+      ok: false;
+      errorCode: 'NOT_FOUND' | 'INVALID_PDF' | 'NETWORK_OR_CORS' | 'PERMISSION';
+      message: string;
+      fallbackUrl?: string;
+    };
+
+async function fetchRawAttachmentBlob(options: {
+  resourceId?: string;
+  storagePath?: string;
+  downloadUrl?: string;
+}): Promise<
+  | { ok: true; blob: Blob; fileName?: string; mimeType?: string; source: 'local' | 'firestore' | 'storage' | 'url' }
+  | { ok: false; errorCode: 'NOT_FOUND' | 'NETWORK_OR_CORS' | 'PERMISSION'; message: string; fallbackUrl?: string }
+> {
+  if (options.resourceId) {
+    const local = await getLocalAttachmentBlob(options.resourceId);
+    if (local?.blob) {
+      return {
+        ok: true,
+        blob: local.blob,
+        fileName: local.name,
+        mimeType: local.type || local.blob.type,
+        source: 'local',
+      };
+    }
+  }
+
+  const uid = auth?.currentUser?.uid;
+  if (uid && options.resourceId) {
+    try {
+      const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+      const snap = await getDoc(doc(db, 'users', uid, 'attachments', safeId));
+      if (snap.exists()) {
+        const raw = snap.data() as {
+          dataUrl?: string;
+          chunkCount?: number;
+          fileName?: string;
+          mimeType?: string;
+        };
+        let combinedDataUrl = raw.dataUrl || '';
+        if (!combinedDataUrl && raw.chunkCount && raw.chunkCount > 0) {
+          const chunksSnap = await getDocs(
+            query(
+              collection(db, 'users', uid, 'attachments', safeId, 'chunks'),
+              where('ownerId', '==', uid)
+            )
+          );
+          if (!chunksSnap.empty) {
+            combinedDataUrl = chunksSnap.docs
+              .map((d) => d.data() as { chunkIndex: number; data: string })
+              .sort((a, b) => a.chunkIndex - b.chunkIndex)
+              .map((c) => c.data)
+              .join('');
+          }
+        }
+        if (combinedDataUrl) {
+          const rawBytes = decodeDataUrlToBytes(combinedDataUrl);
+          if (rawBytes) {
+            const mime = raw.mimeType || 'application/octet-stream';
+            const blob = new Blob([new Uint8Array(rawBytes)], { type: mime });
+            await saveLocalAttachment(options.resourceId, blob, raw.fileName);
+            return {
+              ok: true,
+              blob,
+              fileName: raw.fileName,
+              mimeType: mime,
+              source: 'firestore',
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed reading attachment from Firestore:', err);
+    }
+  }
+
+  let hadNetworkOrCorsError = false;
+  let hadPermissionError = false;
+
+  if (options.storagePath) {
+    try {
+      const blob = await getBlob(ref(storage, options.storagePath));
+      if (options.resourceId) {
+        await saveLocalAttachment(options.resourceId, blob);
+      }
+      return {
+        ok: true,
+        blob,
+        mimeType: blob.type || undefined,
+        source: 'storage',
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message.toLowerCase() : '';
+      if (msg.includes('unauthorized') || msg.includes('permission')) {
+        hadPermissionError = true;
+      } else {
+        hadNetworkOrCorsError = true;
+      }
+      console.warn('Failed reading attachment via Storage SDK:', err);
+    }
+  }
+
+  if (options.downloadUrl) {
+    try {
+      const res = await fetch(options.downloadUrl, {
+        credentials: options.downloadUrl.startsWith('/') ? 'same-origin' : 'omit',
+      });
+      if (!res.ok) {
+        return {
+          ok: false,
+          errorCode: res.status === 401 || res.status === 403 ? 'PERMISSION' : 'NETWORK_OR_CORS',
+          message:
+            res.status === 401 || res.status === 403
+              ? 'ليست لديك صلاحية قراءة هذا الملف مباشرة عبر الرابط.'
+              : `تعذّر تحميل الملف من الخادم (رمز ${res.status}).`,
+          fallbackUrl: options.downloadUrl,
+        };
+      }
+      const blob = await res.blob();
+      if (options.resourceId) {
+        await saveLocalAttachment(options.resourceId, blob);
+      }
+      return {
+        ok: true,
+        blob,
+        mimeType: blob.type || undefined,
+        source: 'url',
+      };
+    } catch (err) {
+      hadNetworkOrCorsError = true;
+      console.warn('Failed fetching attachment URL:', err);
+    }
+  }
+
+  if (hadPermissionError) {
+    return {
+      ok: false,
+      errorCode: 'PERMISSION',
+      message: 'تعذّر الوصول للملف بسبب صلاحيات التخزين. تأكد من تسجيل الدخول بنفس الحساب المالك.',
+      fallbackUrl: options.downloadUrl,
+    };
+  }
+
+  if (hadNetworkOrCorsError) {
+    return {
+      ok: false,
+      errorCode: 'NETWORK_OR_CORS',
+      message:
+        'منع المتصفح تحميل الملف مباشرة عبر الشبكة (CORS أو انقطاع الاتصال). يمكنك معاينته عبر الرابط أو تنزيله أدناه.',
+      fallbackUrl: options.downloadUrl,
+    };
+  }
+
+  return {
+    ok: false,
+    errorCode: 'NOT_FOUND',
+    message:
+      'تعذّر العثور على الملف على هذا الجهاز أو في السحابة. إذا رُفع الملف على جهاز آخر قبل تفعيل قواعد المزامنة، أعد رفعه.',
+    fallbackUrl: options.downloadUrl,
+  };
+}
+
+export async function loadAnyAttachmentForViewing(options: {
+  resourceId?: string;
+  fileName?: string;
+  mimeType?: string;
+  storagePath?: string;
+  downloadUrl?: string;
+  fallbackText?: string;
+}): Promise<UniversalAttachmentLoadResult> {
+  const rawRes = await fetchRawAttachmentBlob(options);
+  if (!rawRes.ok) {
+    if (options.fallbackText?.trim()) {
+      const textBlob = new Blob([options.fallbackText], { type: 'text/plain;charset=utf-8' });
+      return {
+        ok: true,
+        kind: 'text',
+        blob: textBlob,
+        mimeType: 'text/plain;charset=utf-8',
+        fileName: options.fileName || 'document.txt',
+        plainText: options.fallbackText,
+        source: 'local',
+        sizeBytes: textBlob.size,
+      };
+    }
+    return rawRes;
+  }
+
+  const effectiveName = rawRes.fileName || options.fileName || 'document';
+  const effectiveMime = (rawRes.mimeType || options.mimeType || rawRes.blob.type || '').toLowerCase();
+  const ab = await rawRes.blob.arrayBuffer();
+  const bytes = new Uint8Array(ab);
+  const normPdf = normalizePdfBytes(bytes);
+  const looksLikePdf =
+    normPdf.valid ||
+    isPdfAttachment(effectiveName, effectiveMime);
+
+  if (normPdf.valid) {
+    return {
+      ok: true,
+      kind: 'pdf',
+      data: normPdf.bytes,
+      blob: normPdf.blob,
+      mimeType: 'application/pdf',
+      fileName: effectiveName,
+      source: rawRes.source,
+      sizeBytes: normPdf.bytes.byteLength,
+    };
+  }
+
+  if (looksLikePdf) {
+    return {
+      ok: false,
+      errorCode: 'INVALID_PDF',
+      message:
+        'الرابط أو الملف المرفق لا يحمل ترويسة PDF صالحة (قد يكون صفحة ويب خارجية). يمكنك فتحه في نافذة جديدة.',
+      fallbackUrl: options.downloadUrl,
+    };
+  }
+
+  const lowerName = effectiveName.toLowerCase();
+  if (effectiveMime.startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(lowerName)) {
+    return {
+      ok: true,
+      kind: 'image',
+      blob: rawRes.blob,
+      mimeType: effectiveMime || 'image/png',
+      fileName: effectiveName,
+      source: rawRes.source,
+      sizeBytes: rawRes.blob.size,
+    };
+  }
+
+  if (lowerName.endsWith('.docx') || effectiveMime.includes('wordprocessingml')) {
+    try {
+      const mRes = await mammoth.convertToHtml({ arrayBuffer: ab });
+      const html = ensureRichHtml(mRes.value || '');
+      const plainText = richHtmlToPlainText(html);
+      return {
+        ok: true,
+        kind: 'docx',
+        blob: rawRes.blob,
+        mimeType: effectiveMime || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        fileName: effectiveName,
+        html,
+        plainText,
+        source: rawRes.source,
+        sizeBytes: rawRes.blob.size,
+      };
+    } catch {
+      // Fallback to text extraction below
+    }
+  }
+
+  const textStr = await rawRes.blob.text();
+  return {
+    ok: true,
+    kind: 'text',
+    blob: rawRes.blob,
+    mimeType: effectiveMime || 'text/plain;charset=utf-8',
+    fileName: effectiveName,
+    plainText: textStr || options.fallbackText || '',
+    source: rawRes.source,
+    sizeBytes: rawRes.blob.size,
+  };
+}
+
 export async function downloadResourceAttachment(options: {
   resourceId?: string;
   fileName: string;
@@ -570,27 +894,27 @@ export async function downloadResourceAttachment(options: {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = options.fileName || 'document.pdf';
+    a.download = options.fileName || 'document';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   };
 
-  const loaded = await loadPdfBytesForViewing({
+  const rawRes = await fetchRawAttachmentBlob({
     resourceId: options.resourceId,
     storagePath: options.storagePath,
     downloadUrl: options.downloadUrl,
   });
-  if (loaded.ok) {
-    triggerBlobDownload(loaded.blob);
+  if (rawRes.ok) {
+    triggerBlobDownload(rawRes.blob);
     return true;
   }
 
   if (options.downloadUrl) {
     const a = document.createElement('a');
     a.href = options.downloadUrl;
-    a.download = options.fileName || 'document.pdf';
+    a.download = options.fileName || 'document';
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
     document.body.appendChild(a);

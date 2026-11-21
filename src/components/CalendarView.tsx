@@ -28,13 +28,13 @@ import ConfirmDialog from './ConfirmDialog';
 import {
   CalendarCategory,
   CalendarColor,
-  CalendarDensity,
   CalendarEvent,
   CalendarPreferences,
   CalendarViewMode,
   DEFAULT_CALENDAR_PREFERENCES,
   LEARNING_HUBS,
   LearningHubId,
+  LearningPath,
   MonthPlan,
   PersonalCourse,
   PracticalProject,
@@ -52,11 +52,13 @@ import {
 } from '../data/curriculumData';
 
 interface CalendarViewProps {
+  uid?: string;
   canEdit: boolean;
   onRequireAuth: () => void;
   events: CalendarEvent[];
   months: MonthPlan[];
   courses: PersonalCourse[];
+  learningPaths?: LearningPath[];
   unifiedTasks: UnifiedTask[];
   projects: PracticalProject[];
   weeklyMeetings: WeeklyMeeting[];
@@ -69,6 +71,9 @@ interface CalendarViewProps {
   onUpdateUnifiedTask: (id: string, updates: Partial<UnifiedTask>) => void;
   onDeleteUnifiedTask: (id: string) => void;
   onUpdateWeeklyMeeting?: (id: string, updates: Partial<WeeklyMeeting>) => void;
+  onToggleCourseTask?: (courseId: number, taskId: string) => void;
+  onTogglePathStage?: (pathId: string, stageId: string) => void;
+  onToggleMonthTask?: (monthId: number, taskId: string) => void;
   onJumpToMonth: (monthId: number) => void;
   onOpenMeetingsSection?: () => void;
 }
@@ -127,7 +132,14 @@ type DragPayload =
   | { kind: 'task'; id: string }
   | { kind: 'event'; id: string }
   | { kind: 'meeting'; meetingId: string; occurrenceKey: string }
-  | { kind: 'plan_task'; text: string; sourceLabel: string };
+  | {
+      kind: 'plan_task';
+      text: string;
+      sourceLabel: string;
+      categoryLabel: string;
+      canonicalProjectId: string;
+      hubId: LearningHubId;
+    };
 
 const WEEKDAY_NAMES_BY_JS_DAY = [
   'الأحد',
@@ -285,11 +297,13 @@ function isWeekendDay(jsDay: number, weekStartDay: WeekStartDay): boolean {
 }
 
 export default function CalendarView({
+  uid,
   canEdit,
   onRequireAuth,
   events,
   months,
   courses,
+  learningPaths = [],
   unifiedTasks,
   projects,
   weeklyMeetings,
@@ -302,9 +316,15 @@ export default function CalendarView({
   onUpdateUnifiedTask,
   onDeleteUnifiedTask,
   onUpdateWeeklyMeeting,
+  onToggleCourseTask,
+  onTogglePathStage,
+  onToggleMonthTask,
   onOpenMeetingsSection,
 }: CalendarViewProps) {
   const todayKey = useMemo(() => getTodayDateKey(), []);
+  const calViewStorageKey = `mizan_cal_view_${uid || 'guest'}`;
+  const calPrefsStorageKey = `mizan_cal_prefs_${uid || 'guest'}`;
+
   const savedCalPrefs: CalendarPreferences = useMemo(
     () => ({
       ...DEFAULT_CALENDAR_PREFERENCES,
@@ -313,24 +333,100 @@ export default function CalendarView({
     [preferences.calendarPrefs]
   );
 
-  const [localPrefs, setLocalPrefs] =
-    useState<CalendarPreferences>(savedCalPrefs);
+  const readStoredViewMode = (): CalendarViewMode | null => {
+    try {
+      const v = localStorage.getItem(calViewStorageKey);
+      if (v === 'day' || v === 'week' || v === 'month' || v === 'year') {
+        return v;
+      }
+    } catch {
+      // Ignore storage access restrictions
+    }
+    return null;
+  };
+
+  const readStoredCalPrefs = (): CalendarPreferences | null => {
+    try {
+      const raw = localStorage.getItem(calPrefsStorageKey);
+      if (!raw) return null;
+      return {
+        ...DEFAULT_CALENDAR_PREFERENCES,
+        ...(JSON.parse(raw) as Partial<CalendarPreferences>),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  // Dedicated independent viewMode state so remote snapshot rollbacks (or older Firestore rules)
+  // can NEVER snap the calendar back to Day/Today after clicking Week, Month, or Year.
+  const [viewMode, setViewMode] = useState<CalendarViewMode>(
+    () => readStoredViewMode() ?? savedCalPrefs.defaultView ?? 'month'
+  );
+  const [localPrefs, setLocalPrefs] = useState<CalendarPreferences>(
+    () => readStoredCalPrefs() ?? savedCalPrefs
+  );
+  const userTouchedViewRef = useRef(false);
+  const hydratedPrefsUidRef = useRef<string | undefined>(undefined);
+
   useEffect(() => {
-    setLocalPrefs(savedCalPrefs);
-  }, [savedCalPrefs]);
+    if (hydratedPrefsUidRef.current !== uid) {
+      hydratedPrefsUidRef.current = uid;
+      userTouchedViewRef.current = false;
+      const storedV = readStoredViewMode();
+      if (storedV) {
+        setViewMode(storedV);
+      } else if (preferences.calendarPrefs?.defaultView) {
+        setViewMode(preferences.calendarPrefs.defaultView);
+      }
+      const storedP = readStoredCalPrefs();
+      setLocalPrefs(storedP ? { ...savedCalPrefs, ...storedP } : savedCalPrefs);
+      return;
+    }
+    if (!userTouchedViewRef.current && preferences.calendarPrefs) {
+      const storedP = readStoredCalPrefs();
+      if (!storedP) {
+        setLocalPrefs(savedCalPrefs);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uid, preferences.calendarPrefs]);
 
   const updateCalendarPref = <K extends keyof CalendarPreferences>(
     key: K,
     val: CalendarPreferences[K]
   ) => {
+    userTouchedViewRef.current = true;
     const next = { ...localPrefs, [key]: val };
     setLocalPrefs(next);
+    try {
+      localStorage.setItem(calPrefsStorageKey, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
     if (canEdit) {
       onUpdatePreferences({ calendarPrefs: next });
     }
   };
 
-  const viewMode = localPrefs.defaultView;
+  const [cursorDate, setCursorDate] = useState<Date>(() => new Date());
+  const [selectedDateKey, setSelectedDateKey] = useState<string>(todayKey);
+
+  const handleSelectViewMode = (nextView: CalendarViewMode) => {
+    userTouchedViewRef.current = true;
+    // When leaving day view for week/month/year, anchor cursorDate to selectedDateKey's period
+    if (viewMode === 'day' && nextView !== 'day' && selectedDateKey) {
+      setCursorDate(parseDateKey(selectedDateKey));
+    }
+    setViewMode(nextView);
+    try {
+      localStorage.setItem(calViewStorageKey, nextView);
+    } catch {
+      // ignore
+    }
+    updateCalendarPref('defaultView', nextView);
+  };
+
   const density = localPrefs.density;
   const showCompleted = localPrefs.showCompleted;
   const showWeekends = localPrefs.showWeekends;
@@ -339,8 +435,6 @@ export default function CalendarView({
   const filterPriority = localPrefs.filterPriority;
   const filterStatus = localPrefs.filterStatus;
 
-  const [cursorDate, setCursorDate] = useState<Date>(() => new Date());
-  const [selectedDateKey, setSelectedDateKey] = useState<string>(todayKey);
   const [mobilePane, setMobilePane] = useState<'calendar' | 'tasks'>('calendar');
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
 
@@ -450,33 +544,68 @@ export default function CalendarView({
     [weeklyMeetings, rangeBounds.startKey, rangeBounds.endKey]
   );
 
-  // Pending tasks from plan & courses
+  // Pending tasks from plan, courses, and learning paths (excluding ones already scheduled on Calendar)
   const pendingPlanTasks = useMemo(() => {
-    const list: Array<{ id: string; sourceLabel: string; text: string }> = [];
-    for (const m of months) {
-      for (const t of m.tasks) {
-        if (!t.done) {
+    const scheduledCanonicalIds = new Set(
+      unifiedTasks
+        .filter((t) => Boolean(t.scheduledDate) && Boolean(t.projectId))
+        .map((t) => t.projectId!)
+    );
+    const list: Array<{
+      id: string;
+      sourceLabel: string;
+      categoryLabel: string;
+      text: string;
+      canonicalProjectId: string;
+      hubId: LearningHubId;
+    }> = [];
+    for (const c of courses) {
+      for (const t of c.tasks) {
+        const key = `course:${c.id}:${t.id}`;
+        if (!t.done && !scheduledCanonicalIds.has(key)) {
           list.push({
-            id: `m-${m.id}-${t.id}`,
-            sourceLabel: `الوحدة ${m.id}`,
+            id: key,
+            sourceLabel: c.title,
+            categoryLabel: 'كورس',
             text: t.text,
+            canonicalProjectId: key,
+            hubId: c.hubId ?? 'knowledge',
           });
         }
       }
     }
-    for (const c of courses) {
-      for (const t of c.tasks) {
-        if (!t.done) {
+    for (const p of learningPaths) {
+      for (const s of p.stages) {
+        const key = `path:${p.id}:${s.id}`;
+        if (!s.done && !scheduledCanonicalIds.has(key)) {
           list.push({
-            id: `c-${c.id}-${t.id}`,
-            sourceLabel: c.title,
+            id: key,
+            sourceLabel: p.title,
+            categoryLabel: 'مسار تعليمي',
+            text: s.title,
+            canonicalProjectId: key,
+            hubId: p.hubId ?? 'knowledge',
+          });
+        }
+      }
+    }
+    for (const m of months) {
+      for (const t of m.tasks) {
+        const key = `month:${m.id}:${t.id}`;
+        if (!t.done && !scheduledCanonicalIds.has(key)) {
+          list.push({
+            id: key,
+            sourceLabel: `الوحدة ${m.id}: ${m.theme}`,
+            categoryLabel: 'خطة 12 شهرًا',
             text: t.text,
+            canonicalProjectId: key,
+            hubId: m.hubId ?? 'knowledge',
           });
         }
       }
     }
     return list;
-  }, [months, courses]);
+  }, [months, courses, learningPaths, unifiedTasks]);
 
   // Unscheduled Tasks (Task Panel)
   const unscheduledTasks = useMemo(() => {
@@ -901,20 +1030,38 @@ export default function CalendarView({
       onUpdateWeeklyMeeting(mtg.id, { exceptions: nextExceptions });
     } else if (payload.kind === 'plan_task') {
       const st = targetStartTime || '';
-      onAddUnifiedTask({
-        title: payload.text,
-        description: `مجدولة من ${payload.sourceLabel}`,
-        hubId: filterHub === 'all' ? 'knowledge' : filterHub,
-        categoryLabel: payload.sourceLabel,
-        priority: 'medium',
-        status: 'todo',
-        dueDate: targetDateKey,
-        scheduledDate: targetDateKey,
-        startTime: st,
-        endTime: st ? computeEndTimeFromMinutes(st, 60) : '',
-        durationMinutes: 60,
-        linkedLabel: payload.sourceLabel,
-      });
+      const existingLinked = unifiedTasks.find(
+        (ut) => ut.projectId && ut.projectId === payload.canonicalProjectId
+      );
+      if (existingLinked) {
+        const dur =
+          existingLinked.durationMinutes && existingLinked.durationMinutes > 0
+            ? existingLinked.durationMinutes
+            : 60;
+        onUpdateUnifiedTask(existingLinked.id, {
+          scheduledDate: targetDateKey,
+          dueDate: targetDateKey,
+          startTime: st,
+          endTime: st ? computeEndTimeFromMinutes(st, dur) : '',
+          durationMinutes: dur,
+        });
+      } else {
+        onAddUnifiedTask({
+          title: payload.text,
+          description: `مرتبط بـ: ${payload.sourceLabel}`,
+          hubId: payload.hubId || (filterHub === 'all' ? 'knowledge' : filterHub),
+          categoryLabel: payload.categoryLabel || payload.sourceLabel,
+          priority: 'medium',
+          status: 'todo',
+          dueDate: targetDateKey,
+          scheduledDate: targetDateKey,
+          startTime: st,
+          endTime: st ? computeEndTimeFromMinutes(st, 60) : '',
+          durationMinutes: 60,
+          projectId: payload.canonicalProjectId,
+          linkedLabel: payload.sourceLabel,
+        });
+      }
     }
     setSelectedDateKey(targetDateKey);
   };
@@ -971,6 +1118,20 @@ export default function CalendarView({
     const endTime = editTime ? computeEndTimeFromMinutes(editTime, editDuration) : '';
 
     if (activeItem.kind === 'task') {
+      let nextLinkedLabel = activeItem.raw.linkedLabel || '';
+      if (editProjectId !== (activeItem.raw.projectId || '')) {
+        if (!editProjectId) {
+          nextLinkedLabel = '';
+        } else if (editProjectId.startsWith('course:')) {
+          const cid = parseInt(editProjectId.split(':')[1] || '', 10);
+          nextLinkedLabel = courses.find((c) => c.id === cid)?.title || nextLinkedLabel;
+        } else if (editProjectId.startsWith('path:')) {
+          const pid = editProjectId.split(':')[1] || '';
+          nextLinkedLabel = learningPaths.find((p) => p.id === pid)?.title || nextLinkedLabel;
+        } else {
+          nextLinkedLabel = projects.find((p) => p.id === editProjectId)?.title || nextLinkedLabel;
+        }
+      }
       onUpdateUnifiedTask(activeItem.id, {
         title: cleanTitle,
         scheduledDate: editDate,
@@ -983,6 +1144,7 @@ export default function CalendarView({
         status: editStatus,
         hubId: editHub,
         projectId: editProjectId,
+        linkedLabel: nextLinkedLabel,
         description: editNotes.trim(),
       });
     } else if (activeItem.kind === 'event') {
@@ -1366,7 +1528,7 @@ export default function CalendarView({
                 <button
                   key={v.id}
                   type="button"
-                  onClick={() => updateCalendarPref('defaultView', v.id)}
+                  onClick={() => handleSelectViewMode(v.id)}
                   className={`px-3 py-1.5 min-h-[36px] text-xs font-medium rounded-md transition-colors cursor-pointer ${
                     viewMode === v.id
                       ? 'bg-white text-[#1E3A5F] shadow-xs font-semibold'
@@ -1751,6 +1913,12 @@ export default function CalendarView({
                             >
                               {pMeta.label}
                             </span>
+                            {task.linkedLabel && (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border bg-slate-50 text-[#1E3A5F] border-slate-200 font-medium truncate max-w-[140px]">
+                                <Link2 className="w-2.5 h-2.5 shrink-0" />
+                                <span className="truncate">{task.linkedLabel}</span>
+                              </span>
+                            )}
                             {task.deadline && (
                               <span
                                 className={`px-1.5 py-0.5 rounded border font-medium tabular-nums ${
@@ -1848,20 +2016,20 @@ export default function CalendarView({
             </div>
           )}
 
-          {/* Optional Study Plan & Course Tasks Queue */}
+          {/* Optional Study Plan, Courses & Learning Paths Tasks Queue */}
           <div className="pt-3 border-t border-slate-200 space-y-2">
             <button
               type="button"
               onClick={() => setShowPlanTasksDrawer((v) => !v)}
               className="w-full flex items-center justify-between text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
             >
-              <span>مهام الخطة والكورسات ({pendingPlanTasks.length})</span>
+              <span>مهام الكورسات والمسارات والخطة ({pendingPlanTasks.length})</span>
               <span>{showPlanTasksDrawer ? 'إخفاء' : 'عرض للسحب'}</span>
             </button>
 
             {showPlanTasksDrawer && (
-              <div className="space-y-1.5 max-h-[220px] overflow-y-auto pt-1">
-                {pendingPlanTasks.slice(0, 20).map((pt) => (
+              <div className="space-y-1.5 max-h-[240px] overflow-y-auto pt-1">
+                {pendingPlanTasks.slice(0, 30).map((pt) => (
                   <div
                     key={pt.id}
                     draggable={canEdit}
@@ -1870,13 +2038,36 @@ export default function CalendarView({
                         kind: 'plan_task',
                         text: pt.text,
                         sourceLabel: pt.sourceLabel,
+                        categoryLabel: pt.categoryLabel,
+                        canonicalProjectId: pt.canonicalProjectId,
+                        hubId: pt.hubId,
                       })
                     }
                     className="p-2 bg-slate-50 border border-slate-200 rounded-md flex items-center justify-between gap-2 text-[11px] cursor-grab"
                   >
+                    <button
+                      type="button"
+                      disabled={!canEdit}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!canEdit) return onRequireAuth();
+                        const parts = pt.canonicalProjectId.split(':');
+                        if (parts[0] === 'course' && parts.length >= 3) {
+                          onToggleCourseTask?.(Number(parts[1]), parts.slice(2).join(':'));
+                        } else if (parts[0] === 'path' && parts.length >= 3) {
+                          onTogglePathStage?.(parts[1], parts.slice(2).join(':'));
+                        } else if (parts[0] === 'month' && parts.length >= 3) {
+                          onToggleMonthTask?.(Number(parts[1]), parts.slice(2).join(':'));
+                        }
+                      }}
+                      aria-label={`إتمام ${pt.text}`}
+                      className="text-slate-400 hover:text-emerald-700 shrink-0 cursor-pointer"
+                    >
+                      <Square className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
                     <div className="min-w-0 flex-1">
                       <span className="block text-[10px] font-semibold text-[#1E3A5F] truncate">
-                        {pt.sourceLabel}
+                        {pt.categoryLabel} · {pt.sourceLabel}
                       </span>
                       <p className="text-slate-800 truncate">{pt.text}</p>
                     </div>
@@ -1884,19 +2075,33 @@ export default function CalendarView({
                       type="button"
                       onClick={() => {
                         if (!canEdit) return onRequireAuth();
-                        onAddUnifiedTask({
-                          title: pt.text,
-                          description: `مجدولة من ${pt.sourceLabel}`,
-                          hubId: 'knowledge',
-                          categoryLabel: pt.sourceLabel,
-                          priority: 'medium',
-                          status: 'todo',
-                          dueDate: selectedDateKey,
-                          scheduledDate: selectedDateKey,
-                          startTime: '',
-                          durationMinutes: 60,
-                          linkedLabel: pt.sourceLabel,
-                        });
+                        const existingLinked = unifiedTasks.find(
+                          (ut) =>
+                            ut.projectId && ut.projectId === pt.canonicalProjectId
+                        );
+                        if (existingLinked) {
+                          onUpdateUnifiedTask(existingLinked.id, {
+                            scheduledDate: selectedDateKey,
+                            dueDate: selectedDateKey,
+                            durationMinutes: existingLinked.durationMinutes || 60,
+                          });
+                        } else {
+                          onAddUnifiedTask({
+                            title: pt.text,
+                            description: `مرتبط بـ: ${pt.sourceLabel}`,
+                            hubId: pt.hubId,
+                            categoryLabel: pt.categoryLabel,
+                            priority: 'medium',
+                            status: 'todo',
+                            dueDate: selectedDateKey,
+                            scheduledDate: selectedDateKey,
+                            startTime: '',
+                            durationMinutes: 60,
+                            projectId: pt.canonicalProjectId,
+                            linkedLabel: pt.sourceLabel,
+                          });
+                        }
+                        setMobilePane('calendar');
                       }}
                       className="px-2 py-1 text-[10px] font-semibold bg-white border border-slate-300 text-[#1E3A5F] rounded shrink-0 cursor-pointer"
                     >
@@ -2069,7 +2274,7 @@ export default function CalendarView({
                           type="button"
                           onClick={() => {
                             setSelectedDateKey(wd.dateKey);
-                            updateCalendarPref('defaultView', 'day');
+                            handleSelectViewMode('day');
                           }}
                           className="w-full text-right flex items-center justify-between gap-1 cursor-pointer"
                         >
@@ -2288,7 +2493,7 @@ export default function CalendarView({
                             onClick={(e) => {
                               e.stopPropagation();
                               setSelectedDateKey(cell.dateKey);
-                              updateCalendarPref('defaultView', 'day');
+                              handleSelectViewMode('day');
                             }}
                             className="text-[10px] font-semibold text-[#1E3A5F] hover:underline px-1 cursor-pointer"
                           >
@@ -2327,7 +2532,7 @@ export default function CalendarView({
                         type="button"
                         onClick={() => {
                           setCursorDate(new Date(year, mIdx, 1));
-                          updateCalendarPref('defaultView', 'month');
+                          handleSelectViewMode('month');
                         }}
                         className="text-xs font-bold text-[#1E3A5F] hover:underline cursor-pointer"
                       >
@@ -2364,7 +2569,7 @@ export default function CalendarView({
                             onClick={() => {
                               setSelectedDateKey(dKey);
                               setCursorDate(parseDateKey(dKey));
-                              updateCalendarPref('defaultView', 'day');
+                              handleSelectViewMode('day');
                             }}
                             className={`h-6 rounded text-[10px] font-medium tabular-nums flex items-center justify-center relative cursor-pointer ${heatClass} ${
                               isToday ? 'ring-2 ring-amber-500 font-bold' : ''
@@ -2394,7 +2599,7 @@ export default function CalendarView({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => updateCalendarPref('defaultView', 'day')}
+                    onClick={() => handleSelectViewMode('day')}
                     className="text-[11px] font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
                   >
                     فتح تفصيليًا ←
@@ -2829,19 +3034,51 @@ export default function CalendarView({
                   />
                 </label>
                 <label className="block text-[11px] text-slate-600">
-                  المشروع
+                  الربط (مشروع / كورس / مسار)
                   <select
                     disabled={!canEdit}
                     value={editProjectId}
                     onChange={(e) => setEditProjectId(e.target.value)}
                     className="mt-1 w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
                   >
-                    <option value="">بدون مشروع</option>
-                    {projects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.title}
-                      </option>
-                    ))}
+                    <option value="">بدون ربط</option>
+                    {editProjectId &&
+                      !projects.some((p) => p.id === editProjectId) &&
+                      !courses.some((c) => `course:${c.id}` === editProjectId) &&
+                      !learningPaths.some((lp) => `path:${lp.id}` === editProjectId) && (
+                        <option value={editProjectId}>
+                          {activeItem.kind === 'task' && activeItem.raw.linkedLabel
+                            ? `مرتبط: ${activeItem.raw.linkedLabel}`
+                            : editProjectId}
+                        </option>
+                      )}
+                    {projects.length > 0 && (
+                      <optgroup label="المشاريع">
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {courses.length > 0 && (
+                      <optgroup label="الكورسات">
+                        {courses.map((c) => (
+                          <option key={`course:${c.id}`} value={`course:${c.id}`}>
+                            {c.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {learningPaths.length > 0 && (
+                      <optgroup label="المسارات التعليمية">
+                        {learningPaths.map((lp) => (
+                          <option key={`path:${lp.id}`} value={`path:${lp.id}`}>
+                            {lp.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </label>
               </div>

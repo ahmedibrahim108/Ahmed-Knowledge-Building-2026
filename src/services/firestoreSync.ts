@@ -1717,6 +1717,21 @@ export async function saveUserPreferencesDoc(
   try {
     await setDoc(doc(db, 'users', uid, 'preferences', 'settings'), p);
   } catch (error) {
+    const code = (error as { code?: string })?.code ?? '';
+    const msg = error instanceof Error ? error.message.toLowerCase() : '';
+    const isPerm = code === 'permission-denied' || msg.includes('permission') || msg.includes('insufficient permissions');
+    if (isPerm) {
+      // Fallback for older deployed firestore.rules that do not allow calendarPrefs yet
+      try {
+        const legacyPayload = { ...p } as Record<string, unknown>;
+        delete legacyPayload.calendarPrefs;
+        await setDoc(doc(db, 'users', uid, 'preferences', 'settings'), legacyPayload);
+        return;
+      } catch (err2) {
+        console.warn('Firestore preferences fallback write skipped:', err2);
+        return;
+      }
+    }
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
@@ -1927,4 +1942,46 @@ export async function deleteWeeklyMeetingDoc(
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
+}
+
+export interface CloudAttachmentItem {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  updatedAtMs: number;
+}
+
+export function subscribeCloudAttachments(
+  uid: string,
+  onData: (items: CloudAttachmentItem[]) => void
+): () => void {
+  const q = query(
+    collection(db, 'users', uid, 'attachments'),
+    where('ownerId', '==', uid)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const items: CloudAttachmentItem[] = snap.docs
+        .map((d) => {
+          const raw = d.data() as Record<string, unknown>;
+          const updatedAt = raw.updatedAt as { toMillis?: () => number } | undefined;
+          return {
+            id: String(raw.id ?? d.id),
+            fileName: String(raw.fileName || 'مستند مرفق'),
+            mimeType: String(raw.mimeType || 'application/pdf'),
+            sizeBytes: Number(raw.sizeBytes ?? 0),
+            updatedAtMs:
+              typeof updatedAt?.toMillis === 'function' ? updatedAt.toMillis() : 0,
+          };
+        })
+        .sort((a, b) => b.updatedAtMs - a.updatedAtMs);
+      onData(items);
+    },
+    (err) => {
+      console.warn('Could not subscribe to user attachments:', err);
+      onData([]);
+    }
+  );
 }

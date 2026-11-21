@@ -68,6 +68,8 @@ export default function ReadAloudButton({
   const [checkingCache, setCheckingCache] = useState(false);
   const [hasCachedAudio, setHasCachedAudio] = useState(false);
   const [cacheSource, setCacheSource] = useState<'local' | 'cloud' | null>(null);
+  const [cloudSaved, setCloudSaved] = useState<boolean | null>(null);
+  const [isStaleContent, setIsStaleContent] = useState(false);
   const [cacheId, setCacheId] = useState<string>('');
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -152,6 +154,8 @@ export default function ReadAloudButton({
     setStatus('idle');
     setHasCachedAudio(false);
     setCacheSource(null);
+    setCloudSaved(null);
+    setIsStaleContent(false);
     setCacheId('');
     setErrorMsg(null);
 
@@ -168,6 +172,8 @@ export default function ReadAloudButton({
         if (cancelled || !cached) return;
         setHasCachedAudio(true);
         setCacheSource(cached.source);
+        setCloudSaved(cached.cloudSaved ?? cached.source === 'cloud');
+        setIsStaleContent(Boolean(cached.isStaleContent));
         setCacheId(cached.cacheId);
         if (cached.durationSeconds && cached.durationSeconds > 0) {
           setDuration(cached.durationSeconds);
@@ -346,6 +352,8 @@ export default function ReadAloudButton({
       if (cached) {
         setHasCachedAudio(true);
         setCacheSource(cached.source);
+        setCloudSaved(cached.cloudSaved ?? cached.source === 'cloud');
+        setIsStaleContent(Boolean(cached.isStaleContent));
         setCacheId(cached.cacheId);
         cacheIdRef.current = cached.cacheId;
         if (cached.durationSeconds && cached.durationSeconds > 0) {
@@ -391,6 +399,11 @@ export default function ReadAloudButton({
       }
       if (!res.ok || !data.audioBase64) {
         if (playBrowserSpeechFallback(cleanText)) {
+          setErrorMsg(
+            data.error
+              ? `تم التشغيل بصوت المتصفح المؤقت (تعذّر خدمة AI الصوتية: ${data.error}).`
+              : 'تم التشغيل بصوت المتصفح المؤقت فقط — لم يُحفظ ملف صوتي بالذكاء الاصطناعي في قاعدة البيانات.'
+          );
           return;
         }
         throw new Error(data.error || 'تعذّر توليد الصوت حاليًا.');
@@ -407,15 +420,25 @@ export default function ReadAloudButton({
       );
       setHasCachedAudio(true);
       setCacheSource(saved.source);
+      setCloudSaved(Boolean(saved.cloudSaved));
+      setIsStaleContent(false);
       setCacheId(saved.cacheId);
       cacheIdRef.current = saved.cacheId;
       if (saved.durationSeconds && saved.durationSeconds > 0) {
         setDuration(saved.durationSeconds);
       }
+      if (saved.cloudErrorCode === 'PERMISSION') {
+        setErrorMsg(
+          'تم حفظ الصوت على هذا الجهاز، لكن تعذّرت المزامنة لقاعدة البيانات بسبب صلاحيات Firestore Rules.'
+        );
+      }
       onAudioSaved?.();
       await attachBlobToAudioAndPlay(saved.blob, 0, playbackRate);
     } catch (err) {
       if (playBrowserSpeechFallback(cleanText)) {
+        setErrorMsg(
+          'تم التشغيل بصوت المتصفح المؤقت فقط — لم يُحفظ ملف صوتي بالذكاء الاصطناعي في قاعدة البيانات.'
+        );
         return;
       }
       setErrorMsg(
@@ -695,14 +718,25 @@ export default function ReadAloudButton({
       )}
 
       {hasCachedAudio && status === 'ready' && (
-        <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700">
-          <Database className="w-2.5 h-2.5" aria-hidden="true" />
-          <span>
-            {cacheSource === 'cloud'
-              ? 'محفوظ سحابيًا — يعمل على جميع أجهزتك بدون إعادة توليد'
-              : 'محفوظ وجاهز للتشغيل الفوري'}
+        <div className="flex flex-wrap items-center gap-1.5 justify-end">
+          <span
+            className={`inline-flex items-center gap-1 text-[10px] font-medium ${
+              cloudSaved === false ? 'text-amber-700' : 'text-emerald-700'
+            }`}
+          >
+            <Database className="w-2.5 h-2.5" aria-hidden="true" />
+            <span>
+              {cloudSaved || cacheSource === 'cloud'
+                ? 'محفوظ في قاعدة البيانات — يفتح تلقائيًا في كل مرة بدون إعادة إنشاء'
+                : 'محفوظ محليًا على هذا الجهاز (جاهز للتشغيل)'}
+            </span>
           </span>
-        </span>
+          {isStaleContent && (
+            <span className="text-[10px] text-amber-700 font-medium">
+              · عُدّل النص (اضغط ↻ للتحديث إذا رغبت)
+            </span>
+          )}
+        </div>
       )}
 
       {errorMsg && (

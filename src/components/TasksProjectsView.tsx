@@ -6,7 +6,9 @@ import {
   CheckCircle2,
   CheckSquare,
   Clock,
+  Compass,
   Edit3,
+  Link2,
   ListTodo,
   Plus,
   Save,
@@ -17,6 +19,7 @@ import {
 import {
   LEARNING_HUBS,
   LearningHubId,
+  LearningPath,
   MonthPlan,
   PersonalCourse,
   PracticalProject,
@@ -37,6 +40,7 @@ interface TasksProjectsViewProps {
   projects: PracticalProject[];
   months: MonthPlan[];
   courses: PersonalCourse[];
+  learningPaths?: LearningPath[];
   hubCategories: Record<LearningHubId, string[]>;
   activeHubFilter: LearningHubId | 'all';
   onChangeHubFilter: (hub: LearningHubId | 'all') => void;
@@ -48,8 +52,10 @@ interface TasksProjectsViewProps {
   onDeleteProject: (id: string) => void;
   onToggleMonthTask: (monthId: number, taskId: string) => void;
   onToggleCourseTask: (courseId: number, taskId: string) => void;
+  onTogglePathStage?: (pathId: string, stageId: string) => void;
   onJumpToMonth: (monthId: number) => void;
   onOpenCourse: (courseId: number) => void;
+  onOpenPath?: (pathId: string) => void;
   onOpenCalendar?: () => void;
 }
 
@@ -78,6 +84,7 @@ export default function TasksProjectsView({
   projects,
   months,
   courses,
+  learningPaths = [],
   hubCategories,
   activeHubFilter,
   onChangeHubFilter,
@@ -89,8 +96,10 @@ export default function TasksProjectsView({
   onDeleteProject,
   onToggleMonthTask,
   onToggleCourseTask,
+  onTogglePathStage,
   onJumpToMonth,
   onOpenCourse,
+  onOpenPath,
   onOpenCalendar,
 }: TasksProjectsViewProps) {
   const todayKey = useMemo(() => getTodayDateKey(), []);
@@ -144,11 +153,46 @@ export default function TasksProjectsView({
   const [projCourseId, setProjCourseId] = useState<string>('');
   const [confirmDeleteProj, setConfirmDeleteProj] = useState<PracticalProject | null>(null);
 
+  // Quick Schedule Linked Course / Path / Plan Task modal state
+  const [quickSchedTarget, setQuickSchedTarget] = useState<{
+    projectId: string;
+    title: string;
+    hubId: LearningHubId;
+    linkedLabel: string;
+    categoryLabel: string;
+    done: boolean;
+  } | null>(null);
+  const [quickSchedDate, setQuickSchedDate] = useState(() => getTodayDateKey());
+  const [quickSchedTime, setQuickSchedTime] = useState('');
+  const [quickSchedDuration, setQuickSchedDuration] = useState(60);
+
   const isTaskOverdue = (t: UnifiedTask) => {
     if (t.status === 'done') return false;
     const dl = t.deadline || t.dueDate;
     const sched = t.scheduledDate;
     return Boolean((dl && dl < todayKey) || (sched && sched < todayKey));
+  };
+
+  const resolveLinkedLabel = (projectId: string, fallback = ''): string => {
+    if (!projectId) return '';
+    const proj = projects.find((p) => p.id === projectId);
+    if (proj) return proj.title;
+    if (projectId.startsWith('course:')) {
+      const cid = Number(projectId.split(':')[1]);
+      const course = courses.find((c) => c.id === cid);
+      if (course) return course.title;
+    }
+    if (projectId.startsWith('path:')) {
+      const pid = projectId.split(':')[1];
+      const lp = learningPaths.find((p) => p.id === pid);
+      if (lp) return lp.title;
+    }
+    if (projectId.startsWith('month:')) {
+      const mid = Number(projectId.split(':')[1]);
+      const m = months.find((mo) => mo.id === mid);
+      if (m) return `الشهر ${m.id}: ${m.theme}`;
+    }
+    return fallback;
   };
 
   const filteredTasks = useMemo(() => {
@@ -185,6 +229,18 @@ export default function TasksProjectsView({
     return out;
   }, [courses, activeHubFilter]);
 
+  const aggregatedPathStages = useMemo(() => {
+    const out: Array<{ path: LearningPath; id: string; title: string; done: boolean }> = [];
+    for (const p of learningPaths) {
+      const pHub = p.hubId ?? 'knowledge';
+      if (activeHubFilter !== 'all' && pHub !== activeHubFilter) continue;
+      for (const s of p.stages) {
+        out.push({ path: p, id: s.id, title: s.title, done: s.done });
+      }
+    }
+    return out;
+  }, [learningPaths, activeHubFilter]);
+
   const aggregatedPlanTasks = useMemo(() => {
     const out: Array<{ month: MonthPlan; id: string; text: string; done: boolean }> = [];
     for (const m of months) {
@@ -196,6 +252,62 @@ export default function TasksProjectsView({
     }
     return out;
   }, [months, activeHubFilter]);
+
+  const openQuickSchedule = (item: {
+    projectId: string;
+    title: string;
+    hubId: LearningHubId;
+    linkedLabel: string;
+    categoryLabel: string;
+    done: boolean;
+  }) => {
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    const existing = unifiedTasks.find((t) => t.projectId === item.projectId);
+    setQuickSchedTarget(item);
+    setQuickSchedDate(existing?.scheduledDate || todayKey);
+    setQuickSchedTime(existing?.startTime || '');
+    setQuickSchedDuration(existing?.durationMinutes || 60);
+  };
+
+  const handleSaveQuickSchedule = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickSchedTarget || !canEdit) return;
+    const existing = unifiedTasks.find(
+      (t) => t.projectId === quickSchedTarget.projectId
+    );
+    const endTime = quickSchedTime
+      ? computeEndTimeFromMinutes(quickSchedTime, quickSchedDuration)
+      : '';
+    if (existing) {
+      onUpdateUnifiedTask(existing.id, {
+        scheduledDate: quickSchedDate,
+        dueDate: existing.deadline || quickSchedDate,
+        startTime: quickSchedTime,
+        endTime,
+        durationMinutes: quickSchedDuration,
+      });
+    } else {
+      onAddUnifiedTask({
+        title: quickSchedTarget.title,
+        description: '',
+        hubId: quickSchedTarget.hubId,
+        categoryLabel: quickSchedTarget.categoryLabel,
+        priority: 'medium',
+        status: quickSchedTarget.done ? 'done' : 'todo',
+        dueDate: quickSchedDate,
+        scheduledDate: quickSchedDate,
+        startTime: quickSchedTime,
+        endTime,
+        durationMinutes: quickSchedDuration,
+        projectId: quickSchedTarget.projectId,
+        linkedLabel: quickSchedTarget.linkedLabel,
+      });
+    }
+    setQuickSchedTarget(null);
+  };
 
   const handleCreateTask = (e: React.FormEvent) => {
     e.preventDefault();
@@ -222,6 +334,7 @@ export default function TasksProjectsView({
       durationMinutes: taskStartTime || taskScheduledDate ? taskDuration : 0,
       deadline: taskDeadline || '',
       projectId: taskProjectId || '',
+      linkedLabel: resolveLinkedLabel(taskProjectId),
     });
     setTaskTitle('');
     setTaskDesc('');
@@ -273,6 +386,12 @@ export default function TasksProjectsView({
       deadline: editDraft.deadline,
       dueDate: editDraft.deadline || editDraft.scheduledDate || '',
       projectId: editDraft.projectId,
+      linkedLabel: resolveLinkedLabel(
+        editDraft.projectId,
+        editDraft.projectId === editingTask.projectId
+          ? editingTask.linkedLabel || ''
+          : ''
+      ),
       description: editDraft.description.trim(),
     });
     setEditingTask(null);
@@ -541,18 +660,40 @@ export default function TasksProjectsView({
                   </datalist>
                 </label>
                 <label className="block text-xs font-medium text-slate-700">
-                  ربط بمشروع (اختياري)
+                  ربط بكورس / مسار / مشروع (اختياري)
                   <select
                     value={taskProjectId}
                     onChange={(e) => setTaskProjectId(e.target.value)}
                     className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
                   >
                     <option value="">بدون ربط</option>
-                    {projects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.title}
-                      </option>
-                    ))}
+                    {projects.length > 0 && (
+                      <optgroup label="المشاريع التطبيقية">
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            مشروع: {p.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {courses.length > 0 && (
+                      <optgroup label="الكورسات">
+                        {courses.map((c) => (
+                          <option key={`course:${c.id}`} value={`course:${c.id}`}>
+                            كورس: {c.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {learningPaths.length > 0 && (
+                      <optgroup label="المسارات التعليمية">
+                        {learningPaths.map((p) => (
+                          <option key={`path:${p.id}`} value={`path:${p.id}`}>
+                            مسار: {p.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                 </label>
               </div>
@@ -651,6 +792,14 @@ export default function TasksProjectsView({
                             </span>
                           )}
                           {linkedProj && <span>· مشروع: {linkedProj.title}</span>}
+                          {!linkedProj && (t.linkedLabel || t.projectId) && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded">
+                              <Link2 className="w-3 h-3" aria-hidden="true" />
+                              <span>
+                                {t.linkedLabel || resolveLinkedLabel(t.projectId || '')}
+                              </span>
+                            </span>
+                          )}
                           {t.categoryLabel && <span>· {t.categoryLabel}</span>}
                         </div>
                         {t.description && (
@@ -677,10 +826,11 @@ export default function TasksProjectsView({
                         <button
                           type="button"
                           onClick={() => openEditModal(t)}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
                           aria-label="تعديل وجدولة المهمة"
-                          className="p-1.5 text-slate-500 hover:text-[#1E3A5F] cursor-pointer"
                         >
-                          <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
+                          <Edit3 className="w-3 h-3" aria-hidden="true" />
+                          <span>جدولة / تعديل</span>
                         </button>
                         <button
                           type="button"
@@ -698,97 +848,294 @@ export default function TasksProjectsView({
             )}
           </div>
 
-          {/* Live Course & Plan Tasks Integration */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Live Course, Learning Path & Plan Tasks Integration */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            {/* Course Tasks */}
             <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
               <h2 className="text-sm font-bold text-slate-900">
                 مهام الكورسات ({aggregatedCourseTasks.filter((t) => t.done).length} /{' '}
                 {aggregatedCourseTasks.length})
               </h2>
               <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
-                {aggregatedCourseTasks.map((ct) => (
-                  <div
-                    key={`${ct.course.id}-${ct.id}`}
-                    className="py-2.5 flex items-start justify-between gap-2"
-                  >
-                    <button
-                      type="button"
-                      disabled={!canEdit}
-                      onClick={() => onToggleCourseTask(ct.course.id, ct.id)}
-                      className="flex items-start gap-2 text-right flex-1 cursor-pointer"
-                    >
-                      {ct.done ? (
-                        <CheckSquare className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0" aria-hidden="true" />
-                      ) : (
-                        <Square className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" aria-hidden="true" />
-                      )}
-                      <div>
-                        <p
-                          className={`text-xs ${
-                            ct.done ? 'line-through text-slate-400' : 'text-slate-800'
-                          }`}
-                        >
-                          {ct.text}
-                        </p>
-                        <p className="text-[10px] text-slate-500">{ct.course.title}</p>
+                {aggregatedCourseTasks.length === 0 ? (
+                  <p className="text-xs text-slate-400 py-3">لا توجد مهام كورسات بعد.</p>
+                ) : (
+                  aggregatedCourseTasks.map((ct) => {
+                    const canonicalId = `course:${ct.course.id}:${ct.id}`;
+                    const schedTask = unifiedTasks.find(
+                      (ut) => ut.projectId === canonicalId
+                    );
+                    return (
+                      <div
+                        key={`${ct.course.id}-${ct.id}`}
+                        className="py-2.5 space-y-1.5"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <button
+                            type="button"
+                            disabled={!canEdit}
+                            onClick={() => onToggleCourseTask(ct.course.id, ct.id)}
+                            className="flex items-start gap-2 text-right flex-1 cursor-pointer"
+                          >
+                            {ct.done ? (
+                              <CheckSquare
+                                className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <Square
+                                className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
+                                aria-hidden="true"
+                              />
+                            )}
+                            <div>
+                              <p
+                                className={`text-xs ${
+                                  ct.done ? 'line-through text-slate-400' : 'text-slate-800'
+                                }`}
+                              >
+                                {ct.text}
+                              </p>
+                              <p className="text-[10px] text-slate-500">
+                                {ct.course.title}
+                              </p>
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onOpenCourse(ct.course.id)}
+                            className="text-[11px] font-medium text-[#1E3A5F] hover:underline shrink-0 cursor-pointer"
+                          >
+                            الكورس ←
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-2 pr-6">
+                          {schedTask?.scheduledDate ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 rounded tabular-nums">
+                              <Calendar className="w-2.5 h-2.5" aria-hidden="true" />
+                              مجدولة: {schedTask.scheduledDate}
+                              {schedTask.startTime ? ` · ${schedTask.startTime}` : ''}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400">
+                              غير مجدولة في التقويم
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openQuickSchedule({
+                                projectId: canonicalId,
+                                title: ct.text,
+                                hubId: ct.course.hubId ?? 'knowledge',
+                                linkedLabel: ct.course.title,
+                                categoryLabel: `كورس: ${ct.course.title}`,
+                                done: ct.done,
+                              })
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                          >
+                            <Calendar className="w-2.5 h-2.5" aria-hidden="true" />
+                            <span>{schedTask?.scheduledDate ? 'تعديل الموعد' : 'جدولة'}</span>
+                          </button>
+                        </div>
                       </div>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onOpenCourse(ct.course.id)}
-                      className="text-[11px] font-medium text-[#1E3A5F] hover:underline shrink-0 cursor-pointer"
-                    >
-                      الكورس ←
-                    </button>
-                  </div>
-                ))}
+                    );
+                  })
+                )}
               </div>
             </div>
 
+            {/* Learning Paths Stages */}
+            <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
+              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                <Compass className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <span>
+                  مراحل المسارات ({aggregatedPathStages.filter((s) => s.done).length} /{' '}
+                  {aggregatedPathStages.length})
+                </span>
+              </h2>
+              <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                {aggregatedPathStages.length === 0 ? (
+                  <p className="text-xs text-slate-400 py-3">
+                    لا توجد مراحل مسارات تعليمية مضافة بعد.
+                  </p>
+                ) : (
+                  aggregatedPathStages.map((ps) => {
+                    const canonicalId = `path:${ps.path.id}:${ps.id}`;
+                    const schedTask = unifiedTasks.find(
+                      (ut) => ut.projectId === canonicalId
+                    );
+                    return (
+                      <div
+                        key={`${ps.path.id}-${ps.id}`}
+                        className="py-2.5 space-y-1.5"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <button
+                            type="button"
+                            disabled={!canEdit || !onTogglePathStage}
+                            onClick={() => onTogglePathStage?.(ps.path.id, ps.id)}
+                            className="flex items-start gap-2 text-right flex-1 cursor-pointer disabled:opacity-70"
+                          >
+                            {ps.done ? (
+                              <CheckSquare
+                                className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
+                                aria-hidden="true"
+                              />
+                            ) : (
+                              <Square
+                                className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
+                                aria-hidden="true"
+                              />
+                            )}
+                            <div>
+                              <p
+                                className={`text-xs ${
+                                  ps.done ? 'line-through text-slate-400' : 'text-slate-800'
+                                }`}
+                              >
+                                {ps.title}
+                              </p>
+                              <p className="text-[10px] text-slate-500">{ps.path.title}</p>
+                            </div>
+                          </button>
+                          {onOpenPath && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenPath(ps.path.id)}
+                              className="text-[11px] font-medium text-[#1E3A5F] hover:underline shrink-0 cursor-pointer"
+                            >
+                              المسار ←
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center justify-between gap-2 pr-6">
+                          {schedTask?.scheduledDate ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 rounded tabular-nums">
+                              <Calendar className="w-2.5 h-2.5" aria-hidden="true" />
+                              مجدولة: {schedTask.scheduledDate}
+                              {schedTask.startTime ? ` · ${schedTask.startTime}` : ''}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400">
+                              غير مجدولة في التقويم
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openQuickSchedule({
+                                projectId: canonicalId,
+                                title: ps.title,
+                                hubId: ps.path.hubId ?? 'knowledge',
+                                linkedLabel: ps.path.title,
+                                categoryLabel: `مسار: ${ps.path.title}`,
+                                done: ps.done,
+                              })
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                          >
+                            <Calendar className="w-2.5 h-2.5" aria-hidden="true" />
+                            <span>{schedTask?.scheduledDate ? 'تعديل الموعد' : 'جدولة'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* 12-Month Plan Tasks */}
             <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
               <h2 className="text-sm font-bold text-slate-900">
                 مهام وحدات الخطة ({aggregatedPlanTasks.filter((t) => t.done).length} /{' '}
                 {aggregatedPlanTasks.length})
               </h2>
               <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
-                {aggregatedPlanTasks.map((mt) => (
-                  <div
-                    key={`${mt.month.id}-${mt.id}`}
-                    className="py-2.5 flex items-start justify-between gap-2"
-                  >
-                    <button
-                      type="button"
-                      disabled={!canEdit}
-                      onClick={() => onToggleMonthTask(mt.month.id, mt.id)}
-                      className="flex items-start gap-2 text-right flex-1 cursor-pointer"
+                {aggregatedPlanTasks.map((mt) => {
+                  const canonicalId = `month:${mt.month.id}:${mt.id}`;
+                  const schedTask = unifiedTasks.find(
+                    (ut) => ut.projectId === canonicalId
+                  );
+                  return (
+                    <div
+                      key={`${mt.month.id}-${mt.id}`}
+                      className="py-2.5 space-y-1.5"
                     >
-                      {mt.done ? (
-                        <CheckSquare className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0" aria-hidden="true" />
-                      ) : (
-                        <Square className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" aria-hidden="true" />
-                      )}
-                      <div>
-                        <p
-                          className={`text-xs ${
-                            mt.done ? 'line-through text-slate-400' : 'text-slate-800'
-                          }`}
+                      <div className="flex items-start justify-between gap-2">
+                        <button
+                          type="button"
+                          disabled={!canEdit}
+                          onClick={() => onToggleMonthTask(mt.month.id, mt.id)}
+                          className="flex items-start gap-2 text-right flex-1 cursor-pointer"
                         >
-                          {mt.text}
-                        </p>
-                        <p className="text-[10px] text-slate-500">
-                          الشهر {mt.month.id}: {mt.month.theme}
-                        </p>
+                          {mt.done ? (
+                            <CheckSquare
+                              className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <Square
+                              className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
+                              aria-hidden="true"
+                            />
+                          )}
+                          <div>
+                            <p
+                              className={`text-xs ${
+                                mt.done ? 'line-through text-slate-400' : 'text-slate-800'
+                              }`}
+                            >
+                              {mt.text}
+                            </p>
+                            <p className="text-[10px] text-slate-500">
+                              الشهر {mt.month.id}: {mt.month.theme}
+                            </p>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onJumpToMonth(mt.month.id)}
+                          className="text-[11px] font-medium text-[#1E3A5F] hover:underline shrink-0 cursor-pointer"
+                        >
+                          الوحدة ←
+                        </button>
                       </div>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onJumpToMonth(mt.month.id)}
-                      className="text-[11px] font-medium text-[#1E3A5F] hover:underline shrink-0 cursor-pointer"
-                    >
-                      الوحدة ←
-                    </button>
-                  </div>
-                ))}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pr-6">
+                        {schedTask?.scheduledDate ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 rounded tabular-nums">
+                            <Calendar className="w-2.5 h-2.5" aria-hidden="true" />
+                            مجدولة: {schedTask.scheduledDate}
+                            {schedTask.startTime ? ` · ${schedTask.startTime}` : ''}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-400">
+                            غير مجدولة في التقويم
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openQuickSchedule({
+                              projectId: canonicalId,
+                              title: mt.text,
+                              hubId: mt.month.hubId ?? 'knowledge',
+                              linkedLabel: `الشهر ${mt.month.id}: ${mt.month.theme}`,
+                              categoryLabel: `وحدة ${mt.month.id}`,
+                              done: mt.done,
+                            })
+                          }
+                          className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                        >
+                          <Calendar className="w-2.5 h-2.5" aria-hidden="true" />
+                          <span>{schedTask?.scheduledDate ? 'تعديل الموعد' : 'جدولة'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1171,6 +1518,48 @@ export default function TasksProjectsView({
               </label>
 
               <label className="block font-medium text-slate-700 sm:col-span-2">
+                ربط بكورس / مسار / مشروع
+                <select
+                  value={editDraft.projectId}
+                  onChange={(e) =>
+                    setEditDraft((d) =>
+                      d ? { ...d, projectId: e.target.value } : d
+                    )
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                >
+                  <option value="">بدون ربط</option>
+                  {projects.length > 0 && (
+                    <optgroup label="المشاريع التطبيقية">
+                      {projects.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          مشروع: {p.title}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {courses.length > 0 && (
+                    <optgroup label="الكورسات">
+                      {courses.map((c) => (
+                        <option key={`course:${c.id}`} value={`course:${c.id}`}>
+                          كورس: {c.title}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {learningPaths.length > 0 && (
+                    <optgroup label="المسارات التعليمية">
+                      {learningPaths.map((p) => (
+                        <option key={`path:${p.id}`} value={`path:${p.id}`}>
+                          مسار: {p.title}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              </label>
+
+              <label className="block font-medium text-slate-700 sm:col-span-2">
                 ملاحظات وتفاصيل
                 <textarea
                   rows={2}
@@ -1207,6 +1596,93 @@ export default function TasksProjectsView({
               >
                 <Save className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>حفظ التعديلات</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Quick Schedule Modal for Course / Path / Plan items */}
+      {quickSchedTarget && (
+        <div
+          className="fixed inset-0 z-[75] bg-slate-950/60 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setQuickSchedTarget(null)}
+        >
+          <form
+            onSubmit={handleSaveQuickSchedule}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl p-5 space-y-4"
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+              <h3 className="text-sm font-bold text-slate-900">
+                جدولة في التقويم الموحد
+              </h3>
+              <button
+                type="button"
+                onClick={() => setQuickSchedTarget(null)}
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-0.5">
+              <p className="text-xs font-bold text-slate-900">{quickSchedTarget.title}</p>
+              <p className="text-[11px] text-slate-500">{quickSchedTarget.linkedLabel}</p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <label className="block font-medium text-slate-700 sm:col-span-2">
+                تاريخ التنفيذ
+                <input
+                  type="date"
+                  required
+                  value={quickSchedDate}
+                  onChange={(e) => setQuickSchedDate(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                />
+              </label>
+              <label className="block font-medium text-slate-700">
+                وقت البدء (اختياري)
+                <input
+                  type="time"
+                  value={quickSchedTime}
+                  onChange={(e) => setQuickSchedTime(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                />
+              </label>
+              <label className="block font-medium text-slate-700">
+                المدة (بالدقائق)
+                <input
+                  type="number"
+                  min={15}
+                  max={480}
+                  step={15}
+                  value={quickSchedDuration}
+                  onChange={(e) =>
+                    setQuickSchedDuration(Number(e.target.value) || 60)
+                  }
+                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                />
+              </label>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setQuickSchedTarget(null)}
+                className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+              >
+                <Calendar className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>حفظ الجدولة في التقويم</span>
               </button>
             </div>
           </form>

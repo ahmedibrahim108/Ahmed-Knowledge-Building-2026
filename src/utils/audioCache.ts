@@ -49,6 +49,9 @@ export interface CachedAudioEntry {
   title?: string;
   entityId?: string;
   entityType?: AudioEntityType;
+  isStaleContent?: boolean;
+  cloudSaved?: boolean;
+  cloudErrorCode?: 'PERMISSION' | 'NETWORK' | 'NO_AUTH';
 }
 
 export interface SavedAudioClipSummary {
@@ -285,9 +288,59 @@ function parseWavInfo(bytes: Uint8Array): {
   };
 }
 
+function downsamplePcm16MonoWav(
+  bytes: Uint8Array,
+  info: { dataOffset: number; dataSize: number; sampleRate: number },
+  targetRate: number
+): { base64: string; mimeType: string; durationSeconds: number } {
+  const srcSamples = Math.floor(info.dataSize / 2);
+  const ratio = info.sampleRate / targetRate;
+  const dstSamples = Math.floor(srcSamples / ratio);
+  const outBuffer = new ArrayBuffer(44 + dstSamples * 2);
+  const srcView = new DataView(bytes.buffer, bytes.byteOffset + info.dataOffset, srcSamples * 2);
+  const dstView = new DataView(outBuffer);
+
+  const writeAscii = (pos: number, str: string) => {
+    for (let i = 0; i < str.length; i++) dstView.setUint8(pos + i, str.charCodeAt(i));
+  };
+
+  const dstDataSize = dstSamples * 2;
+  writeAscii(0, 'RIFF');
+  dstView.setUint32(4, 36 + dstDataSize, true);
+  writeAscii(8, 'WAVE');
+  writeAscii(12, 'fmt ');
+  dstView.setUint32(16, 16, true);
+  dstView.setUint16(20, 1, true);
+  dstView.setUint16(22, 1, true);
+  dstView.setUint32(24, targetRate, true);
+  dstView.setUint32(28, targetRate * 2, true);
+  dstView.setUint16(32, 2, true);
+  dstView.setUint16(34, 16, true);
+  writeAscii(36, 'data');
+  dstView.setUint32(40, dstDataSize, true);
+
+  for (let i = 0; i < dstSamples; i++) {
+    const srcPos = i * ratio;
+    const i0 = Math.min(srcSamples - 1, Math.floor(srcPos));
+    const i1 = Math.min(srcSamples - 1, i0 + 1);
+    const frac = srcPos - i0;
+    const s0 = srcView.getInt16(i0 * 2, true);
+    const s1 = srcView.getInt16(i1 * 2, true);
+    const val = Math.round(s0 + (s1 - s0) * frac);
+    dstView.setInt16(44 + i * 2, Math.max(-32768, Math.min(32767, val)), true);
+  }
+
+  const outBytes = new Uint8Array(outBuffer);
+  return {
+    base64: uint8ArrayToBase64(outBytes),
+    mimeType: 'audio/wav',
+    durationSeconds: Math.round((dstSamples / targetRate) * 10) / 10,
+  };
+}
+
 /**
- * Downsamples 24kHz mono 16-bit PCM WAV -> 16kHz mono 16-bit PCM WAV (~33% smaller, crisp speech)
- * and computes exact duration in seconds.
+ * Downsamples 24kHz mono 16-bit PCM WAV -> 16kHz (or 12kHz if close to single-doc limit)
+ * so most notes fit inside a single Firestore doc (<= 750KB dataUrl).
  */
 function compactWavIfHelpful(
   audioBase64: string,
@@ -307,50 +360,15 @@ function compactWavIfHelpful(
       };
     }
 
-    const srcSamples = Math.floor(info.dataSize / 2);
-    const targetRate = 16000;
-    const ratio = info.sampleRate / targetRate; // e.g. 24000 / 16000 = 1.5
-    const dstSamples = Math.floor(srcSamples / ratio);
-    const outBuffer = new ArrayBuffer(44 + dstSamples * 2);
-    const srcView = new DataView(bytes.buffer, bytes.byteOffset + info.dataOffset, srcSamples * 2);
-    const dstView = new DataView(outBuffer);
-
-    const writeAscii = (pos: number, str: string) => {
-      for (let i = 0; i < str.length; i++) dstView.setUint8(pos + i, str.charCodeAt(i));
-    };
-
-    const dstDataSize = dstSamples * 2;
-    writeAscii(0, 'RIFF');
-    dstView.setUint32(4, 36 + dstDataSize, true);
-    writeAscii(8, 'WAVE');
-    writeAscii(12, 'fmt ');
-    dstView.setUint32(16, 16, true);
-    dstView.setUint16(20, 1, true);
-    dstView.setUint16(22, 1, true);
-    dstView.setUint32(24, targetRate, true);
-    dstView.setUint32(28, targetRate * 2, true);
-    dstView.setUint16(32, 2, true);
-    dstView.setUint16(34, 16, true);
-    writeAscii(36, 'data');
-    dstView.setUint32(40, dstDataSize, true);
-
-    for (let i = 0; i < dstSamples; i++) {
-      const srcPos = i * ratio;
-      const i0 = Math.min(srcSamples - 1, Math.floor(srcPos));
-      const i1 = Math.min(srcSamples - 1, i0 + 1);
-      const frac = srcPos - i0;
-      const s0 = srcView.getInt16(i0 * 2, true);
-      const s1 = srcView.getInt16(i1 * 2, true);
-      const val = Math.round(s0 + (s1 - s0) * frac);
-      dstView.setInt16(44 + i * 2, Math.max(-32768, Math.min(32767, val)), true);
+    const res16 = downsamplePcm16MonoWav(bytes, info, 16000);
+    // Base64 overhead for dataUrl header (~24 chars) + base64
+    if (res16.base64.length + 30 > 740_000 && res16.base64.length < 1_050_000) {
+      const res12 = downsamplePcm16MonoWav(bytes, info, 12000);
+      if (res12.base64.length + 30 <= 740_000) {
+        return res12;
+      }
     }
-
-    const outBytes = new Uint8Array(outBuffer);
-    return {
-      base64: uint8ArrayToBase64(outBytes),
-      mimeType: 'audio/wav',
-      durationSeconds: Math.round((dstSamples / targetRate) * 10) / 10,
-    };
+    return res16;
   } catch {
     return { base64: audioBase64, mimeType, durationSeconds: 0 };
   }
@@ -453,25 +471,58 @@ export async function loadCachedAudioClip(
     };
   }
 
-  // 1b. Check local IndexedDB by entityId if contentHash matches
+  // 1b. Check local IndexedDB by entityId (accept exact contentHash first, or saved entity audio)
   if (meta?.entityId) {
-    const idx = await getLocalEntityIndex(`${meta.entityType || 'other'}:${meta.entityId}`);
-    if (idx && idx.contentHash === contentHash) {
+    const candidateKeys = Array.from(
+      new Set([
+        `${meta.entityType || 'other'}:${meta.entityId}`,
+        `note:${meta.entityId}`,
+        `course:${meta.entityId}`,
+        `summary:${meta.entityId}`,
+      ])
+    );
+    let fallbackEntityClip: LocalRecord | null = null;
+    let fallbackHashMatch = false;
+    for (const k of candidateKeys) {
+      const idx = await getLocalEntityIndex(k);
+      if (!idx) continue;
       const byEntity = await getLocalClip(idx.cacheId);
       if (byEntity) {
-        return {
-          cacheId: byEntity.id,
-          mimeType: byEntity.mimeType || 'audio/wav',
-          blob: byEntity.blob,
-          source: 'local',
-          durationSeconds: byEntity.durationSeconds,
-          lastPositionSeconds: byEntity.lastPositionSeconds ?? 0,
-          playbackRate: byEntity.playbackRate ?? 1,
-          title: byEntity.title,
-          entityId: byEntity.entityId,
-          entityType: byEntity.entityType,
-        };
+        fallbackEntityClip = byEntity;
+        fallbackHashMatch = idx.contentHash === contentHash;
+        if (fallbackHashMatch) break;
       }
+    }
+    if (fallbackEntityClip && fallbackHashMatch) {
+      return {
+        cacheId: fallbackEntityClip.id,
+        mimeType: fallbackEntityClip.mimeType || 'audio/wav',
+        blob: fallbackEntityClip.blob,
+        source: 'local',
+        durationSeconds: fallbackEntityClip.durationSeconds,
+        lastPositionSeconds: fallbackEntityClip.lastPositionSeconds ?? 0,
+        playbackRate: fallbackEntityClip.playbackRate ?? 1,
+        title: fallbackEntityClip.title,
+        entityId: fallbackEntityClip.entityId,
+        entityType: fallbackEntityClip.entityType,
+        isStaleContent: false,
+      };
+    }
+    // Keep as fallback if cloud also has nothing or user is offline
+    if (fallbackEntityClip && !uid) {
+      return {
+        cacheId: fallbackEntityClip.id,
+        mimeType: fallbackEntityClip.mimeType || 'audio/wav',
+        blob: fallbackEntityClip.blob,
+        source: 'local',
+        durationSeconds: fallbackEntityClip.durationSeconds,
+        lastPositionSeconds: fallbackEntityClip.lastPositionSeconds ?? 0,
+        playbackRate: fallbackEntityClip.playbackRate ?? 1,
+        title: fallbackEntityClip.title,
+        entityId: fallbackEntityClip.entityId,
+        entityType: fallbackEntityClip.entityType,
+        isStaleContent: true,
+      };
     }
   }
 
@@ -481,12 +532,13 @@ export async function loadCachedAudioClip(
     // 2. Check exact Firestore doc
     let targetDocId = cacheId;
     let rawData: Record<string, unknown> | null = null;
+    let isStaleContent = false;
 
     const snap = await getDoc(doc(db, 'users', uid, 'audioCache', cacheId));
     if (snap.exists()) {
       rawData = snap.data() as Record<string, unknown>;
     } else if (meta?.entityId) {
-      // 2b. Query by entityId across devices (even if another device used slightly different voice/speed)
+      // 2b. Query by entityId across devices (even if text edited slightly or voice/speed changed)
       const qSnap = await getDocs(
         query(
           collection(db, 'users', uid, 'audioCache'),
@@ -495,20 +547,54 @@ export async function loadCachedAudioClip(
         )
       );
       if (!qSnap.empty) {
-        const docs = qSnap.docs.map((d) => ({
-          id: d.id,
-          data: d.data() as Record<string, unknown>,
-        }));
+        const docs = qSnap.docs
+          .map((d) => {
+            const dData = d.data() as Record<string, unknown>;
+            const upd = dData.updatedAt as { toMillis?: () => number } | undefined;
+            return {
+              id: d.id,
+              data: dData,
+              updatedAtMs: typeof upd?.toMillis === 'function' ? upd.toMillis() : 0,
+            };
+          })
+          .sort((a, b) => b.updatedAtMs - a.updatedAtMs);
         const exactContentMatch = docs.find((d) => d.data.contentHash === contentHash);
         const chosen = exactContentMatch ?? docs[0];
-        if (chosen && exactContentMatch) {
+        if (chosen) {
           targetDocId = chosen.id;
           rawData = chosen.data;
+          isStaleContent = !exactContentMatch;
         }
       }
     }
 
-    if (!rawData) return null;
+    if (!rawData) {
+      // Fall back to local entity clip even if content changed slightly while cloud doesn't have an entity entry
+      if (meta?.entityId) {
+        const k = `${meta.entityType || 'other'}:${meta.entityId}`;
+        const idx = await getLocalEntityIndex(k);
+        if (idx) {
+          const byEntity = await getLocalClip(idx.cacheId);
+          if (byEntity) {
+            return {
+              cacheId: byEntity.id,
+              mimeType: byEntity.mimeType || 'audio/wav',
+              blob: byEntity.blob,
+              source: 'local',
+              durationSeconds: byEntity.durationSeconds,
+              lastPositionSeconds: byEntity.lastPositionSeconds ?? 0,
+              playbackRate: byEntity.playbackRate ?? 1,
+              title: byEntity.title,
+              entityId: byEntity.entityId,
+              entityType: byEntity.entityType,
+              isStaleContent: idx.contentHash !== contentHash,
+              cloudSaved: true,
+            };
+          }
+        }
+      }
+      return null;
+    }
 
     const mimeType = String(rawData.mimeType || 'audio/wav');
     const blob = await resolveCloudBlobFromDoc(uid, targetDocId, {
@@ -536,7 +622,7 @@ export async function loadCachedAudioClip(
       entityId: meta?.entityId || (rawData.entityId ? String(rawData.entityId) : undefined),
       entityType: meta?.entityType || (rawData.entityType as AudioEntityType | undefined),
       title: meta?.title || (rawData.title ? String(rawData.title) : undefined),
-      contentHash,
+      contentHash: rawData.contentHash ? String(rawData.contentHash) : contentHash,
     });
 
     return {
@@ -550,6 +636,8 @@ export async function loadCachedAudioClip(
       title: rawData.title ? String(rawData.title) : meta?.title,
       entityId: rawData.entityId ? String(rawData.entityId) : meta?.entityId,
       entityType: (rawData.entityType as AudioEntityType | undefined) || meta?.entityType,
+      isStaleContent,
+      cloudSaved: true,
     };
   } catch (err) {
     console.warn('Could not read cloud audio cache:', err);
@@ -697,6 +785,9 @@ export async function saveAudioClipToCache(
     contentHash,
   });
 
+  let cloudSaved = false;
+  let cloudErrorCode: CachedAudioEntry['cloudErrorCode'] = uid ? undefined : 'NO_AUTH';
+
   if (uid) {
     const ext = compacted.mimeType.includes('mpeg') ? 'mp3' : 'wav';
     const storagePath = `users/${uid}/audioCache/${cacheId}.${ext}`;
@@ -713,8 +804,8 @@ export async function saveAudioClipToCache(
     const dataUrl = `data:${compacted.mimeType};base64,${compacted.base64}`;
     const inlineDataUrl = dataUrl.length <= 750_000 ? dataUrl : '';
     let chunkCount = 0;
+    const safeSizeBytes = Math.max(0, Math.round(blob.size));
 
-    // Ensure Firestore parent doc exists first so chunk subcollection passes Master Gate / rules
     const docPath = `users/${uid}/audioCache/${cacheId}`;
     try {
       if (!inlineDataUrl && dataUrl.length <= 18_000_000) {
@@ -728,7 +819,7 @@ export async function saveAudioClipToCache(
         voiceName,
         speed,
         mimeType: compacted.mimeType.slice(0, 80),
-        sizeBytes: blob.size,
+        sizeBytes: safeSizeBytes,
         storagePath: downloadUrl ? storagePath : '',
         downloadUrl,
         inlineDataUrl,
@@ -759,12 +850,40 @@ export async function saveAudioClipToCache(
         }
         await batch.commit();
       }
+      cloudSaved = true;
     } catch (fsErr) {
-      console.warn('Firestore audioCache write failed:', fsErr);
-      try {
-        handleFirestoreError(fsErr, OperationType.WRITE, docPath);
-      } catch {
-        // Keep playing audio locally even if cloud quota/network error occurs
+      const code = (fsErr as { code?: string })?.code ?? '';
+      const msg = fsErr instanceof Error ? fsErr.message.toLowerCase() : '';
+      const isPerm = code === 'permission-denied' || msg.includes('permission') || msg.includes('insufficient');
+      if (isPerm && (inlineDataUrl || downloadUrl)) {
+        // Fallback for older deployed firestore.rules that only allow legacy audioCache fields
+        try {
+          await setDoc(doc(db, 'users', uid, 'audioCache', cacheId), {
+            id: cacheId,
+            ownerId: uid,
+            voiceName,
+            speed,
+            mimeType: compacted.mimeType.slice(0, 80),
+            sizeBytes: safeSizeBytes,
+            storagePath: downloadUrl ? storagePath : '',
+            downloadUrl,
+            inlineDataUrl,
+            previewText: clean.slice(0, 120),
+            updatedAt: serverTimestamp(),
+          });
+          cloudSaved = true;
+        } catch (fallbackErr) {
+          console.warn('Legacy Firestore audioCache fallback failed:', fallbackErr);
+          cloudErrorCode = 'PERMISSION';
+        }
+      } else {
+        cloudErrorCode = isPerm ? 'PERMISSION' : 'NETWORK';
+        console.warn('Firestore audioCache write failed:', fsErr);
+        try {
+          handleFirestoreError(fsErr, OperationType.WRITE, docPath);
+        } catch {
+          // Keep playing audio locally even if cloud quota/network error occurs
+        }
       }
     }
   }
@@ -773,13 +892,16 @@ export async function saveAudioClipToCache(
     cacheId,
     mimeType: compacted.mimeType,
     blob,
-    source: uid ? 'cloud' : 'local',
+    source: cloudSaved ? 'cloud' : 'local',
     durationSeconds: compacted.durationSeconds,
     lastPositionSeconds: 0,
     playbackRate: 1,
     title: meta?.title,
     entityId: meta?.entityId,
     entityType: meta?.entityType,
+    isStaleContent: false,
+    cloudSaved,
+    cloudErrorCode,
   };
 }
 

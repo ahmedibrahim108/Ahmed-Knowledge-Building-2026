@@ -10,7 +10,9 @@ import {
   ChevronUp,
   Clock,
   Compass,
+  Download,
   Edit3,
+  Eye,
   Feather,
   FileText,
   FolderPlus,
@@ -70,11 +72,16 @@ import {
   resolveCourseStudyStage,
 } from '../data/curriculumData';
 import { OWNER_ADMIN_EMAIL } from '../firebase';
+import { CloudAttachmentItem } from '../services/firestoreSync';
 import {
   SavedAudioClipSummary,
   listUserAudioClips,
   loadAudioClipById,
 } from '../utils/audioCache';
+import {
+  BUNDLED_APP_DOCUMENTS,
+  downloadResourceAttachment,
+} from '../utils/documentImportExport';
 import { moveImagesScope } from '../utils/imageStorage';
 import ConfirmDialog from './ConfirmDialog';
 import { ActiveTab } from './Header';
@@ -106,6 +113,7 @@ interface OverviewViewProps {
   reflections: PersonalReflection[];
   calendarEvents?: CalendarEvent[];
   weeklyMeetings?: WeeklyMeeting[];
+  cloudAttachments?: CloudAttachmentItem[];
   onGoogleSignIn: () => void;
   onNavigateTab: (tab: ActiveTab) => void;
   onSelectHub: (hub: LearningHubId, targetTab: ActiveTab) => void;
@@ -170,6 +178,7 @@ export default function OverviewView({
   reflections,
   calendarEvents = [],
   weeklyMeetings = [],
+  cloudAttachments = [],
   onGoogleSignIn,
   onNavigateTab,
   onSelectHub,
@@ -333,27 +342,44 @@ export default function OverviewView({
       downloadUrl?: string;
       storagePath?: string;
       attachmentName?: string;
+      mimeType?: string;
+      fallbackText?: string;
     }> = [];
+    const seenResourceIds = new Set<string>();
+
     for (const item of readingItems) {
-      if (item.downloadUrl || item.storagePath) {
+      if (
+        item.attachmentName ||
+        item.downloadUrl ||
+        item.storagePath ||
+        item.takeaways?.trim()
+      ) {
+        const resId = item.attachmentResourceId || item.id;
+        seenResourceIds.add(resId);
         list.push({
           id: `lib-${item.id}`,
-          resourceId: item.attachmentResourceId || item.id,
+          resourceId: resId,
           title: item.title,
-          subtitle: item.author || item.categoryLabel,
+          subtitle: item.author || item.categoryLabel || item.itemType,
           downloadUrl: item.downloadUrl,
           storagePath: item.storagePath,
           attachmentName: item.attachmentName,
+          mimeType: item.attachmentName?.toLowerCase().endsWith('.pdf')
+            ? 'application/pdf'
+            : undefined,
+          fallbackText: item.takeaways,
         });
       }
     }
     for (const c of courses) {
       for (const res of c.resources) {
         if (
+          res.attachmentName ||
           res.downloadUrl ||
           res.storagePath ||
-          (res.attachmentName && res.attachmentName.toLowerCase().endsWith('.pdf'))
+          res.extractedPreview
         ) {
+          seenResourceIds.add(res.id);
           list.push({
             id: `cres-${c.id}-${res.id}`,
             resourceId: res.id,
@@ -362,12 +388,60 @@ export default function OverviewView({
             downloadUrl: res.downloadUrl,
             storagePath: res.storagePath,
             attachmentName: res.attachmentName,
+            mimeType: res.mimeType,
+            fallbackText: res.extractedPreview,
           });
         }
       }
     }
-    return list.slice(0, 6);
-  }, [readingItems, courses]);
+    for (const m of months) {
+      for (const res of m.resources) {
+        if (
+          res.attachmentName ||
+          res.downloadUrl ||
+          res.storagePath ||
+          res.extractedPreview
+        ) {
+          seenResourceIds.add(res.id);
+          list.push({
+            id: `mres-${m.id}-${res.id}`,
+            resourceId: res.id,
+            title: res.title,
+            subtitle: `الشهر ${m.id}: ${m.theme}`,
+            downloadUrl: res.downloadUrl,
+            storagePath: res.storagePath,
+            attachmentName: res.attachmentName,
+            mimeType: res.mimeType,
+            fallbackText: res.extractedPreview,
+          });
+        }
+      }
+    }
+    for (const att of cloudAttachments) {
+      if (seenResourceIds.has(att.id)) continue;
+      seenResourceIds.add(att.id);
+      list.push({
+        id: `att-${att.id}`,
+        resourceId: att.id,
+        title: att.fileName,
+        subtitle: 'مرفق سحابي متزامن',
+        attachmentName: att.fileName,
+        mimeType: att.mimeType,
+      });
+    }
+    for (const docItem of BUNDLED_APP_DOCUMENTS) {
+      list.push({
+        id: docItem.id,
+        resourceId: docItem.id,
+        title: docItem.title,
+        subtitle: docItem.subtitle,
+        downloadUrl: docItem.downloadUrl,
+        attachmentName: docItem.fileName,
+        mimeType: docItem.mimeType,
+      });
+    }
+    return list;
+  }, [readingItems, courses, months, cloudAttachments]);
 
   const handleTogglePlaySavedClip = async (clip: SavedAudioClipSummary) => {
     if (playingClipId === clip.id && dashAudioRef.current) {
@@ -1152,45 +1226,77 @@ export default function OverviewView({
 
               {quickAccessOpen && (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {/* PDFs */}
+                  {/* Files & Documents */}
                   <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
                     <div className="flex items-center justify-between text-xs font-semibold text-slate-800">
                       <span className="inline-flex items-center gap-1">
                         <FileText className="w-3.5 h-3.5 text-[#1E3A5F]" />
-                        ملفات PDF سريعة
+                        ملفات ومستندات التطبيق ({quickPdfItems.length})
                       </span>
                       <button
                         type="button"
                         onClick={() => onNavigateTab('library')}
                         className="text-[11px] text-[#1E3A5F] hover:underline cursor-pointer"
                       >
-                        المكتبة
+                        كل الملفات
                       </button>
                     </div>
                     {quickPdfItems.length === 0 ? (
                       <p className="text-[11px] text-slate-400">
-                        لا توجد ملفات PDF مرفوعة بعد.
+                        لا توجد ملفات مرفوعة بعد.
                       </p>
                     ) : (
-                      <div className="space-y-1">
-                        {quickPdfItems.slice(0, 3).map((pdf) => (
-                          <button
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                        {quickPdfItems.slice(0, 6).map((pdf) => (
+                          <div
                             key={pdf.id}
-                            type="button"
-                            onClick={() =>
-                              onOpenPdf?.({
-                                title: pdf.title,
-                                fileName: pdf.attachmentName || `${pdf.title}.pdf`,
-                                resourceId: pdf.resourceId,
-                                contextLabel: pdf.subtitle,
-                                downloadUrl: pdf.downloadUrl,
-                                storagePath: pdf.storagePath,
-                              })
-                            }
-                            className="w-full text-right px-2 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[11px] font-medium text-slate-800 truncate block cursor-pointer"
+                            className="flex items-center justify-between gap-2 px-2 py-1.5 bg-white border border-slate-200 rounded text-[11px]"
                           >
-                            {pdf.title}
-                          </button>
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-slate-800 truncate">
+                                {pdf.title}
+                              </p>
+                              <p className="text-[10px] text-slate-500 truncate">
+                                {pdf.subtitle}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onOpenPdf?.({
+                                    title: pdf.title,
+                                    fileName: pdf.attachmentName || `${pdf.title}.pdf`,
+                                    resourceId: pdf.resourceId,
+                                    contextLabel: pdf.subtitle,
+                                    downloadUrl: pdf.downloadUrl,
+                                    storagePath: pdf.storagePath,
+                                    mimeType: pdf.mimeType,
+                                    fallbackText: pdf.fallbackText,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded cursor-pointer"
+                              >
+                                <Eye className="w-3 h-3" aria-hidden="true" />
+                                <span>عرض</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void downloadResourceAttachment({
+                                    resourceId: pdf.resourceId,
+                                    fileName: pdf.attachmentName || pdf.title,
+                                    storagePath: pdf.storagePath,
+                                    downloadUrl: pdf.downloadUrl,
+                                  })
+                                }
+                                aria-label={`تنزيل ${pdf.title}`}
+                                className="p-1 text-slate-600 hover:text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                              >
+                                <Download className="w-3 h-3" aria-hidden="true" />
+                              </button>
+                            </div>
+                          </div>
                         ))}
                       </div>
                     )}

@@ -3,9 +3,11 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  Calendar,
   CheckSquare,
   Compass,
   Edit3,
+  ListTodo,
   Plus,
   Square,
   Trash2,
@@ -17,7 +19,11 @@ import {
   LearningPathStage,
   LearningPathStatus,
   PersonalCourse,
+  TaskPriority,
+  UnifiedTask,
+  computeEndTimeFromMinutes,
   getHubMeta,
+  getTodayDateKey,
 } from '../data/curriculumData';
 import ConfirmDialog from './ConfirmDialog';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
@@ -27,6 +33,7 @@ interface PathsViewProps {
   onRequireAuth: () => void;
   paths: LearningPath[];
   courses: PersonalCourse[];
+  unifiedTasks?: UnifiedTask[];
   hubCategories: Record<LearningHubId, string[]>;
   activeHubFilter: LearningHubId | 'all';
   onChangeHubFilter: (hub: LearningHubId | 'all') => void;
@@ -35,7 +42,12 @@ interface PathsViewProps {
   ) => void;
   onUpdatePath: (id: string, updates: Partial<LearningPath>) => void;
   onDeletePath: (id: string) => void;
+  onTogglePathStage?: (pathId: string, stageId: string) => void;
+  onAddUnifiedTask?: (payload: Omit<UnifiedTask, 'id'>) => void;
+  onUpdateUnifiedTask?: (id: string, updates: Partial<UnifiedTask>) => void;
   onOpenCourse: (courseId: number) => void;
+  onOpenCalendar?: () => void;
+  onOpenTasks?: () => void;
 }
 
 const STATUS_LABELS: Record<LearningPathStatus, string> = {
@@ -49,18 +61,34 @@ export default function PathsView({
   onRequireAuth,
   paths,
   courses,
+  unifiedTasks = [],
   hubCategories,
   activeHubFilter,
   onChangeHubFilter,
   onAddPath,
   onUpdatePath,
   onDeletePath,
+  onTogglePathStage,
+  onAddUnifiedTask,
+  onUpdateUnifiedTask,
   onOpenCourse,
+  onOpenCalendar,
+  onOpenTasks,
 }: PathsViewProps) {
   const [selectedPathId, setSelectedPathId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingPath, setEditingPath] = useState(false);
   const [confirmDeletePath, setConfirmDeletePath] = useState<LearningPath | null>(null);
+
+  // Stage & path task calendar scheduling
+  const [schedStageId, setSchedStageId] = useState<string | null>(null);
+  const [schedDate, setSchedDate] = useState(() => getTodayDateKey());
+  const [schedTime, setSchedTime] = useState('09:00');
+  const [schedDuration, setSchedDuration] = useState(60);
+  const [schedPriority, setSchedPriority] = useState<TaskPriority>('medium');
+  const [newPathTaskTitle, setNewPathTaskTitle] = useState('');
+  const [newPathTaskDate, setNewPathTaskDate] = useState('');
+  const [newPathTaskTime, setNewPathTaskTime] = useState('');
 
   // Add Form State (only title required)
   const [title, setTitle] = useState('');
@@ -131,6 +159,10 @@ export default function PathsView({
       onRequireAuth();
       return;
     }
+    if (onTogglePathStage) {
+      onTogglePathStage(path.id, stageId);
+      return;
+    }
     const nextStages = path.stages.map((s) =>
       s.id === stageId ? { ...s, done: !s.done } : s
     );
@@ -147,6 +179,81 @@ export default function PathsView({
         : path.status;
 
     onUpdatePath(path.id, { stages: nextStages, progressPct, status: nextStatus });
+  };
+
+  const handleScheduleStageToCalendar = (
+    path: LearningPath,
+    stage: LearningPathStage
+  ) => {
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    const canonicalKey = `path:${path.id}:${stage.id}`;
+    const existing = unifiedTasks.find((ut) => ut.projectId === canonicalKey);
+    const endTime = schedTime
+      ? computeEndTimeFromMinutes(schedTime, schedDuration)
+      : '';
+    if (existing && onUpdateUnifiedTask) {
+      onUpdateUnifiedTask(existing.id, {
+        title: stage.title,
+        scheduledDate: schedDate,
+        dueDate: schedDate,
+        startTime: schedTime,
+        endTime,
+        durationMinutes: schedDuration,
+        priority: schedPriority,
+        status: stage.done ? 'done' : existing.status,
+      });
+    } else if (onAddUnifiedTask) {
+      onAddUnifiedTask({
+        title: stage.title,
+        description: `مرحلة من المسار التعليمي: ${path.title}`,
+        hubId: path.hubId ?? 'knowledge',
+        categoryLabel: 'مسار تعليمي',
+        priority: schedPriority,
+        status: stage.done ? 'done' : 'todo',
+        dueDate: schedDate,
+        scheduledDate: schedDate,
+        startTime: schedTime,
+        endTime,
+        durationMinutes: schedDuration,
+        projectId: canonicalKey,
+        linkedLabel: path.title,
+      });
+    }
+    setSchedStageId(null);
+  };
+
+  const handleAddGeneralPathTask = (e: React.FormEvent, path: LearningPath) => {
+    e.preventDefault();
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    const clean = newPathTaskTitle.trim();
+    if (!clean || !onAddUnifiedTask) return;
+    const endTime = newPathTaskTime
+      ? computeEndTimeFromMinutes(newPathTaskTime, 60)
+      : '';
+    onAddUnifiedTask({
+      title: clean,
+      description: `مهمة مرتبطة بالمسار التعليمي: ${path.title}`,
+      hubId: path.hubId ?? 'knowledge',
+      categoryLabel: 'مسار تعليمي',
+      priority: 'medium',
+      status: 'todo',
+      dueDate: newPathTaskDate,
+      scheduledDate: newPathTaskDate,
+      startTime: newPathTaskTime,
+      endTime,
+      durationMinutes: newPathTaskDate || newPathTaskTime ? 60 : 0,
+      projectId: `path:${path.id}`,
+      linkedLabel: path.title,
+    });
+    setNewPathTaskTitle('');
+    setNewPathTaskDate('');
+    setNewPathTaskTime('');
   };
 
   const handleAddStage = (e: React.FormEvent, path: LearningPath) => {
@@ -208,6 +315,14 @@ export default function PathsView({
     const hubMeta = getHubMeta(selectedPath.hubId);
     const linkedCourses = courses.filter((c) =>
       selectedPath.linkedCourseIds.includes(c.id)
+    );
+    const linkedPathTasks = unifiedTasks.filter(
+      (ut) =>
+        ut.projectId === `path:${selectedPath.id}` ||
+        ut.projectId?.startsWith(`path:${selectedPath.id}:`) ||
+        (ut.linkedLabel &&
+          ut.linkedLabel.trim().toLowerCase() ===
+            selectedPath.title.trim().toLowerCase())
     );
     return (
       <div className="space-y-6">
@@ -425,65 +540,193 @@ export default function PathsView({
                 لا توجد مراحل مضافة بعد. أضف أول مرحلة لتحويل المسار إلى خطوات واضحة.
               </p>
             ) : (
-              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl">
-                {selectedPath.stages.map((stage, idx) => (
-                  <div
-                    key={stage.id}
-                    className="px-4 py-3 flex items-center justify-between gap-3 bg-white"
-                  >
-                    <button
-                      type="button"
-                      disabled={!canEdit}
-                      onClick={() => handleToggleStage(selectedPath, stage.id)}
-                      className="flex items-center gap-2.5 text-right flex-1 cursor-pointer disabled:opacity-75"
-                    >
-                      {stage.done ? (
-                        <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0" aria-hidden="true" />
-                      ) : (
-                        <Square className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
-                      )}
-                      <span
-                        className={`text-sm ${
-                          stage.done
-                            ? 'line-through text-slate-400'
-                            : 'text-slate-800'
-                        }`}
-                      >
-                        {idx + 1}. {stage.title}
-                      </span>
-                    </button>
-                    {canEdit && (
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          type="button"
-                          disabled={idx === 0}
-                          onClick={() => handleMoveStage(selectedPath, idx, -1)}
-                          aria-label="تحريك لأعلى"
-                          className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
-                        >
-                          <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={idx === selectedPath.stages.length - 1}
-                          onClick={() => handleMoveStage(selectedPath, idx, 1)}
-                          aria-label="تحريك لأسفل"
-                          className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
-                        >
-                          <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteStage(selectedPath, stage.id)}
-                          aria-label="حذف المرحلة"
-                          className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
+              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden">
+                {selectedPath.stages.map((stage, idx) => {
+                  const canonicalKey = `path:${selectedPath.id}:${stage.id}`;
+                  const linkedSched = unifiedTasks.find(
+                    (ut) => ut.projectId === canonicalKey
+                  );
+                  const isSchedOpen = schedStageId === stage.id;
+                  return (
+                    <div key={stage.id} className="bg-white">
+                      <div className="px-4 py-3 flex items-center justify-between gap-3">
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <button
+                            type="button"
+                            disabled={!canEdit}
+                            onClick={() => handleToggleStage(selectedPath, stage.id)}
+                            className="flex items-center gap-2.5 text-right w-full cursor-pointer disabled:opacity-75"
+                          >
+                            {stage.done ? (
+                              <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0" aria-hidden="true" />
+                            ) : (
+                              <Square className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
+                            )}
+                            <span
+                              className={`text-sm ${
+                                stage.done
+                                  ? 'line-through text-slate-400'
+                                  : 'text-slate-800'
+                              }`}
+                            >
+                              {idx + 1}. {stage.title}
+                            </span>
+                          </button>
+
+                          {linkedSched && (
+                            <div className="flex flex-wrap items-center gap-1.5 pr-6 text-[10px] text-[#1E3A5F]">
+                              {linkedSched.scheduledDate ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200 font-semibold tabular-nums">
+                                  <Calendar className="w-3 h-3" aria-hidden="true" />
+                                  مجدولة: {linkedSched.scheduledDate}
+                                  {linkedSched.startTime ? ` · ${linkedSched.startTime}` : ''}
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 bg-slate-50 rounded border border-slate-200 text-slate-600">
+                                  في قائمة المهام
+                                </span>
+                              )}
+                              {onOpenCalendar && (
+                                <button
+                                  type="button"
+                                  onClick={onOpenCalendar}
+                                  className="underline font-semibold cursor-pointer"
+                                >
+                                  عرض في التقويم
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {canEdit && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            {(onAddUnifiedTask || onUpdateUnifiedTask) && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (isSchedOpen) {
+                                    setSchedStageId(null);
+                                  } else {
+                                    setSchedStageId(stage.id);
+                                    setSchedDate(
+                                      linkedSched?.scheduledDate || getTodayDateKey()
+                                    );
+                                    setSchedTime(linkedSched?.startTime || '09:00');
+                                    setSchedDuration(linkedSched?.durationMinutes || 60);
+                                    setSchedPriority(linkedSched?.priority || 'medium');
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                              >
+                                <Calendar className="w-3 h-3" aria-hidden="true" />
+                                <span>
+                                  {isSchedOpen
+                                    ? 'إغلاق'
+                                    : linkedSched?.scheduledDate
+                                    ? 'تعديل الجدول'
+                                    : 'جدولة'}
+                                </span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => handleMoveStage(selectedPath, idx, -1)}
+                              aria-label="تحريك لأعلى"
+                              className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === selectedPath.stages.length - 1}
+                              onClick={() => handleMoveStage(selectedPath, idx, 1)}
+                              aria-label="تحريك لأسفل"
+                              className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteStage(selectedPath, stage.id)}
+                              aria-label="حذف المرحلة"
+                              className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                ))}
+
+                      {isSchedOpen && canEdit && (
+                        <div className="px-4 pb-3 pt-2 bg-slate-50 border-t border-slate-100 space-y-2">
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                            <label className="block text-slate-600">
+                              التاريخ
+                              <input
+                                type="date"
+                                value={schedDate}
+                                onChange={(e) => setSchedDate(e.target.value)}
+                                className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
+                              />
+                            </label>
+                            <label className="block text-slate-600">
+                              الوقت
+                              <input
+                                type="time"
+                                value={schedTime}
+                                onChange={(e) => setSchedTime(e.target.value)}
+                                className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
+                              />
+                            </label>
+                            <label className="block text-slate-600">
+                              المدة (د)
+                              <select
+                                value={schedDuration}
+                                onChange={(e) =>
+                                  setSchedDuration(Number(e.target.value))
+                                }
+                                className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
+                              >
+                                {[15, 30, 45, 60, 90, 120, 180].map((m) => (
+                                  <option key={m} value={m}>
+                                    {m} د
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="block text-slate-600">
+                              الأولوية
+                              <select
+                                value={schedPriority}
+                                onChange={(e) =>
+                                  setSchedPriority(e.target.value as TaskPriority)
+                                }
+                                className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
+                              >
+                                <option value="high">عالية</option>
+                                <option value="medium">متوسطة</option>
+                                <option value="low">منخفضة</option>
+                              </select>
+                            </label>
+                          </div>
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleScheduleStageToCalendar(selectedPath, stage)
+                              }
+                              className="px-3 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded cursor-pointer"
+                            >
+                              حفظ في المهام والتقويم
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
 
@@ -505,6 +748,123 @@ export default function PathsView({
                 >
                   <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>إضافة مرحلة</span>
+                </button>
+              </form>
+            )}
+          </div>
+
+          {/* Unified Tasks & Calendar Schedule Linked to this Path */}
+          <div className="space-y-3 pt-2 border-t border-slate-100">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                <ListTodo className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <span>
+                  المهام وجدول التقويم المرتبط بالمسار ({linkedPathTasks.length})
+                </span>
+              </h2>
+              <div className="flex items-center gap-3 text-xs">
+                {onOpenTasks && (
+                  <button
+                    type="button"
+                    onClick={onOpenTasks}
+                    className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                  >
+                    كل المهام ←
+                  </button>
+                )}
+                {onOpenCalendar && (
+                  <button
+                    type="button"
+                    onClick={onOpenCalendar}
+                    className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                  >
+                    تقويم الجدولة ←
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {linkedPathTasks.length === 0 ? (
+              <p className="text-xs text-slate-500">
+                لا توجد مهام مجدولة لهذا المسار بعد — أضف مهمة أدناه أو استخدم زر «جدولة» بجانب أي مرحلة.
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden">
+                {linkedPathTasks.map((ut) => {
+                  const isDone = ut.status === 'done';
+                  return (
+                    <div
+                      key={ut.id}
+                      className="px-3.5 py-2.5 bg-white flex items-center justify-between gap-2"
+                    >
+                      <button
+                        type="button"
+                        disabled={!canEdit || !onUpdateUnifiedTask}
+                        onClick={() =>
+                          onUpdateUnifiedTask?.(ut.id, {
+                            status: isDone ? 'todo' : 'done',
+                          })
+                        }
+                        className="flex items-center gap-2.5 text-right flex-1 cursor-pointer disabled:opacity-60"
+                      >
+                        {isDone ? (
+                          <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0" aria-hidden="true" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
+                        )}
+                        <span
+                          className={`text-xs ${
+                            isDone ? 'line-through text-slate-400' : 'text-slate-800 font-medium'
+                          }`}
+                        >
+                          {ut.title}
+                        </span>
+                      </button>
+                      {(ut.scheduledDate || ut.dueDate) && (
+                        <span className="inline-flex items-center gap-1 text-[11px] text-[#1E3A5F] font-medium tabular-nums shrink-0">
+                          <Calendar className="w-3 h-3" aria-hidden="true" />
+                          {ut.scheduledDate || ut.dueDate}
+                          {ut.startTime ? ` · ${ut.startTime}` : ''}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {canEdit && onAddUnifiedTask && (
+              <form
+                onSubmit={(e) => handleAddGeneralPathTask(e, selectedPath)}
+                className="flex flex-wrap items-center gap-2"
+              >
+                <input
+                  type="text"
+                  value={newPathTaskTitle}
+                  onChange={(e) => setNewPathTaskTitle(e.target.value)}
+                  placeholder="أضف مهمة مرتبطة بهذا المسار وتظهر في المهام والتقويم..."
+                  className="flex-1 min-w-[200px] px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+                />
+                <input
+                  type="date"
+                  value={newPathTaskDate}
+                  onChange={(e) => setNewPathTaskDate(e.target.value)}
+                  title="تاريخ الجدولة (اختياري)"
+                  className="px-2.5 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                />
+                <input
+                  type="time"
+                  value={newPathTaskTime}
+                  onChange={(e) => setNewPathTaskTime(e.target.value)}
+                  title="الوقت (اختياري)"
+                  className="px-2.5 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                />
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-1 px-3.5 py-2 text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>ربط مهمة</span>
                 </button>
               </form>
             )}
