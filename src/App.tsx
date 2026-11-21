@@ -22,6 +22,7 @@ import CourseDetailPage from './components/CourseDetailPage';
 import CoursesView from './components/CoursesView';
 import DomainsView from './components/DomainsView';
 import ErrorBoundary from './components/ErrorBoundary';
+import FocusNoteStudyModal from './components/FocusNoteStudyModal';
 import FocusView from './components/FocusView';
 import Header, { ActiveTab } from './components/Header';
 import LibraryView from './components/LibraryView';
@@ -262,6 +263,12 @@ export default function App() {
   const [activeBookNoteId, setActiveBookNoteId] = useState<string | null>(
     initialRoute.noteId
   );
+  const [studyModalState, setStudyModalState] = useState<{
+    noteId: string;
+    startInEdit?: boolean;
+  } | null>(() =>
+    initialRoute.noteId ? { noteId: initialRoute.noteId, startInEdit: false } : null
+  );
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(
     initialRoute.courseId
   );
@@ -384,6 +391,7 @@ export default function App() {
     }
     setActiveTab(tab);
     setSelectedCourseId(null);
+    setStudyModalState(null);
     if (tab !== 'journal') {
       setActiveBookNoteId(null);
     } else {
@@ -425,8 +433,12 @@ export default function App() {
         setSelectedCourseId(parsed.courseId);
         if (parsed.noteId !== null) {
           setActiveBookNoteId(parsed.noteId);
-        } else if (parsed.tab !== 'journal') {
-          setActiveBookNoteId(null);
+          setStudyModalState({ noteId: parsed.noteId, startInEdit: false });
+        } else {
+          setStudyModalState(null);
+          if (parsed.tab !== 'journal') {
+            setActiveBookNoteId(null);
+          }
         }
       }
     };
@@ -1443,9 +1455,7 @@ export default function App() {
     };
     setBookNotes((prev) => [newNote, ...prev]);
     setActiveBookNoteId(newNote.id);
-    if (!payload.stayInCurrentView) {
-      navigateToTab('journal');
-    }
+    setStudyModalState({ noteId: newNote.id, startInEdit: true });
     void saveBookNoteDoc(user.uid, newNote);
 
     const typeDesc =
@@ -1474,11 +1484,8 @@ export default function App() {
       (bn) => bn.bookTitle.trim() === bookTitle.trim()
     );
     if (existing) {
-      pushBackStep();
       setActiveBookNoteId(existing.id);
-      setSelectedCourseId(null);
-      setActiveTab('journal');
-      syncLocationHash('journal', null, existing.id);
+      setStudyModalState({ noteId: existing.id, startInEdit: false });
       return;
     }
 
@@ -1487,7 +1494,6 @@ export default function App() {
       return;
     }
 
-    pushBackStep();
     handleAddStructuredNote({
       hubId: 'knowledge',
       noteType: 'book',
@@ -1495,6 +1501,7 @@ export default function App() {
       author,
       categoryLabel: customCategories[0]?.title ?? 'قراءات تأسيسية',
       initialContent,
+      stayInCurrentView: true,
     });
   };
 
@@ -1509,11 +1516,8 @@ export default function App() {
         )
       : undefined;
     if (existing) {
-      pushBackStep();
       setActiveBookNoteId(existing.id);
-      setSelectedCourseId(null);
-      setActiveTab('journal');
-      syncLocationHash('journal', null, existing.id);
+      setStudyModalState({ noteId: existing.id, startInEdit: false });
       return;
     }
 
@@ -1522,7 +1526,6 @@ export default function App() {
       return;
     }
 
-    pushBackStep();
     handleAddStructuredNote({
       hubId: course.hubId || 'knowledge',
       noteType: 'course_lecture',
@@ -1535,18 +1538,13 @@ export default function App() {
       lectureTitle: lectureTitle || 'المحاضرة 1',
       categoryLabel: course.category || 'محاضرات وتطبيق عملي',
       initialContent,
+      stayInCurrentView: true,
     });
   };
 
-  const handleOpenNoteById = (noteId: string) => {
-    pushBackStep();
+  const handleOpenNoteById = (noteId: string, startInEdit = false) => {
     setActiveBookNoteId(noteId);
-    setSelectedCourseId(null);
-    setActiveTab('journal');
-    syncLocationHash('journal', null, noteId);
-    if (typeof window !== 'undefined') {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
+    setStudyModalState({ noteId, startInEdit });
   };
 
   const handleUpdateBookNote = (id: string, updates: Partial<BookNote>) => {
@@ -1576,6 +1574,9 @@ export default function App() {
       }
       return next;
     });
+    if (studyModalState?.noteId === id) {
+      setStudyModalState(null);
+    }
     void deleteBookNoteDoc(user.uid, id);
   };
 
@@ -2599,13 +2600,16 @@ export default function App() {
             activeBookNoteId={activeBookNoteId}
             onSelectBookNote={(id) => {
               if (id) {
-                pushBackStep();
-                syncLocationHash('journal', null, id);
+                handleOpenNoteById(id, false);
               } else {
+                setActiveBookNoteId(null);
+                setStudyModalState(null);
                 syncLocationHash('journal', null, null);
               }
-              setActiveBookNoteId(id);
             }}
+            onOpenFocusStudy={(noteId, startInEdit) =>
+              handleOpenNoteById(noteId, Boolean(startInEdit))
+            }
             activeHubFilter={activeHubFilter}
             onChangeHubFilter={setActiveHubFilter}
             hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
@@ -2712,6 +2716,48 @@ export default function App() {
           handleResetPlan();
         }}
       />
+
+      {studyModalState && (
+        <ErrorBoundary inline onReset={() => setStudyModalState(null)}>
+          <FocusNoteStudyModal
+            note={
+              bookNotes.find((bn) => bn.id === studyModalState.noteId) ?? null
+            }
+            startInEdit={studyModalState.startInEdit}
+            uid={user?.uid}
+            canEdit={canEdit}
+            preferences={preferences}
+            months={months}
+            courses={courses}
+            customCategories={customCategories}
+            hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
+            showExcelExport={preferences.showExcelExport !== false}
+            onClose={() => {
+              setStudyModalState(null);
+              setActiveBookNoteId(null);
+              if (
+                typeof window !== 'undefined' &&
+                window.location.hash.startsWith('#/journal/')
+              ) {
+                syncLocationHash(activeTab, selectedCourseId, null);
+              }
+            }}
+            onRequireAuth={handleRequireAuth}
+            onUpdatePreferences={handleUpdatePreferences}
+            onUpdateBookNote={handleUpdateBookNote}
+            onDeleteBookNote={handleDeleteBookNote}
+            onOpenPdf={setActivePdfTarget}
+            onLogVoiceNote={(title) =>
+              recordHistory({
+                actionType: 'voice',
+                title: `سجّلت ملاحظة صوتية في: ${title}`,
+                detail: 'تفريغ صوتي مباشر باللغة العربية',
+                targetTab: 'journal',
+              })
+            }
+          />
+        </ErrorBoundary>
+      )}
 
       {activePdfTarget && (
         <ErrorBoundary inline onReset={() => setActivePdfTarget(null)}>

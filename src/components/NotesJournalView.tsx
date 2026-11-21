@@ -87,6 +87,7 @@ interface NotesJournalViewProps {
   bookNotes: BookNote[];
   activeBookNoteId: string | null;
   onSelectBookNote: (id: string | null) => void;
+  onOpenFocusStudy?: (noteId: string, startInEdit?: boolean) => void;
   activeHubFilter?: LearningHubId | 'all';
   onChangeHubFilter?: (hub: LearningHubId | 'all') => void;
   hubCategories?: Record<LearningHubId, string[]>;
@@ -167,6 +168,7 @@ export default function NotesJournalView({
   bookNotes,
   activeBookNoteId,
   onSelectBookNote,
+  onOpenFocusStudy,
   activeHubFilter = 'all',
   onChangeHubFilter,
   hubCategories,
@@ -259,9 +261,13 @@ export default function NotesJournalView({
     }
   };
 
-  // Open standalone note automatically when jumped from Overview / Courses / Plan or created
+  // Open standalone note automatically only when external inline fallback is used
   const prevActiveIdRef = useRef<string | null>(activeBookNoteId);
   useEffect(() => {
+    if (onOpenFocusStudy) {
+      prevActiveIdRef.current = activeBookNoteId;
+      return;
+    }
     if (activeBookNoteId && activeBookNoteId !== prevActiveIdRef.current) {
       const target = bookNotes.find((bn) => bn.id === activeBookNoteId);
       if (target) {
@@ -284,7 +290,7 @@ export default function NotesJournalView({
       setIsEditingNote(false);
     }
     prevActiveIdRef.current = activeBookNoteId;
-  }, [activeBookNoteId, bookNotes]);
+  }, [activeBookNoteId, bookNotes, onOpenFocusStudy]);
 
   const curriculumBookOptions = useMemo(() => {
     const items: Array<{ label: string; title: string; author: string }> = [];
@@ -443,6 +449,10 @@ export default function NotesJournalView({
   };
 
   const openNoteStandalone = (note: BookNote, startInEdit = false) => {
+    if (onOpenFocusStudy) {
+      onOpenFocusStudy(note.id, startInEdit);
+      return;
+    }
     onSelectBookNote(note.id);
     setDraftNote(buildDraftFromNote(note));
     setIsEditingNote(startInEdit);

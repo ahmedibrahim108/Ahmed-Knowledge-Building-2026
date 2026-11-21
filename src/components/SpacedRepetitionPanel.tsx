@@ -32,6 +32,7 @@ interface SpacedRepetitionPanelProps {
   value: SpacedRepetitionValue;
   onChange: (updates: SpacedRepetitionValue) => void;
   title?: string;
+  compact?: boolean;
 }
 
 export default function SpacedRepetitionPanel({
@@ -39,6 +40,7 @@ export default function SpacedRepetitionPanel({
   value,
   onChange,
   title = 'أنماط القراءة، أساليب التعلم والتكرار المتباعد',
+  compact = false,
 }: SpacedRepetitionPanelProps) {
   const [customMethod, setCustomMethod] = useState('');
 
@@ -147,7 +149,13 @@ export default function SpacedRepetitionPanel({
           <BookOpen className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
           <span>أنماط القراءة المطبّقة (اختر نمطًا أو أكثر):</span>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+        <div
+          className={
+            compact
+              ? 'grid grid-cols-1 sm:grid-cols-2 gap-2'
+              : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2'
+          }
+        >
           {READING_MODES_META.map((mode) => {
             const active = readingModes.includes(mode.id);
             return (
@@ -229,7 +237,13 @@ export default function SpacedRepetitionPanel({
       </div>
 
       {/* Repetition Counter + Spaced Repetition Scheduler */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-200">
+      <div
+        className={
+          compact
+            ? 'grid grid-cols-1 gap-3 pt-2 border-t border-slate-200'
+            : 'grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-slate-200'
+        }
+      >
         {/* Re-listen / Record Tracking */}
         <div className="bg-white border border-slate-200 rounded-lg p-3.5 flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-0.5">

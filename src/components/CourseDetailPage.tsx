@@ -1975,12 +1975,14 @@ export default function CourseDetailPage({
                       onClick={() => {
                         setActiveNoteId(bn.id);
                         setIsEditingNote(false);
+                        onOpenNoteById(bn.id);
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault();
                           setActiveNoteId(bn.id);
                           setIsEditingNote(false);
+                          onOpenNoteById(bn.id);
                         }
                       }}
                       className={`w-full text-right p-3.5 rounded-xl border transition-colors cursor-pointer space-y-1.5 ${
@@ -2006,18 +2008,26 @@ export default function CourseDetailPage({
                         </p>
                       )}
                       <div className="pt-1 flex items-center justify-between gap-2">
-                        <span className="text-[10px] text-slate-400">
-                          {isSelected ? 'معروض بالجانب' : 'اضغط للمعاينة'}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveNoteId(bn.id);
+                            setIsEditingNote(false);
+                          }}
+                          className="text-[10px] text-slate-500 hover:text-[#1E3A5F] hover:underline cursor-pointer"
+                        >
+                          {isSelected ? 'معروض بالجانب' : 'معاينة بالجانب'}
+                        </button>
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
                             onOpenNoteById(bn.id);
                           }}
-                          className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-[#1E3A5F] bg-white border border-[#1E3A5F]/25 hover:bg-[#1E3A5F] hover:text-white rounded-md transition-colors cursor-pointer shrink-0"
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-semibold text-[#1E3A5F] bg-white border border-[#1E3A5F]/25 hover:bg-[#1E3A5F] hover:text-white rounded-md transition-colors cursor-pointer shrink-0"
                         >
-                          <span>فتح صفحة التلخيص</span>
+                          <span>فتح للمذاكرة</span>
                           <ExternalLink className="w-2.5 h-2.5" aria-hidden="true" />
                         </button>
                       </div>
@@ -2056,6 +2066,9 @@ export default function CourseDetailPage({
                     <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                       <ReadAloudButton
                         uid={uid}
+                        entityType="course"
+                        entityId={activeNote.id}
+                        title={activeNote.bookTitle}
                         text={richHtmlToPlainText(activeNote.content)}
                         voiceName={preferences.readAloudVoice}
                         speed={preferences.readAloudSpeed}
@@ -2068,9 +2081,9 @@ export default function CourseDetailPage({
                       <button
                         type="button"
                         onClick={() => onOpenNoteById(activeNote.id)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
                       >
-                        <span>فتح صفحة التلخيص ↗</span>
+                        <span>وضع التركيز والنقاش ↗</span>
                       </button>
 
                       {canEdit && !isEditingNote && (
