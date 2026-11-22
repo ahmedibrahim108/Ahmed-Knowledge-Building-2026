@@ -48,13 +48,9 @@ STABLE
 AS $$
   SELECT (
     nullif(auth.jwt()->>'sub', '') IS NOT NULL
-    AND (
-      auth.role() = 'authenticated'
-      OR (
-        auth.jwt()->>'iss' = 'https://securetoken.google.com/knowledge-balance'
-        AND auth.jwt()->>'aud' = 'knowledge-balance'
-      )
-    )
+    AND auth.jwt()->>'iss' = 'https://securetoken.google.com/knowledge-balance'
+    AND auth.jwt()->>'aud' = 'knowledge-balance'
+    AND coalesce(nullif(auth.jwt()->>'role', ''), 'anon') IN ('anon', 'authenticated')
   );
 $$;
 
@@ -146,6 +142,13 @@ CREATE TRIGGER trg_user_profiles_protect_admin_fields
   FOR EACH ROW
   EXECUTE FUNCTION public.protect_user_profiles_admin_fields();
 
+-- Keep updated_at trigger active
+DROP TRIGGER IF EXISTS trg_user_profiles_updated_at ON public.user_profiles;
+CREATE TRIGGER trg_user_profiles_updated_at
+  BEFORE UPDATE ON public.user_profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION public.set_updated_at();
+
 -- 5. Function & Table Grants (strictly gated by RLS below)
 REVOKE ALL ON FUNCTION public.firebase_uid() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.firebase_uid() TO anon, authenticated, service_role;
@@ -175,8 +178,9 @@ DROP POLICY IF EXISTS user_profiles_delete_own ON public.user_profiles;
 DROP POLICY IF EXISTS user_profiles_select_own_or_admin ON public.user_profiles;
 DROP POLICY IF EXISTS user_profiles_update_own_or_admin ON public.user_profiles;
 DROP POLICY IF EXISTS user_profiles_delete_own_or_admin ON public.user_profiles;
+DROP POLICY IF EXISTS user_profiles_delete_admin_only ON public.user_profiles;
 
--- SELECT: verified Firebase user reads only their own profile; verified Owner/Admin can inspect all
+-- SELECT: verified Firebase user reads only their own profile; verified Owner/Admin can inspect profiles
 CREATE POLICY user_profiles_select_own_or_admin ON public.user_profiles
   FOR SELECT
   TO anon, authenticated
@@ -219,14 +223,10 @@ CREATE POLICY user_profiles_update_own_or_admin ON public.user_profiles
     )
   );
 
--- DELETE: restricted to own profile or verified Owner/Admin
-CREATE POLICY user_profiles_delete_own_or_admin ON public.user_profiles
+-- DELETE: restricted to verified Owner/Admin only (prevents accidental ON DELETE CASCADE data loss)
+CREATE POLICY user_profiles_delete_admin_only ON public.user_profiles
   FOR DELETE
   TO anon, authenticated
   USING (
-    public.is_verified_firebase_user()
-    AND (
-      uid = public.firebase_uid()
-      OR public.is_verified_admin()
-    )
+    public.is_verified_admin()
   );

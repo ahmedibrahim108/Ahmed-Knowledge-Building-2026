@@ -56,6 +56,19 @@ CREATE TABLE IF NOT EXISTS public.user_profiles (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE OR REPLACE FUNCTION public.is_verified_firebase_user()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT (
+    nullif(auth.jwt()->>'sub', '') IS NOT NULL
+    AND auth.jwt()->>'iss' = 'https://securetoken.google.com/knowledge-balance'
+    AND auth.jwt()->>'aud' = 'knowledge-balance'
+    AND coalesce(nullif(auth.jwt()->>'role', ''), 'anon') IN ('anon', 'authenticated')
+  );
+$$;
+
 CREATE OR REPLACE FUNCTION public.is_verified_admin()
 RETURNS boolean
 LANGUAGE sql
@@ -64,15 +77,20 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
   SELECT (
-    public.firebase_email() = 'farrag34567@gmail.com'
-    AND public.firebase_email_verified()
-  )
-  OR EXISTS (
-    SELECT 1
-    FROM public.user_profiles AS p
-    WHERE p.uid = public.firebase_uid()
-      AND p.role = 'admin'
-      AND p.approval_status = 'approved'
+    public.is_verified_firebase_user()
+    AND (
+      (
+        public.firebase_email() = 'farrag34567@gmail.com'
+        AND public.firebase_email_verified()
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM public.user_profiles AS p
+        WHERE p.uid = public.firebase_uid()
+          AND p.role = 'admin'
+          AND p.approval_status = 'approved'
+      )
+    )
   );
 $$;
 
@@ -698,8 +716,7 @@ ALTER TABLE public.image_attachments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audio_cache ENABLE ROW LEVEL SECURITY;
 
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
-GRANT SELECT ON TABLE public.user_profiles TO anon;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.user_profiles TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.user_profiles TO anon, authenticated;
 
 REVOKE ALL ON FUNCTION public.firebase_uid() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.firebase_uid() TO anon, authenticated, service_role;
@@ -710,8 +727,11 @@ GRANT EXECUTE ON FUNCTION public.firebase_email() TO anon, authenticated, servic
 REVOKE ALL ON FUNCTION public.firebase_email_verified() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.firebase_email_verified() TO anon, authenticated, service_role;
 
+REVOKE ALL ON FUNCTION public.is_verified_firebase_user() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_verified_firebase_user() TO anon, authenticated, service_role;
+
 REVOKE ALL ON FUNCTION public.is_verified_admin() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.is_verified_admin() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.is_verified_admin() TO anon, authenticated, service_role;
 
 DROP POLICY IF EXISTS user_profiles_select_own ON public.user_profiles;
 DROP POLICY IF EXISTS user_profiles_insert_own ON public.user_profiles;
@@ -720,25 +740,35 @@ DROP POLICY IF EXISTS user_profiles_delete_own ON public.user_profiles;
 DROP POLICY IF EXISTS user_profiles_select_own_or_admin ON public.user_profiles;
 DROP POLICY IF EXISTS user_profiles_update_own_or_admin ON public.user_profiles;
 DROP POLICY IF EXISTS user_profiles_delete_own_or_admin ON public.user_profiles;
+DROP POLICY IF EXISTS user_profiles_delete_admin_only ON public.user_profiles;
 
 CREATE POLICY user_profiles_select_own_or_admin ON public.user_profiles
-  FOR SELECT TO authenticated
-  USING (uid = public.firebase_uid() OR public.is_verified_admin());
+  FOR SELECT TO anon, authenticated
+  USING (
+    public.is_verified_firebase_user()
+    AND (uid = public.firebase_uid() OR public.is_verified_admin())
+  );
 CREATE POLICY user_profiles_insert_own ON public.user_profiles
-  FOR INSERT TO authenticated
+  FOR INSERT TO anon, authenticated
   WITH CHECK (
-    public.firebase_uid() IS NOT NULL
+    public.is_verified_firebase_user()
     AND uid = public.firebase_uid()
     AND role = 'user'
     AND approval_status = 'pending'
   );
 CREATE POLICY user_profiles_update_own_or_admin ON public.user_profiles
-  FOR UPDATE TO authenticated
-  USING (uid = public.firebase_uid() OR public.is_verified_admin())
-  WITH CHECK (uid = public.firebase_uid() OR public.is_verified_admin());
-CREATE POLICY user_profiles_delete_own_or_admin ON public.user_profiles
-  FOR DELETE TO authenticated
-  USING (uid = public.firebase_uid() OR public.is_verified_admin());
+  FOR UPDATE TO anon, authenticated
+  USING (
+    public.is_verified_firebase_user()
+    AND (uid = public.firebase_uid() OR public.is_verified_admin())
+  )
+  WITH CHECK (
+    public.is_verified_firebase_user()
+    AND (uid = public.firebase_uid() OR public.is_verified_admin())
+  );
+CREATE POLICY user_profiles_delete_admin_only ON public.user_profiles
+  FOR DELETE TO anon, authenticated
+  USING (public.is_verified_admin());
 
 DO $$
 DECLARE
