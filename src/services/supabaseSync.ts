@@ -1225,7 +1225,7 @@ export async function ensureUserProfileExists(
       return existing;
     }
 
-    // 2. Insert new profile idempotently (ON CONFLICT (uid) DO NOTHING)
+    // 2. Insert new profile (plain INSERT so only INSERT RLS WITH CHECK applies)
     const newProfilePayload = {
       uid: user.uid,
       display_name: clip(user.displayName || 'مستخدم ميزان المعرفة', 120),
@@ -1237,12 +1237,10 @@ export async function ensureUserProfileExists(
 
     const { error: insertErr } = await client
       .from('user_profiles')
-      .upsert(newProfilePayload, {
-        onConflict: 'uid',
-        ignoreDuplicates: true,
-      });
+      .insert(newProfilePayload);
 
-    if (insertErr) {
+    // 23505 (unique_violation) means a parallel tab created the row concurrently — fall through to read-back verification
+    if (insertErr && insertErr.code !== '23505') {
       throw createDetailedSupabaseError(
         'Failed to create user_profiles row',
         insertErr

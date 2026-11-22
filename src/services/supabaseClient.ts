@@ -201,13 +201,13 @@ function diagnoseSupabaseAuthOrRlsCause(
     return 'Supabase rejected the Firebase ID token. In Supabase Dashboard -> Authentication -> Third-Party Auth, verify Firebase Auth is enabled with Firebase Project ID "knowledge-balance".';
   }
   if (c === '42501' || m.includes('row-level security') || m.includes('permission denied')) {
-    return 'PostgreSQL RLS or role grants blocked the request. Verify public.firebase_uid() reads auth.jwt()->>\'sub\' and authenticated policies are applied.';
+    return 'PostgreSQL RLS or role grants blocked the request. Note: standard Firebase ID tokens omit a "role": "authenticated" claim, causing PostgREST to execute as role "anon". Apply migration 004_fix_user_profiles_insert_rls.sql in Supabase SQL Editor.';
   }
   if (c === '42703' || m.includes('approval_status')) {
-    return 'Missing approval_status column or updated trigger in Supabase. Run supabase/migrations/003_secure_user_profiles_rls.sql in Supabase SQL Editor.';
+    return 'Missing approval_status column or updated trigger in Supabase. Run supabase/migrations/004_fix_user_profiles_insert_rls.sql in Supabase SQL Editor.';
   }
   if (c === 'pgrst205' || m.includes('schema cache') || m.includes('does not exist')) {
-    return 'Expected table or column is missing in Supabase. Run supabase/migrations/003_secure_user_profiles_rls.sql in Supabase SQL Editor.';
+    return 'Expected table or column is missing in Supabase. Run supabase/migrations/004_fix_user_profiles_insert_rls.sql in Supabase SQL Editor.';
   }
   return undefined;
 }
@@ -339,6 +339,13 @@ export async function testSupabaseConnection(
     const payload = idToken ? decodeJwtPayloadUnsafe(idToken) : null;
     const subMatches = payload?.sub === currentUser.uid;
     const aud = typeof payload?.aud === 'string' ? payload.aud : 'unknown';
+    const iss = typeof payload?.iss === 'string' ? payload.iss : 'unknown';
+    const roleClaim =
+      typeof payload?.role === 'string'
+        ? payload.role
+        : 'none (PostgREST maps to anon)';
+    const emailVerified =
+      payload?.email_verified === true || payload?.email_verified === 'true';
     const exp = typeof payload?.exp === 'number' ? payload.exp : 0;
     const minsLeft = exp ? Math.round((exp * 1000 - Date.now()) / 60000) : 0;
 
@@ -349,7 +356,7 @@ export async function testSupabaseConnection(
         ok: false,
         detail: !idToken
           ? 'getIdToken() returned null/empty'
-          : `Token validation failed (aud=${aud}, subMatch=${String(subMatches)}, minsLeft=${minsLeft})`,
+          : `Token validation failed (aud=${aud}, iss=${iss}, subMatch=${String(subMatches)}, minsLeft=${minsLeft})`,
       });
       return {
         status: 'failed',
@@ -369,7 +376,7 @@ export async function testSupabaseConnection(
       id: 'firebase_token',
       label: '2. Firebase ID Token',
       ok: true,
-      detail: `Valid 3-part JWT (aud=${aud}, sub=UID, expires in ~${minsLeft}m)`,
+      detail: `Valid JWT (aud=${aud}, sub=UID, email_verified=${String(emailVerified)}, roleClaim=${roleClaim}, exp~${minsLeft}m)`,
     });
   } catch (err) {
     checks.push({
