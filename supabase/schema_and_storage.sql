@@ -796,25 +796,27 @@ DECLARE
   ];
 BEGIN
   FOREACH tbl IN ARRAY tables LOOP
+    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO anon, authenticated', tbl);
+
     EXECUTE format('DROP POLICY IF EXISTS %I_select_own ON public.%I', tbl, tbl);
     EXECUTE format('DROP POLICY IF EXISTS %I_insert_own ON public.%I', tbl, tbl);
     EXECUTE format('DROP POLICY IF EXISTS %I_update_own ON public.%I', tbl, tbl);
     EXECUTE format('DROP POLICY IF EXISTS %I_delete_own ON public.%I', tbl, tbl);
 
     EXECUTE format(
-      'CREATE POLICY %I_select_own ON public.%I FOR SELECT TO authenticated USING (owner_id = public.firebase_uid())',
+      'CREATE POLICY %I_select_own ON public.%I FOR SELECT TO anon, authenticated USING (public.is_verified_firebase_user() AND owner_id = public.firebase_uid())',
       tbl, tbl
     );
     EXECUTE format(
-      'CREATE POLICY %I_insert_own ON public.%I FOR INSERT TO authenticated WITH CHECK (owner_id = public.firebase_uid())',
+      'CREATE POLICY %I_insert_own ON public.%I FOR INSERT TO anon, authenticated WITH CHECK (public.is_verified_firebase_user() AND owner_id = public.firebase_uid())',
       tbl, tbl
     );
     EXECUTE format(
-      'CREATE POLICY %I_update_own ON public.%I FOR UPDATE TO authenticated USING (owner_id = public.firebase_uid()) WITH CHECK (owner_id = public.firebase_uid())',
+      'CREATE POLICY %I_update_own ON public.%I FOR UPDATE TO anon, authenticated USING (public.is_verified_firebase_user() AND owner_id = public.firebase_uid()) WITH CHECK (public.is_verified_firebase_user() AND owner_id = public.firebase_uid())',
       tbl, tbl
     );
     EXECUTE format(
-      'CREATE POLICY %I_delete_own ON public.%I FOR DELETE TO authenticated USING (owner_id = public.firebase_uid())',
+      'CREATE POLICY %I_delete_own ON public.%I FOR DELETE TO anon, authenticated USING (public.is_verified_firebase_user() AND owner_id = public.firebase_uid())',
       tbl, tbl
     );
 
@@ -887,33 +889,38 @@ DROP POLICY IF EXISTS mizan_storage_update_own ON storage.objects;
 DROP POLICY IF EXISTS mizan_storage_delete_own ON storage.objects;
 
 CREATE POLICY mizan_storage_select_own ON storage.objects
-  FOR SELECT TO authenticated
+  FOR SELECT TO anon, authenticated
   USING (
-    bucket_id IN ('study-files', 'user-images', 'audio-cache')
+    public.is_verified_firebase_user()
+    AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
     AND (storage.foldername(name))[1] = public.firebase_uid()
   );
 
 CREATE POLICY mizan_storage_insert_own ON storage.objects
-  FOR INSERT TO authenticated
+  FOR INSERT TO anon, authenticated
   WITH CHECK (
-    bucket_id IN ('study-files', 'user-images', 'audio-cache')
+    public.is_verified_firebase_user()
+    AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
     AND (storage.foldername(name))[1] = public.firebase_uid()
   );
 
 CREATE POLICY mizan_storage_update_own ON storage.objects
-  FOR UPDATE TO authenticated
+  FOR UPDATE TO anon, authenticated
   USING (
-    bucket_id IN ('study-files', 'user-images', 'audio-cache')
+    public.is_verified_firebase_user()
+    AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
     AND (storage.foldername(name))[1] = public.firebase_uid()
   )
   WITH CHECK (
-    bucket_id IN ('study-files', 'user-images', 'audio-cache')
+    public.is_verified_firebase_user()
+    AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
     AND (storage.foldername(name))[1] = public.firebase_uid()
   );
 
 CREATE POLICY mizan_storage_delete_own ON storage.objects
-  FOR DELETE TO authenticated
+  FOR DELETE TO anon, authenticated
   USING (
-    bucket_id IN ('study-files', 'user-images', 'audio-cache')
+    public.is_verified_firebase_user()
+    AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
     AND (storage.foldername(name))[1] = public.firebase_uid()
   );
