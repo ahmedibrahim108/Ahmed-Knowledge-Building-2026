@@ -408,48 +408,144 @@ async function fetchFirestoreRootUserDocRest(
   }
 }
 
+class FirestoreRestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'FirestoreRestError';
+    this.status = status;
+  }
+}
+
 async function fetchFirestoreCollectionRest(
   uid: string,
   subPath: string,
   idToken: string
 ): Promise<DecodedFirestoreDoc[]> {
-  const baseUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+  const segments = subPath.split('/').filter(Boolean);
+  const collectionId = segments[segments.length - 1] || subPath;
+  const parentSegments = segments.slice(0, -1);
+  const parentSuffix =
+    parentSegments.length > 0
+      ? `/${parentSegments.map((s) => encodeURIComponent(s)).join('/')}`
+      : '';
+
+  const baseDocPrefix = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
     FIREBASE_PROJECT_INFO.projectId
   )}/databases/${encodeURIComponent(
     FIREBASE_PROJECT_INFO.firestoreDatabaseId
-  )}/documents/users/${encodeURIComponent(uid)}/${subPath}`;
+  )}/documents/users/${encodeURIComponent(uid)}`;
 
-  const allDocs: DecodedFirestoreDoc[] = [];
-  let pageToken = '';
+  const runQueryUrl = `${baseDocPrefix}${parentSuffix}:runQuery`;
+  const listGetUrl = `${baseDocPrefix}/${segments
+    .map((s) => encodeURIComponent(s))
+    .join('/')}`;
 
-  for (let page = 0; page < 40; page++) {
-    const url = pageToken
-      ? `${baseUrl}?pageSize=300&pageToken=${encodeURIComponent(pageToken)}`
-      : `${baseUrl}?pageSize=300`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${idToken}` },
+  const docsById = new Map<string, DecodedFirestoreDoc>();
+  let runQueryOk = false;
+  let runQueryStatus = 0;
+  let runQueryErrText = '';
+
+  // Primary: filtered structuredQuery matching Firestore Security Rules (`ownerId == uid`)
+  try {
+    const queryRes = await fetch(runQueryUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: 'ownerId' },
+              op: 'EQUAL',
+              value: { stringValue: uid },
+            },
+          },
+        },
+      }),
     });
-    if (res.status === 404) break;
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new Error(
-        `تعذرت قراءة مجموعة ${subPath} من Firebase (${res.status}): ${errText.slice(0, 140)}`
-      );
-    }
-    const json = (await res.json()) as {
-      documents?: FirestoreDocument[];
-      nextPageToken?: string;
-    };
-    if (Array.isArray(json.documents)) {
-      for (const d of json.documents) {
-        allDocs.push(decodeFirestoreDoc(d));
+
+    if (queryRes.ok) {
+      runQueryOk = true;
+      const rows = (await queryRes.json()) as Array<{
+        document?: FirestoreDocument;
+      }>;
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          if (row?.document?.name) {
+            const decoded = decodeFirestoreDoc(row.document);
+            docsById.set(decoded.docId, decoded);
+          }
+        }
       }
+    } else if (queryRes.status === 404) {
+      runQueryOk = true;
+    } else {
+      runQueryStatus = queryRes.status;
+      runQueryErrText = await queryRes.text().catch(() => '');
     }
-    if (!json.nextPageToken) break;
-    pageToken = json.nextPageToken;
+  } catch (err) {
+    runQueryErrText = err instanceof Error ? err.message : String(err);
   }
 
-  return allDocs;
+  // Fallback: unfiltered paginated GET if runQuery failed or returned 0 docs (legacy docs without ownerId)
+  if (!runQueryOk || docsById.size === 0) {
+    let listOk = false;
+    let listStatus = 0;
+    let listErrText = '';
+    try {
+      let pageToken = '';
+      for (let page = 0; page < 40; page++) {
+        const url = pageToken
+          ? `${listGetUrl}?pageSize=300&pageToken=${encodeURIComponent(pageToken)}`
+          : `${listGetUrl}?pageSize=300`;
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${idToken}` },
+        });
+        if (res.status === 404) {
+          listOk = true;
+          break;
+        }
+        if (!res.ok) {
+          listStatus = res.status;
+          listErrText = await res.text().catch(() => '');
+          break;
+        }
+        listOk = true;
+        const json = (await res.json()) as {
+          documents?: FirestoreDocument[];
+          nextPageToken?: string;
+        };
+        if (Array.isArray(json.documents)) {
+          for (const d of json.documents) {
+            const decoded = decodeFirestoreDoc(d);
+            if (!docsById.has(decoded.docId)) {
+              docsById.set(decoded.docId, decoded);
+            }
+          }
+        }
+        if (!json.nextPageToken) break;
+        pageToken = json.nextPageToken;
+      }
+    } catch (err) {
+      listErrText = err instanceof Error ? err.message : String(err);
+    }
+
+    if (!runQueryOk && !listOk) {
+      const status = runQueryStatus || listStatus || 500;
+      const detail = (runQueryErrText || listErrText || '').slice(0, 180);
+      throw new FirestoreRestError(
+        `تعذرت قراءة مجموعة ${subPath} من Firebase (${status}): ${detail}`,
+        status
+      );
+    }
+  }
+
+  return Array.from(docsById.values());
 }
 
 async function fetchFirebaseStorageBlobRest(
@@ -595,6 +691,8 @@ export interface CollectionPreviewItem {
   alreadyInSupabaseCount: number;
   newCount: number;
   sampleTitles: string[];
+  scanStatus: 'ok' | 'permission_denied' | 'error';
+  scanError?: string;
 }
 
 export interface MigrationScanPreview {
@@ -607,6 +705,8 @@ export interface MigrationScanPreview {
   totalDetected: number;
   totalAlreadyInSupabase: number;
   totalNewToMigrate: number;
+  blockedCollectionsCount: number;
+  scanWarnings: string[];
   collections: CollectionPreviewItem[];
   relationalSummary: {
     coursesCount: number;
@@ -690,11 +790,31 @@ export async function scanFirestoreForMigration(
 
   onProgress?.('جاري فحص مجموعات Firebase Firestore الحالية...');
 
-  const [rootUserDoc, ...collectionResults] = await Promise.all([
+  const [rootUserDoc, ...collectionScanResults] = await Promise.all([
     fetchFirestoreRootUserDocRest(uid, idToken),
-    ...FIRESTORE_TO_SUPABASE_MAPPINGS.map((spec) =>
-      fetchFirestoreCollectionRest(uid, spec.firestoreCollection, idToken)
-    ),
+    ...FIRESTORE_TO_SUPABASE_MAPPINGS.map(async (spec) => {
+      try {
+        const docs = await fetchFirestoreCollectionRest(
+          uid,
+          spec.firestoreCollection,
+          idToken
+        );
+        return {
+          docs,
+          scanStatus: 'ok' as const,
+          scanError: undefined,
+        };
+      } catch (err) {
+        const status = err instanceof FirestoreRestError ? err.status : 0;
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          docs: [] as DecodedFirestoreDoc[],
+          scanStatus:
+            status === 403 ? ('permission_denied' as const) : ('error' as const),
+          scanError: msg,
+        };
+      }
+    }),
   ]);
 
   onProgress?.('جاري مقارنة السجلات المرصودة مع جداول Supabase الحالية...');
@@ -711,16 +831,31 @@ export async function scanFirestoreForMigration(
   >;
   const existingSupabaseKeysByTable: Record<string, Set<string>> = {};
   const collections: CollectionPreviewItem[] = [];
+  const scanWarnings: string[] = [];
 
   let totalDetected = 0;
   let totalAlreadyInSupabase = 0;
   let totalNewToMigrate = 0;
+  let blockedCollectionsCount = 0;
 
   FIRESTORE_TO_SUPABASE_MAPPINGS.forEach((spec, idx) => {
-    const docs = collectionResults[idx] || [];
+    const scanOutcome = collectionScanResults[idx] || {
+      docs: [],
+      scanStatus: 'ok' as const,
+      scanError: undefined,
+    };
+    const docs = scanOutcome.docs;
     const existingKeys = existingResults[idx] || new Set<string>();
     rawDocsByCollection[spec.firestoreCollection] = docs;
     existingSupabaseKeysByTable[spec.supabaseTable] = existingKeys;
+
+    if (scanOutcome.scanStatus !== 'ok') {
+      blockedCollectionsCount += 1;
+      scanWarnings.push(
+        scanOutcome.scanError ||
+          `تعذرت قراءة مجموعة ${spec.firestoreCollection} (${scanOutcome.scanStatus}).`
+      );
+    }
 
     let alreadyInSupabaseCount = 0;
     let newCount = 0;
@@ -748,7 +883,11 @@ export async function scanFirestoreForMigration(
       detectedCount: docs.length,
       alreadyInSupabaseCount,
       newCount,
-      sampleTitles: docs.slice(0, 3).map((d) => extractSampleTitle(spec.firestoreCollection, d)),
+      sampleTitles: docs
+        .slice(0, 3)
+        .map((d) => extractSampleTitle(spec.firestoreCollection, d)),
+      scanStatus: scanOutcome.scanStatus,
+      scanError: scanOutcome.scanError,
     });
   });
 
@@ -786,6 +925,8 @@ export async function scanFirestoreForMigration(
     totalDetected,
     totalAlreadyInSupabase,
     totalNewToMigrate,
+    blockedCollectionsCount,
+    scanWarnings,
     collections,
     relationalSummary,
     rawDocsByCollection,
@@ -940,7 +1081,7 @@ export async function runFirestoreToSupabaseMigration(
   const completedSet = new Set<string>(priorCheckpoint?.completedKeys || []);
   const skippedSet = new Set<string>(priorCheckpoint?.skippedKeys || []);
   const errors: MigrationRecordError[] = [];
-  const warnings: string[] = [];
+  const warnings: string[] = [...(scan.scanWarnings || [])];
   const counts: Record<string, number> = {};
   const outcomes: MigrationCollectionOutcome[] = [];
 

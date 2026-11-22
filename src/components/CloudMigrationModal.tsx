@@ -422,6 +422,25 @@ export default function CloudMigrationModal({
                 </span>
               </div>
 
+              {scanPreview.scanWarnings.length > 0 && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-950 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span>
+                      تعذر الوصول إلى {scanPreview.blockedCollectionsCount} مجموعة في Firestore
+                      (يمكنك ترحيل باقي المجموعات المقروءة بنجاح):
+                    </span>
+                  </div>
+                  <ul className="list-disc pr-5 space-y-0.5 text-[11px] text-amber-900 max-h-24 overflow-y-auto">
+                    {scanPreview.scanWarnings.map((warn, idx) => (
+                      <li key={idx} className="font-mono break-all">
+                        {warn}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {/* Mapping Table */}
               <div className="border border-slate-200 rounded-lg overflow-x-auto max-h-56">
                 <table className="w-full text-right text-[11px]">
@@ -438,10 +457,34 @@ export default function CloudMigrationModal({
                     {scanPreview.collections.map((col) => (
                       <tr
                         key={col.firestoreCollection}
-                        className={col.detectedCount === 0 ? 'text-slate-400' : 'text-slate-800'}
+                        className={
+                          col.scanStatus !== 'ok'
+                            ? 'bg-red-50/50 text-red-900'
+                            : col.detectedCount === 0
+                              ? 'text-slate-400'
+                              : 'text-slate-800'
+                        }
                       >
                         <td className="py-1.5 px-2.5">
-                          <div className="font-medium">{col.labelAr}</div>
+                          <div className="font-medium flex items-center gap-1.5">
+                            <span>{col.labelAr}</span>
+                            {col.scanStatus === 'permission_denied' && (
+                              <span
+                                title={col.scanError}
+                                className="px-1.5 py-0.5 text-[10px] font-mono bg-red-100 text-red-800 rounded"
+                              >
+                                403 محظور
+                              </span>
+                            )}
+                            {col.scanStatus === 'error' && (
+                              <span
+                                title={col.scanError}
+                                className="px-1.5 py-0.5 text-[10px] bg-amber-100 text-amber-900 rounded"
+                              >
+                                خطأ فحص
+                              </span>
+                            )}
+                          </div>
                           <div className="text-[10px] font-mono text-slate-400">
                             {col.firestoreCollection}
                             {col.storageBucket ? ` + ${col.storageBucket}` : ''}
@@ -451,10 +494,10 @@ export default function CloudMigrationModal({
                           {col.supabaseTable}
                         </td>
                         <td className="py-1.5 px-2 text-center font-semibold">
-                          {col.detectedCount}
+                          {col.scanStatus === 'ok' ? col.detectedCount : '—'}
                         </td>
                         <td className="py-1.5 px-2 text-center text-sky-700 font-semibold">
-                          {col.newCount}
+                          {col.scanStatus === 'ok' ? col.newCount : '—'}
                         </td>
                         <td className="py-1.5 px-2 text-center text-emerald-700">
                           {col.alreadyInSupabaseCount}
