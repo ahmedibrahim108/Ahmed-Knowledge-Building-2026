@@ -839,7 +839,7 @@ VALUES
     'study-files',
     'study-files',
     false,
-    52428800,
+    104857600,
     ARRAY[
       'application/pdf',
       'application/msword',
@@ -853,7 +853,7 @@ VALUES
     'user-images',
     'user-images',
     false,
-    20971520,
+    26214400,
     ARRAY[
       'image/jpeg',
       'image/png',
@@ -867,15 +867,19 @@ VALUES
     'audio-cache',
     'audio-cache',
     false,
-    31457280,
+    104857600,
     ARRAY[
       'audio/wav',
       'audio/x-wav',
       'audio/mpeg',
       'audio/mp3',
       'audio/mp4',
+      'audio/aac',
+      'audio/x-m4a',
       'audio/webm',
-      'audio/ogg'
+      'audio/ogg',
+      'audio/3gpp',
+      'application/octet-stream'
     ]
   )
 ON CONFLICT (id) DO UPDATE SET

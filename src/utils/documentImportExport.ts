@@ -30,7 +30,7 @@ export interface BundledAppDocument {
 export const BUNDLED_APP_DOCUMENTS: BundledAppDocument[] = [];
 
 const STUDY_FILES_BUCKET = 'study-files';
-const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
 
 function escapeHtml(text: string): string {
   return text
@@ -347,7 +347,7 @@ export async function uploadResourceAttachment(
       mimeType,
       sizeBytes: file.size,
       uploadedToCloud: false,
-      errorMessage: 'الحد الأقصى لحجم الملف في التخزين السحابي هو 50 ميجابايت.',
+      errorMessage: 'الحد الأقصى لحجم الملف في التخزين السحابي هو 100 ميجابايت.',
     };
   }
 
@@ -607,7 +607,7 @@ export async function downloadResourceAttachmentResult(options: {
   return {
     ok: false,
     errorMessage:
-      'لم يُعثر على محتوى هذا الملف في التخزين السحابي أو على هذا الجهاز. إذا كان الملف محفوظًا في Firebase السابق، قم بتشغيل ترحيل البيانات أو أعد رفعه مرة واحدة ليظهر على كل أجهزتك.',
+      'لم يُعثر على محتوى هذا الملف في التخزين السحابي أو على هذا الجهاز. أعد رفع الملف ليظهر على جميع أجهزتك.',
   };
 }
 

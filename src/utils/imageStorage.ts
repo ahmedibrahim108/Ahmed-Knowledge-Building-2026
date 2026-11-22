@@ -1,5 +1,6 @@
 import { auth } from '../firebase';
 import {
+  ensureSupabaseRealtimeAuth,
   isSupabaseConfigured,
   supabase,
   withFirebaseTokenRetry,
@@ -573,26 +574,92 @@ export function subscribeImagesForScope(
 
   void refreshScope();
 
-  const channel = supabase
-    .channel(`images_${effectiveUid}_${sanitizeImageId(scopeKey)}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'image_attachments',
-        filter: `owner_id=eq.${effectiveUid}`,
-      },
-      () => {
-        if (!disposed) void refreshScope();
-      }
-    )
-    .subscribe();
+  let activeChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+  let reconnectTimer: number | null = null;
+  let realtimeSubscribed = false;
+
+  const setupRealtimeChannel = async (forceRefreshToken = false) => {
+    if (disposed || !supabase) return;
+    await ensureSupabaseRealtimeAuth(forceRefreshToken);
+    if (disposed || !supabase) return;
+
+    if (activeChannel) {
+      void supabase.removeChannel(activeChannel);
+      activeChannel = null;
+    }
+
+    const ch = supabase
+      .channel(`images_${effectiveUid}_${sanitizeImageId(scopeKey)}_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'image_attachments',
+          filter: `owner_id=eq.${effectiveUid}`,
+        },
+        () => {
+          if (!disposed) void refreshScope();
+        }
+      )
+      .subscribe((status) => {
+        if (disposed) return;
+        if (status === 'SUBSCRIBED') {
+          realtimeSubscribed = true;
+          return;
+        }
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          realtimeSubscribed = false;
+          if (!reconnectTimer && typeof window !== 'undefined') {
+            reconnectTimer = window.setTimeout(() => {
+              reconnectTimer = null;
+              void setupRealtimeChannel(true);
+            }, 4000);
+          }
+        }
+      });
+
+    activeChannel = ch;
+  };
+
+  void setupRealtimeChannel(false);
+
+  const onResumeSync = () => {
+    if (disposed) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      return;
+    }
+    void refreshScope();
+    if (!realtimeSubscribed) {
+      void setupRealtimeChannel(false);
+    }
+  };
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onResumeSync);
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', onResumeSync);
+    window.addEventListener('pageshow', onResumeSync);
+    window.addEventListener('online', onResumeSync);
+  }
 
   return () => {
     disposed = true;
-    if (supabase) {
-      void supabase.removeChannel(channel);
+    if (reconnectTimer && typeof window !== 'undefined') {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onResumeSync);
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('focus', onResumeSync);
+      window.removeEventListener('pageshow', onResumeSync);
+      window.removeEventListener('online', onResumeSync);
+    }
+    if (supabase && activeChannel) {
+      void supabase.removeChannel(activeChannel);
     }
   };
 }

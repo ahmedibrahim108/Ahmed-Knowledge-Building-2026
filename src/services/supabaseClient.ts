@@ -44,11 +44,31 @@ if (isSupabaseConfigured) {
   }
 }
 
+let lastRealtimeToken: string | null = null;
+
+export async function ensureSupabaseRealtimeAuth(
+  forceRefresh = false
+): Promise<string | null> {
+  if (!clientInstance || !auth?.currentUser) return null;
+  try {
+    const token = await auth.currentUser.getIdToken(forceRefresh);
+    if (token && (forceRefresh || token !== lastRealtimeToken)) {
+      await clientInstance.realtime.setAuth(token);
+      lastRealtimeToken = token;
+    }
+    return token;
+  } catch (err) {
+    console.warn('Supabase realtime setAuth warning:', err);
+    return null;
+  }
+}
+
 // Keep Supabase Realtime socket authenticated with the live Firebase ID token across refreshes/logins
 if (clientInstance && auth) {
   onIdTokenChanged(auth, async (user) => {
     if (!clientInstance) return;
     if (!user) {
+      lastRealtimeToken = null;
       try {
         await clientInstance.realtime.setAuth(null);
       } catch {
@@ -60,6 +80,7 @@ if (clientInstance && auth) {
       const token = await user.getIdToken(false);
       if (token) {
         await clientInstance.realtime.setAuth(token);
+        lastRealtimeToken = token;
       }
     } catch (err) {
       console.warn('Supabase realtime token sync warning:', err);
@@ -144,8 +165,12 @@ export function formatSupabaseErrorMessage(
   if (msg.includes('jwt') || e.code === 'PGRST301') {
     return 'انتهت جلسة التحقق أو لم يتعرف Supabase على توكن Firebase Auth. تأكد من ربط Firebase Third-Party Auth في لوحة Supabase.';
   }
-  if (msg.includes('payload too large') || msg.includes('exceeded the maximum allowed size')) {
-    return 'حجم الملف يتجاوز الحد الأقصى المسموح به في التخزين السحابي.';
+  if (
+    msg.includes('payload too large') ||
+    msg.includes('exceeded the maximum allowed size') ||
+    msg.includes('413')
+  ) {
+    return 'حجم الملف يتجاوز الحد الأقصى المسموح به في إعدادات مشروع Supabase (تأكد من تشغيل Migration 006 ومن إعداد Global file size limit في لوحة Supabase Storage).';
   }
   return e.message || fallback;
 }

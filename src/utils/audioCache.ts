@@ -1,5 +1,6 @@
 import { ReadAloudVoiceName } from '../data/curriculumData';
 import {
+  ensureSupabaseRealtimeAuth,
   isJwtExpiredOrAuthError,
   isSupabaseConfigured,
   supabase,
@@ -669,6 +670,132 @@ export async function listUserAudioClips(
     console.warn('Could not list Supabase audio clips:', err);
     return [];
   }
+}
+
+export function subscribeUserAudioClips(
+  uid: string | null | undefined,
+  onData: (clips: SavedAudioClipSummary[]) => void
+): () => void {
+  if (!uid || !isSupabaseConfigured || !supabase) {
+    onData([]);
+    return () => {};
+  }
+
+  let disposed = false;
+  let activeChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+  let reconnectTimer: number | null = null;
+  let realtimeSubscribed = false;
+
+  const refresh = async () => {
+    if (disposed) return;
+    const clips = await listUserAudioClips(uid);
+    if (!disposed) onData(clips);
+  };
+
+  void refresh();
+
+  const setupRealtimeChannel = async (forceRefreshToken = false) => {
+    if (disposed || !supabase) return;
+    await ensureSupabaseRealtimeAuth(forceRefreshToken);
+    if (disposed || !supabase) return;
+
+    if (activeChannel) {
+      void supabase.removeChannel(activeChannel);
+      activeChannel = null;
+    }
+
+    const ch = supabase
+      .channel(`audio_cache_${uid}_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'audio_cache',
+          filter: `owner_id=eq.${uid}`,
+        },
+        () => {
+          if (!disposed) void refresh();
+        }
+      )
+      .subscribe((status) => {
+        if (disposed) return;
+        if (status === 'SUBSCRIBED') {
+          realtimeSubscribed = true;
+          return;
+        }
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          realtimeSubscribed = false;
+          if (!reconnectTimer && typeof window !== 'undefined') {
+            reconnectTimer = window.setTimeout(() => {
+              reconnectTimer = null;
+              void setupRealtimeChannel(true);
+            }, 4000);
+          }
+        }
+      });
+
+    activeChannel = ch;
+  };
+
+  void setupRealtimeChannel(false);
+
+  const onResumeSync = () => {
+    if (disposed) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      return;
+    }
+    void refresh();
+    if (!realtimeSubscribed) {
+      void setupRealtimeChannel(false);
+    }
+  };
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onResumeSync);
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', onResumeSync);
+    window.addEventListener('pageshow', onResumeSync);
+    window.addEventListener('online', onResumeSync);
+  }
+
+  const safetyInterval =
+    typeof window !== 'undefined'
+      ? window.setInterval(() => {
+          if (
+            disposed ||
+            (typeof document !== 'undefined' &&
+              document.visibilityState !== 'visible') ||
+            (typeof navigator !== 'undefined' && navigator.onLine === false)
+          ) {
+            return;
+          }
+          void refresh();
+        }, 15000)
+      : null;
+
+  return () => {
+    disposed = true;
+    if (reconnectTimer && typeof window !== 'undefined') {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (safetyInterval && typeof window !== 'undefined') {
+      window.clearInterval(safetyInterval);
+    }
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onResumeSync);
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('focus', onResumeSync);
+      window.removeEventListener('pageshow', onResumeSync);
+      window.removeEventListener('online', onResumeSync);
+    }
+    if (supabase && activeChannel) {
+      void supabase.removeChannel(activeChannel);
+    }
+  };
 }
 
 /**
