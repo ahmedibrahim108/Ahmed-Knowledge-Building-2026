@@ -228,6 +228,7 @@ export default function TwelveMonthPlanView({
     undefined
   );
   const [uploadingResFile, setUploadingResFile] = useState(false);
+  const [uploadProgressPct, setUploadProgressPct] = useState<number>(0);
   const [uploadStatusMsg, setUploadStatusMsg] = useState<{
     ok: boolean;
     text: string;
@@ -344,26 +345,28 @@ export default function TwelveMonthPlanView({
     const generatedId = `m${activeMonth.id}-res-${Date.now()}`;
     setPendingResId(generatedId);
     setUploadingResFile(true);
+    setUploadProgressPct(0);
     setUploadStatusMsg(null);
     setResourceActionError(null);
     try {
       const effectiveUid = uid || auth?.currentUser?.uid;
+      const parsed = await parseDocumentFile(file);
+      const previewSlice = isPdfAttachment(file.name, file.type)
+        ? ''
+        : parsed.plainText.slice(0, 7500);
       const uploaded = await uploadResourceAttachment(
         effectiveUid,
         generatedId,
-        file
+        file,
+        previewSlice,
+        (pct) => setUploadProgressPct(pct)
       );
-      const parsed = await parseDocumentFile(file);
       if (!newResTitle.trim()) {
         setNewResTitle(parsed.title || file.name.replace(/\.[^.]+$/, ''));
       }
       setNewResType('ملف / مستند');
       setNewResAttachmentName(file.name);
-      setNewResPreview(
-        isPdfAttachment(file.name, file.type)
-          ? ''
-          : parsed.plainText.slice(0, 7500)
-      );
+      setNewResPreview(previewSlice);
       setNewResStoragePath(uploadResPath(uploaded.storagePath));
       setNewResDownloadUrl(uploaded.downloadUrl ?? '');
       setNewResMimeType(uploaded.mimeType || file.type || '');
@@ -1442,7 +1445,7 @@ export default function TwelveMonthPlanView({
                       <input
                         ref={resFileInputRef}
                         type="file"
-                        accept=".docx,.doc,.txt,.md,.markdown,.pdf"
+                        accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword,.txt,text/plain,.md,.markdown"
                         className="hidden"
                         onChange={(e) => void handlePickMonthResourceFile(e)}
                       />
@@ -1459,10 +1462,10 @@ export default function TwelveMonthPlanView({
                         )}
                         <span>
                           {uploadingResFile
-                            ? 'جاري الرفع...'
+                            ? `جاري الرفع ${uploadProgressPct}%...`
                             : newResAttachmentName
                             ? `تم إرفاق: ${newResAttachmentName}`
-                            : 'رفع ملف Word / PDF / نص'}
+                            : 'رفع PDF / Word (حتى 100 ميجا)'}
                         </span>
                       </button>
                     </div>

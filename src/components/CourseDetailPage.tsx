@@ -201,6 +201,7 @@ export default function CourseDetailPage({
   );
   const [pendingResId, setPendingResId] = useState('');
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [uploadProgressPct, setUploadProgressPct] = useState<number>(0);
   const [uploadStatusMsg, setUploadStatusMsg] = useState<{
     ok: boolean;
     text: string;
@@ -383,28 +384,30 @@ export default function CourseDetailPage({
     if (!requireEdit()) return;
 
     setUploadingFile(true);
+    setUploadProgressPct(0);
     setUploadStatusMsg(null);
     setResourceActionError(null);
     try {
       const generatedId = `c${course.id}-res-${Date.now()}`;
       setPendingResId(generatedId);
       const effectiveUid = uid || auth?.currentUser?.uid;
+      const parsed = await parseDocumentFile(file);
+      const previewSlice = isPdfAttachment(file.name, file.type)
+        ? ''
+        : parsed.plainText.slice(0, 7500);
       const uploadRes = await uploadResourceAttachment(
         effectiveUid,
         generatedId,
-        file
+        file,
+        previewSlice,
+        (pct) => setUploadProgressPct(pct)
       );
-      const parsed = await parseDocumentFile(file);
       if (!newResTitle.trim()) {
         setNewResTitle(parsed.title);
       }
       setNewResType('ملف / مستند');
       setNewResAttachmentName(file.name);
-      setNewResPreview(
-        isPdfAttachment(file.name, file.type)
-          ? ''
-          : parsed.plainText.slice(0, 7500)
-      );
+      setNewResPreview(previewSlice);
       setNewResStoragePath(uploadRes.storagePath ?? '');
       setNewResDownloadUrl(uploadRes.downloadUrl ?? '');
       setNewResMimeType(uploadRes.mimeType);
@@ -1313,7 +1316,7 @@ export default function CourseDetailPage({
                       <input
                         ref={courseResFileRef}
                         type="file"
-                        accept=".pdf,.docx,.doc,.txt,.md,.markdown"
+                        accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword,.txt,text/plain,.md,.markdown"
                         className="hidden"
                         onChange={(e) => void handlePickCourseResourceFile(e)}
                       />
@@ -1333,10 +1336,10 @@ export default function CourseDetailPage({
                         )}
                         <span className="truncate">
                           {uploadingFile
-                            ? 'جاري رفع الملف للسحابة...'
+                            ? `جاري الرفع للسحابة (${uploadProgressPct}%)...`
                             : newResAttachmentName
                             ? `مرفق: ${newResAttachmentName}`
-                            : 'رفع PDF / Word / نص'}
+                            : 'رفع PDF / Word (حتى 100 ميجا)'}
                         </span>
                       </button>
                     </div>

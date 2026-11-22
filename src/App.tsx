@@ -6,17 +6,14 @@
 import { User, onAuthStateChanged } from 'firebase/auth';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import {
-  AlertCircle,
   ArrowRight,
   CalendarDays,
   CheckCircle2,
-  Database,
   GraduationCap,
   LayoutDashboard,
   Lock,
   LogIn,
   NotebookPen,
-  RefreshCw,
   Target,
 } from 'lucide-react';
 import CalendarView from './components/CalendarView';
@@ -102,7 +99,6 @@ import {
   deleteUnifiedTaskDoc,
   deleteWeeklyMeetingDoc,
   ensureUserDocumentAndSeed,
-  ensureUserProfileExists,
   sanitizeId,
   saveBookNoteDoc,
   saveCalendarEventDoc,
@@ -123,11 +119,6 @@ import {
   subscribeCloudAttachments,
   subscribeUserWorkspace,
 } from './services/supabaseSync';
-import CloudMigrationModal from './components/CloudMigrationModal';
-import {
-  SupabaseConnectionTestResult,
-  testSupabaseConnection,
-} from './services/supabaseClient';
 import { exportPlanToExcel } from './utils/excelExport';
 
 function formatArabicDate(): string {
@@ -292,7 +283,6 @@ export default function App() {
   const [activePdfTarget, setActivePdfTarget] =
     useState<ActivePdfTarget | null>(null);
   const [confirmResetOpen, setConfirmResetOpen] = useState(false);
-  const [migrationModalOpen, setMigrationModalOpen] = useState(false);
   const [selectedMonthId, setSelectedMonthId] = useState<number>(1);
   const [domainFilter, setDomainFilter] = useState<DomainId | 'all'>('all');
   const [exportNotice, setExportNotice] = useState<string | null>(null);
@@ -303,31 +293,6 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [syncingCloud, setSyncingCloud] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [supabaseTestResult, setSupabaseTestResult] =
-    useState<SupabaseConnectionTestResult | null>(null);
-  const [supabaseTesting, setSupabaseTesting] = useState(false);
-  const workspaceRefreshRef = useRef<(() => Promise<void>) | null>(null);
-
-  const runSupabaseConnectionTest = async (options?: {
-    ensureProfileForUser?: User | null;
-    profileSyncError?: unknown;
-  }) => {
-    setSupabaseTesting(true);
-    let profileSyncError = options?.profileSyncError;
-    try {
-      if (!profileSyncError && options?.ensureProfileForUser) {
-        try {
-          await ensureUserProfileExists(options.ensureProfileForUser);
-        } catch (err) {
-          profileSyncError = err;
-        }
-      }
-      const result = await testSupabaseConnection({ profileSyncError });
-      setSupabaseTestResult(result);
-    } finally {
-      setSupabaseTesting(false);
-    }
-  };
 
   const canEdit = Boolean(user);
 
@@ -554,7 +519,6 @@ export default function App() {
         setSyncingCloud(true);
         setAuthError(null);
         setAuthPromptNotice(null);
-        let profileSyncError: unknown = null;
         try {
           await ensureUserDocumentAndSeed(nextUser, {
             quarters: INITIAL_QUARTERS,
@@ -618,12 +582,8 @@ export default function App() {
             onWeeklyMeetings: (items) => {
               setWeeklyMeetings(items);
             },
-            onRefreshReady: (refreshFn) => {
-              workspaceRefreshRef.current = refreshFn;
-            },
           });
         } catch (err) {
-          profileSyncError = err;
           setAuthError(
             err instanceof Error
               ? err.message
@@ -631,10 +591,7 @@ export default function App() {
           );
         } finally {
           setSyncingCloud(false);
-          void runSupabaseConnectionTest({ profileSyncError });
         }
-      } else {
-        void runSupabaseConnectionTest();
       }
     });
 
@@ -2277,7 +2234,6 @@ export default function App() {
         libraryCount={readingItems.length}
         tasksCount={unifiedTasks.length}
         notesCount={bookNotes.length}
-        onOpenMigration={() => setMigrationModalOpen(true)}
       />
 
       {/* Read-Only Guest Mode Banner */}
@@ -2345,142 +2301,6 @@ export default function App() {
           </div>
         </div>
       )}
-
-      {/* Temporary Supabase + Firebase Auth Connection Verification Banner */}
-      <div
-        role="status"
-        aria-live="polite"
-        className="max-w-[1280px] w-full mx-auto px-4 sm:px-8 pt-3"
-      >
-        <div
-          dir="ltr"
-          className={`flex flex-col gap-2.5 px-4 py-3 rounded-xl border text-xs ${
-            supabaseTestResult?.status === 'connected' &&
-            supabaseTestResult.authenticated
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
-              : supabaseTestResult?.status === 'connected'
-              ? 'bg-amber-50 border-amber-200 text-amber-950'
-              : supabaseTestResult?.status === 'failed'
-              ? 'bg-red-50 border-red-200 text-red-950'
-              : 'bg-slate-50 border-slate-200 text-slate-700'
-          }`}
-        >
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-            <div className="flex items-start sm:items-center gap-2 min-w-0">
-              {supabaseTestResult?.status === 'connected' &&
-              supabaseTestResult.authenticated ? (
-                <CheckCircle2
-                  className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5 sm:mt-0"
-                  aria-hidden="true"
-                />
-              ) : supabaseTestResult?.status === 'failed' ? (
-                <AlertCircle
-                  className="w-4 h-4 text-red-700 shrink-0 mt-0.5 sm:mt-0"
-                  aria-hidden="true"
-                />
-              ) : (
-                <Database
-                  className="w-4 h-4 text-amber-700 shrink-0 mt-0.5 sm:mt-0"
-                  aria-hidden="true"
-                />
-              )}
-              <div className="min-w-0 break-words">
-                <span className="font-semibold">
-                  Supabase + Firebase Auth:{' '}
-                  {supabaseTesting
-                    ? 'Testing connection...'
-                    : supabaseTestResult?.status === 'connected' &&
-                      supabaseTestResult.authenticated
-                    ? 'Connected (All Auth & RLS Checks Passed)'
-                    : supabaseTestResult?.status === 'connected'
-                    ? 'Connected (Sign in with Google to verify Firebase Auth & RLS)'
-                    : supabaseTestResult?.status === 'failed'
-                    ? 'Connection failed'
-                    : 'Waiting...'}
-                </span>
-                {supabaseTestResult && !supabaseTesting && (
-                  <span className="ml-2 opacity-80">
-                    ({supabaseTestResult.latencyMs}ms ·{' '}
-                    {supabaseTestResult.authenticated
-                      ? 'Firebase JWT attached'
-                      : 'Anon / signed out'}{' '}
-                    · {supabaseTestResult.checkedAt})
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
-              {!user && authReady && (
-                <button
-                  type="button"
-                  onClick={handleGoogleSignIn}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1E3A5F] text-white hover:bg-[#162C49] font-medium cursor-pointer"
-                >
-                  <LogIn className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Sign in with Google</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() =>
-                  void runSupabaseConnectionTest({
-                    ensureProfileForUser: auth?.currentUser ?? user,
-                  })
-                }
-                disabled={supabaseTesting}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-800 hover:bg-slate-100 font-medium disabled:opacity-50 cursor-pointer"
-              >
-                <RefreshCw
-                  className={`w-3.5 h-3.5 ${supabaseTesting ? 'animate-spin' : ''}`}
-                  aria-hidden="true"
-                />
-                <span>Retest</span>
-              </button>
-            </div>
-          </div>
-
-          {supabaseTestResult && supabaseTestResult.checks.length > 0 && !supabaseTesting && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 pt-1 border-t border-black/10">
-              {supabaseTestResult.checks.map((chk) => (
-                <div
-                  key={chk.id}
-                  className="px-2.5 py-1.5 rounded-lg bg-white/75 border border-black/5 text-[11px]"
-                >
-                  <div className="font-semibold flex items-center gap-1.5">
-                    <span>
-                      {chk.ok === true ? '✓' : chk.ok === false ? '✗' : '•'}
-                    </span>
-                    <span>{chk.label}</span>
-                  </div>
-                  <div className="opacity-85 mt-0.5 break-words">{chk.detail}</div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {supabaseTestResult?.status === 'failed' &&
-            supabaseTestResult.errorMessage && (
-              <div className="p-2 rounded-lg bg-red-100/80 border border-red-200 font-mono text-[11px] text-red-900 break-all">
-                <div>
-                  <strong>Error:</strong>{' '}
-                  {supabaseTestResult.errorCode
-                    ? `[${supabaseTestResult.errorCode}] `
-                    : ''}
-                  {supabaseTestResult.errorMessage}
-                  {supabaseTestResult.errorDetails
-                    ? ` — ${supabaseTestResult.errorDetails}`
-                    : ''}
-                </div>
-                {supabaseTestResult.probableCause && (
-                  <div className="mt-1 font-sans text-red-950">
-                    <strong>Exact Cause:</strong> {supabaseTestResult.probableCause}
-                  </div>
-                )}
-              </div>
-            )}
-        </div>
-      </div>
 
       <main className="flex-1 max-w-[1280px] w-full mx-auto px-3 sm:px-8 py-5 sm:py-8 pb-24 lg:pb-10">
         {backStack.length > 0 && (
@@ -2883,14 +2703,6 @@ export default function App() {
                 <span aria-hidden="true">·</span>
                 <button
                   type="button"
-                  onClick={() => setMigrationModalOpen(true)}
-                  className="text-slate-600 font-medium hover:text-[#1E3A5F] hover:underline cursor-pointer"
-                >
-                  نسخ احتياطي وترحيل إلى Supabase
-                </button>
-                <span aria-hidden="true">·</span>
-                <button
-                  type="button"
                   onClick={() => setConfirmResetOpen(true)}
                   className="text-slate-500 hover:text-slate-800 hover:underline cursor-pointer"
                 >
@@ -2901,46 +2713,6 @@ export default function App() {
           </div>
         </div>
       </footer>
-
-      <CloudMigrationModal
-        open={migrationModalOpen}
-        user={user}
-        snapshot={
-          user
-            ? {
-                exportedAt: new Date().toISOString(),
-                version: '2.0-supabase',
-                uid: user.uid,
-                email: user.email || '',
-                displayName: user.displayName || '',
-                quarters,
-                months,
-                domains,
-                courses,
-                bookNotes,
-                customCategories,
-                history,
-                preferences,
-                reflections,
-                calendarEvents,
-                learningPaths,
-                readingItems,
-                projects,
-                unifiedTasks,
-                weeklyMeetings,
-                dentalCases,
-              }
-            : null
-        }
-        onClose={() => setMigrationModalOpen(false)}
-        onMigrationComplete={() => {
-          void workspaceRefreshRef.current?.();
-          setExportNotice(
-            'تم إتمام الترحيل إلى Supabase بنجاح — تم تحديث مساحة العمل تلقائيًا.'
-          );
-          window.setTimeout(() => setExportNotice(null), 6000);
-        }}
-      />
 
       <ConfirmDialog
         open={confirmResetOpen}

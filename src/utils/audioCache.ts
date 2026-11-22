@@ -970,12 +970,37 @@ export async function updateAudioPlaybackProgress(
   }
 }
 
+function normalizeAudioMimeType(rawMime: string): string {
+  const base = (rawMime || 'audio/webm').split(';')[0].trim().toLowerCase();
+  if (base === 'audio/m4a' || base === 'audio/x-m4a') return 'audio/mp4';
+  if (base === 'audio/mp3') return 'audio/mpeg';
+  if (
+    base === 'audio/wav' ||
+    base === 'audio/x-wav' ||
+    base === 'audio/mpeg' ||
+    base === 'audio/mp4' ||
+    base === 'audio/aac' ||
+    base === 'audio/webm' ||
+    base === 'audio/ogg' ||
+    base === 'audio/3gpp'
+  ) {
+    return base;
+  }
+  if (base.includes('mp4') || base.includes('m4a')) return 'audio/mp4';
+  if (base.includes('mpeg') || base.includes('mp3')) return 'audio/mpeg';
+  if (base.includes('ogg')) return 'audio/ogg';
+  if (base.includes('wav')) return 'audio/wav';
+  if (base.includes('aac')) return 'audio/aac';
+  return 'audio/webm';
+}
+
 function getAudioExtensionFromMime(mimeType: string): string {
   const lower = mimeType.toLowerCase();
   if (lower.includes('mp4') || lower.includes('m4a')) return 'mp4';
   if (lower.includes('mpeg') || lower.includes('mp3')) return 'mp3';
   if (lower.includes('ogg')) return 'ogg';
   if (lower.includes('wav')) return 'wav';
+  if (lower.includes('aac')) return 'aac';
   return 'webm';
 }
 
@@ -996,7 +1021,7 @@ export async function saveVoiceRecordingToCache(
   cloudSaved: boolean;
   errorMessage?: string;
 }> {
-  const cleanMime = (blob.type || mimeType || 'audio/webm').split(';')[0].trim();
+  const cleanMime = normalizeAudioMimeType(blob.type || mimeType || 'audio/webm');
   const ext = getAudioExtensionFromMime(cleanMime);
   const cacheId = `rec_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
   const cleanTitle = (title || 'تسجيل صوتي').trim().slice(0, 200);

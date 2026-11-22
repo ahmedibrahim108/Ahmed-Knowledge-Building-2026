@@ -203,6 +203,49 @@ export default function ReadAloudButton({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveUid, cleanText, voiceName, speed, entityId, entityType, title]);
 
+  // Re-check Supabase cache when mobile/desktop browser resumes or comes back online
+  useEffect(() => {
+    if (!cleanText || !effectiveUid || hasCachedAudio) return;
+    let active = true;
+    const recheckCloudAudio = () => {
+      if (
+        !active ||
+        (typeof document !== 'undefined' && document.visibilityState === 'hidden')
+      ) {
+        return;
+      }
+      void loadCachedAudioClip(effectiveUid, cleanText, voiceName, speed, {
+        entityType,
+        entityId,
+        title,
+      }).then((cached) => {
+        if (!active || !cached) return;
+        setHasCachedAudio(true);
+        setCacheSource(cached.source);
+        setCloudSaved(cached.cloudSaved ?? cached.source === 'cloud');
+        setIsStaleContent(Boolean(cached.isStaleContent));
+        setCacheId(cached.cacheId);
+        if (cached.durationSeconds && cached.durationSeconds > 0) {
+          setDuration(cached.durationSeconds);
+        }
+        if (cached.lastPositionSeconds && cached.lastPositionSeconds > 0) {
+          setCurrentTime(cached.lastPositionSeconds);
+        }
+        setStatus((prev) => (prev === 'idle' ? 'ready' : prev));
+      });
+    };
+
+    document.addEventListener('visibilitychange', recheckCloudAudio);
+    window.addEventListener('focus', recheckCloudAudio);
+    window.addEventListener('online', recheckCloudAudio);
+    return () => {
+      active = false;
+      document.removeEventListener('visibilitychange', recheckCloudAudio);
+      window.removeEventListener('focus', recheckCloudAudio);
+      window.removeEventListener('online', recheckCloudAudio);
+    };
+  }, [effectiveUid, cleanText, voiceName, speed, entityId, entityType, title, hasCachedAudio]);
+
   const attachBlobToAudioAndPlay = async (
     blob: Blob,
     startAt = 0,
@@ -213,6 +256,7 @@ export default function ReadAloudButton({
     objectUrlRef.current = url;
 
     const audio = new Audio(url);
+    audio.setAttribute('playsinline', 'true');
     audio.playbackRate = rate;
     audioRef.current = audio;
     setUsingSpeechFallback(false);

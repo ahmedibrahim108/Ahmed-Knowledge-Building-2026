@@ -416,6 +416,36 @@ export default function VoiceRecorderButton({
           durationSeconds: durationSec,
         });
 
+        // Automatically upload every recorded voice note directly to Supabase Storage when authenticated
+        const currentUid = auth?.currentUser?.uid;
+        if (currentUid) {
+          setSavingClip(true);
+          const stamp = new Date().toLocaleTimeString('ar-EG', {
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+          void saveVoiceRecordingToCache(
+            currentUid,
+            blob,
+            actualType,
+            durationSec,
+            audioMeta?.title
+              ? `تسجيل: ${audioMeta.title}`
+              : `تسجيل صوتي (${stamp})`,
+            audioMeta
+          )
+            .then((cloudRes) => {
+              if (cloudRes.cloudSaved) {
+                setLastClip((prev) =>
+                  prev ? { ...prev, savedCacheId: cloudRes.cacheId } : prev
+                );
+              }
+            })
+            .finally(() => {
+              setSavingClip(false);
+            });
+        }
+
         setPhase('stopped_transcribing');
         try {
           const audioBase64 = await blobToBase64(blob);
@@ -532,6 +562,7 @@ export default function VoiceRecorderButton({
     const url = URL.createObjectURL(lastClip.blob);
     previewUrlRef.current = url;
     const audio = new Audio(url);
+    audio.setAttribute('playsinline', 'true');
     audio.onended = () => setPlayingPreview(false);
     previewAudioRef.current = audio;
     try {

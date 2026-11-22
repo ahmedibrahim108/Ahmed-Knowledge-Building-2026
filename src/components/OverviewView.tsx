@@ -76,8 +76,8 @@ import { CloudAttachmentItem } from '../services/supabaseSync';
 import {
   SavedAudioClipSummary,
   deleteAudioClipFromCache,
-  listUserAudioClips,
   loadAudioClipById,
+  subscribeUserAudioClips,
 } from '../utils/audioCache';
 import {
   BUNDLED_APP_DOCUMENTS,
@@ -255,6 +255,7 @@ export default function OverviewView({
   );
   const [playingClipId, setPlayingClipId] = useState<string | null>(null);
   const [loadingClipId, setLoadingClipId] = useState<string | null>(null);
+  const [audioPlayError, setAudioPlayError] = useState<string | null>(null);
   const dashAudioRef = useRef<HTMLAudioElement | null>(null);
   const dashAudioUrlRef = useRef<string | null>(null);
 
@@ -269,17 +270,13 @@ export default function OverviewView({
   const nextWeekKey = useMemo(() => addDaysToDateKey(today, 7), [today]);
 
   useEffect(() => {
-    let active = true;
     if (!user?.uid) {
       setSavedAudioClips([]);
       return;
     }
-    void listUserAudioClips(user.uid).then((clips) => {
-      if (active) setSavedAudioClips(clips);
+    return subscribeUserAudioClips(user.uid, (clips) => {
+      setSavedAudioClips(clips);
     });
-    return () => {
-      active = false;
-    };
   }, [user?.uid]);
 
   useEffect(() => {
@@ -446,6 +443,7 @@ export default function OverviewView({
   }, [readingItems, courses, months, cloudAttachments]);
 
   const handleTogglePlaySavedClip = async (clip: SavedAudioClipSummary) => {
+    setAudioPlayError(null);
     if (playingClipId === clip.id && dashAudioRef.current) {
       dashAudioRef.current.pause();
       setPlayingClipId(null);
@@ -458,7 +456,7 @@ export default function OverviewView({
     try {
       const loaded = await loadAudioClipById(user?.uid, clip.id);
       if (!loaded) {
-        setLoadingClipId(null);
+        setAudioPlayError('تعذر تحميل الملف الصوتي من السحابة.');
         return;
       }
       if (dashAudioUrlRef.current) {
@@ -467,10 +465,18 @@ export default function OverviewView({
       const url = URL.createObjectURL(loaded.blob);
       dashAudioUrlRef.current = url;
       const audio = new Audio(url);
+      audio.setAttribute('playsinline', 'true');
       audio.onended = () => setPlayingClipId(null);
+      audio.onerror = () => {
+        setPlayingClipId(null);
+        setAudioPlayError('تعذر تشغيل هذا المقطع الصوتي على المتصفح الحالي.');
+      };
       dashAudioRef.current = audio;
       await audio.play();
       setPlayingClipId(clip.id);
+    } catch {
+      setPlayingClipId(null);
+      setAudioPlayError('تعذر تشغيل هذا المقطع الصوتي — حاول مرة أخرى.');
     } finally {
       setLoadingClipId(null);
     }
@@ -1327,6 +1333,11 @@ export default function OverviewView({
                         الصوتيات المحفوظة ({savedAudioClips.length})
                       </span>
                     </div>
+                    {audioPlayError && (
+                      <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                        {audioPlayError}
+                      </p>
+                    )}
                     {savedAudioClips.length === 0 ? (
                       <p className="text-[11px] text-slate-400">
                         سيظهر هنا كل ملخص صوتي تقوم بتوليده عبر الأجهزة.

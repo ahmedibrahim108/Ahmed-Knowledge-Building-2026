@@ -18,6 +18,8 @@ import {
 import {
   downloadResourceAttachmentResult,
   getAttachmentKind,
+  getFreshStudyFileSignedUrl,
+  getLocalAttachmentBlob,
   getPdfBlobForViewing,
   renderDocumentBlobToHtml,
 } from '../utils/documentImportExport';
@@ -92,6 +94,10 @@ export default function PDFViewerModal({
   const bodyContainerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
+  const [freshExternalUrl, setFreshExternalUrl] = useState<string | null>(null);
+  const blobFallbackTriedRef = useRef(false);
+  const blobUrlRef = useRef<string | null>(null);
+
   const attachmentKind = useMemo(
     () => getAttachmentKind(target?.fileName, target?.mimeType),
     [target?.fileName, target?.mimeType]
@@ -101,25 +107,37 @@ export default function PDFViewerModal({
 
   useEffect(() => {
     if (!target) {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
       setPdfUrl(null);
+      setFreshExternalUrl(null);
       setDocHtml(null);
       setPreviewOnlyNotice(false);
       setNumPages(0);
       setCurrentPage(1);
       setLoadError(null);
       setDownloadNotice(null);
+      blobFallbackTriedRef.current = false;
       return;
     }
 
     let cancelled = false;
-    let createdUrl: string | null = null;
     const resolvedUid = uid || target.uid;
+    blobFallbackTriedRef.current = false;
+
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
 
     const load = async () => {
       setLoadingBlob(true);
       setLoadError(null);
       setDownloadNotice(null);
       setPdfUrl(null);
+      setFreshExternalUrl(target.downloadUrl || null);
       setDocHtml(null);
       setPreviewOnlyNotice(false);
       setNumPages(0);
@@ -127,27 +145,73 @@ export default function PDFViewerModal({
       setZoom(1);
 
       try {
-        const blob = await getPdfBlobForViewing({
-          uid: resolvedUid,
-          resourceId: target.resourceId,
-          fileName: target.fileName,
-          mimeType: target.mimeType,
-          storagePath: target.storagePath,
-          downloadUrl: target.downloadUrl,
-        });
-
-        if (cancelled) return;
-
         if (isPdfMode) {
+          // 1) Fast offline local IndexedDB blob when cached on this device
+          if (target.resourceId) {
+            const local = await getLocalAttachmentBlob(target.resourceId);
+            if (cancelled) return;
+            if (local?.blob) {
+              const typedBlob =
+                local.blob.type === 'application/pdf'
+                  ? local.blob
+                  : new Blob([local.blob], { type: 'application/pdf' });
+              const objUrl = URL.createObjectURL(typedBlob);
+              blobUrlRef.current = objUrl;
+              setPdfUrl(objUrl);
+              const signed = await getFreshStudyFileSignedUrl({
+                uid: resolvedUid,
+                resourceId: target.resourceId,
+                storagePath: target.storagePath,
+              });
+              if (!cancelled && signed) setFreshExternalUrl(signed);
+              return;
+            }
+          }
+
+          // 2) Mint fresh Supabase Signed URL so pdf.js streams 50-100 MB PDFs via HTTP Range Requests on mobile!
+          const freshSignedUrl = await getFreshStudyFileSignedUrl({
+            uid: resolvedUid,
+            resourceId: target.resourceId,
+            storagePath: target.storagePath,
+          });
+          if (cancelled) return;
+          if (freshSignedUrl) {
+            setFreshExternalUrl(freshSignedUrl);
+            setPdfUrl(freshSignedUrl);
+            return;
+          }
+
+          // 3) Fallback to authenticated blob download or legacy URL
+          const blob = await getPdfBlobForViewing({
+            uid: resolvedUid,
+            resourceId: target.resourceId,
+            fileName: target.fileName,
+            mimeType: target.mimeType,
+            storagePath: target.storagePath,
+            downloadUrl: target.downloadUrl,
+          });
+          if (cancelled) return;
+
           if (!blob) {
             setLoadError(
               'لم يُعثر على ملف الـ PDF في قاعدة البيانات السحابية أو المحلية لهذا الجهاز. إذا رفعته قبل تحديث المزامنة، أعد رفعه مرة واحدة من الجهاز الأصلي ليفتح على كل الأجهزة.'
             );
           } else {
-            createdUrl = URL.createObjectURL(blob);
-            setPdfUrl(createdUrl);
+            const objUrl = URL.createObjectURL(blob);
+            blobUrlRef.current = objUrl;
+            setPdfUrl(objUrl);
           }
         } else {
+          const blob = await getPdfBlobForViewing({
+            uid: resolvedUid,
+            resourceId: target.resourceId,
+            fileName: target.fileName,
+            mimeType: target.mimeType,
+            storagePath: target.storagePath,
+            downloadUrl: target.downloadUrl,
+          });
+          if (cancelled) return;
+
           if (blob) {
             const rawHtml = await renderDocumentBlobToHtml(
               blob,
@@ -184,8 +248,9 @@ export default function PDFViewerModal({
 
     return () => {
       cancelled = true;
-      if (createdUrl) {
-        URL.revokeObjectURL(createdUrl);
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
       }
     };
   }, [target, uid, isPdfMode]);
@@ -300,9 +365,9 @@ export default function PDFViewerModal({
               <Download className="w-3.5 h-3.5" aria-hidden="true" />
               <span>{downloadLabel}</span>
             </button>
-            {target.downloadUrl && (
+            {(freshExternalUrl || target.downloadUrl) && (
               <a
-                href={target.downloadUrl}
+                href={freshExternalUrl || target.downloadUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 px-2.5 py-2 min-h-[38px] text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-100 rounded-lg"
@@ -449,9 +514,9 @@ export default function PDFViewerModal({
               <p className="text-xs text-slate-600 leading-relaxed">
                 {loadError}
               </p>
-              {target.downloadUrl && (
+              {(freshExternalUrl || target.downloadUrl) && (
                 <a
-                  href={target.downloadUrl}
+                  href={freshExternalUrl || target.downloadUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg"
@@ -486,6 +551,28 @@ export default function PDFViewerModal({
                     </p>
                   </div>
                 }
+                onLoadError={() => {
+                  if (blobFallbackTriedRef.current || pdfUrl.startsWith('blob:')) {
+                    return;
+                  }
+                  blobFallbackTriedRef.current = true;
+                  void getPdfBlobForViewing({
+                    uid: uid || target.uid,
+                    resourceId: target.resourceId,
+                    fileName: target.fileName,
+                    mimeType: target.mimeType,
+                    storagePath: target.storagePath,
+                    downloadUrl: target.downloadUrl,
+                  }).then((blob) => {
+                    if (!blob) return;
+                    if (blobUrlRef.current) {
+                      URL.revokeObjectURL(blobUrlRef.current);
+                    }
+                    const objUrl = URL.createObjectURL(blob);
+                    blobUrlRef.current = objUrl;
+                    setPdfUrl(objUrl);
+                  });
+                }}
                 onLoadSuccess={({ numPages: total }) => {
                   setNumPages(total);
                   setCurrentPage(1);

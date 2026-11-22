@@ -3,8 +3,11 @@ import { BookNote } from '../data/curriculumData';
 import { auth } from '../firebase';
 import {
   formatSupabaseErrorMessage,
+  getFirebaseIdToken,
   isSupabaseConfigured,
   supabase,
+  supabaseAnonKey,
+  supabaseUrl,
   withFirebaseTokenRetry,
 } from '../services/supabaseClient';
 import { ensureRichHtml, richHtmlToPlainText } from './richText';
@@ -31,6 +34,9 @@ export const BUNDLED_APP_DOCUMENTS: BundledAppDocument[] = [];
 
 const STUDY_FILES_BUCKET = 'study-files';
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
+const TUS_RESUMABLE_THRESHOLD = 6 * 1024 * 1024; // 6 MB
+const TUS_CHUNK_SIZE = 6 * 1024 * 1024; // 6 MB chunks (Supabase recommended)
+const MAX_LOCAL_IDB_BYTES = 40 * 1024 * 1024; // Skip caching >40 MB blobs in mobile IndexedDB
 
 function escapeHtml(text: string): string {
   return text
@@ -101,9 +107,6 @@ export function inferMimeTypeFromFileName(
   fileName?: string,
   provided?: string
 ): string {
-  if (provided && provided !== 'application/octet-stream') {
-    return provided;
-  }
   const clean = (fileName || '').split('?')[0].trim().toLowerCase();
   if (clean.endsWith('.pdf')) return 'application/pdf';
   if (clean.endsWith('.docx')) {
@@ -115,7 +118,12 @@ export function inferMimeTypeFromFileName(
   }
   if (clean.endsWith('.txt')) return 'text/plain';
   if (clean.endsWith('.html') || clean.endsWith('.htm')) return 'text/html';
-  return provided || 'application/octet-stream';
+  if (provided && provided !== 'application/octet-stream') {
+    const lower = provided.toLowerCase();
+    if (lower === 'application/x-pdf') return 'application/pdf';
+    return provided;
+  }
+  return 'application/octet-stream';
 }
 
 function parseLegacyDocOrTextRaw(raw: string, fileName: string): string {
@@ -242,6 +250,9 @@ export async function saveLocalAttachment(
   file: Blob,
   fileName?: string
 ): Promise<void> {
+  if (file.size > MAX_LOCAL_IDB_BYTES) {
+    return;
+  }
   try {
     const idb = await openAttachmentsDb();
     const tx = idb.transaction(IDB_STORE, 'readwrite');
@@ -257,7 +268,7 @@ export async function saveLocalAttachment(
       tx.onerror = () => reject(tx.error);
     });
   } catch {
-    // Non-fatal if IndexedDB unavailable
+    // Non-fatal if IndexedDB unavailable or mobile quota reached
   }
 }
 
@@ -331,15 +342,158 @@ function buildSafeStorageFileName(fileName: string): string {
   return `${asciiStem || 'attachment'}${ext}`;
 }
 
+function toBase64Utf8(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+async function uploadViaSupabaseTus(
+  bucket: string,
+  storagePath: string,
+  file: Blob,
+  contentType: string,
+  onProgress?: (percent: number) => void
+): Promise<void> {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('إعدادات Supabase غير مكتملة.');
+  }
+
+  let token = await getFirebaseIdToken(false);
+  if (!token) {
+    token = await getFirebaseIdToken(true);
+  }
+  if (!token) {
+    throw new Error('انتهت جلسة التحقق. أعد تسجيل الدخول ثم حاول مجددًا.');
+  }
+
+  const endpoint = `${supabaseUrl}/storage/v1/upload/resumable`;
+  const metadata = [
+    `bucketName ${toBase64Utf8(bucket)}`,
+    `objectName ${toBase64Utf8(storagePath)}`,
+    `contentType ${toBase64Utf8(contentType)}`,
+    `cacheControl ${toBase64Utf8('3600')}`,
+  ].join(',');
+
+  const createUpload = async (authToken: string) =>
+    fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        apikey: supabaseAnonKey,
+        'x-upsert': 'true',
+        'Tus-Resumable': '1.0.0',
+        'Upload-Length': String(file.size),
+        'Upload-Metadata': metadata,
+      },
+    });
+
+  let createRes = await createUpload(token);
+  if (createRes.status === 401 || createRes.status === 403) {
+    const fresh = await getFirebaseIdToken(true);
+    if (fresh) {
+      token = fresh;
+      createRes = await createUpload(token);
+    }
+  }
+
+  if (!createRes.ok) {
+    const errText = await createRes.text().catch(() => '');
+    throw new Error(
+      errText || `HTTP ${createRes.status}: تعذر بدء الرفع المتقطع للملف.`
+    );
+  }
+
+  const locationHeader = createRes.headers.get('location');
+  if (!locationHeader) {
+    throw new Error('لم يُعد خادم التخزين رابط متابعة الرفع (Location).');
+  }
+  const uploadUrl = new URL(locationHeader, supabaseUrl).toString();
+
+  let offset = 0;
+  onProgress?.(1);
+
+  while (offset < file.size) {
+    const end = Math.min(offset + TUS_CHUNK_SIZE, file.size);
+    const chunk = file.slice(offset, end);
+
+    let chunkSuccess = false;
+    let lastChunkErr: unknown = null;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        let patchRes = await fetch(uploadUrl, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            apikey: supabaseAnonKey,
+            'Tus-Resumable': '1.0.0',
+            'Upload-Offset': String(offset),
+            'Content-Type': 'application/offset+octet-stream',
+          },
+          body: chunk,
+        });
+
+        if (patchRes.status === 401 || patchRes.status === 403) {
+          const fresh = await getFirebaseIdToken(true);
+          if (fresh) {
+            token = fresh;
+            patchRes = await fetch(uploadUrl, {
+              method: 'PATCH',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                apikey: supabaseAnonKey,
+                'Tus-Resumable': '1.0.0',
+                'Upload-Offset': String(offset),
+                'Content-Type': 'application/offset+octet-stream',
+              },
+              body: chunk,
+            });
+          }
+        }
+
+        if (!patchRes.ok) {
+          const errText = await patchRes.text().catch(() => '');
+          throw new Error(errText || `HTTP ${patchRes.status}`);
+        }
+
+        const nextOffsetHeader = patchRes.headers.get('upload-offset');
+        const parsedOffset = nextOffsetHeader ? Number(nextOffsetHeader) : NaN;
+        offset = Number.isFinite(parsedOffset) ? parsedOffset : end;
+        chunkSuccess = true;
+        break;
+      } catch (err) {
+        lastChunkErr = err;
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        }
+      }
+    }
+
+    if (!chunkSuccess) {
+      throw lastChunkErr instanceof Error
+        ? lastChunkErr
+        : new Error('انقطع رفع الجزء أثناء نقل الملف.');
+    }
+
+    const pct = Math.min(98, Math.max(1, Math.round((offset / file.size) * 98)));
+    onProgress?.(pct);
+  }
+}
+
 export async function uploadResourceAttachment(
   uid: string | undefined,
   resourceId: string,
   file: File,
-  extractedPreview?: string
+  extractedPreview?: string,
+  onProgress?: (percent: number) => void
 ): Promise<UploadedAttachmentResult> {
   const mimeType = inferMimeTypeFromFileName(file.name, file.type);
 
-  // Persist locally in IndexedDB for instant offline viewing on this device
+  // Persist smaller files locally in IndexedDB for instant offline viewing on this device
   await saveLocalAttachment(resourceId, file, file.name);
 
   if (file.size > MAX_UPLOAD_BYTES) {
@@ -377,16 +531,31 @@ export async function uploadResourceAttachment(
   const storagePath = `${effectiveUid}/resources/${safeId}/${safeFileName}`;
 
   try {
-    await withFirebaseTokenRetry(async (client) => {
-      const { error: uploadErr } = await client.storage
-        .from(STUDY_FILES_BUCKET)
-        .upload(storagePath, file, {
-          contentType: mimeType,
-          upsert: true,
-        });
-      if (uploadErr) throw uploadErr;
+    let signedUrl = '';
+    onProgress?.(2);
 
-      let signedUrl = '';
+    if (file.size > TUS_RESUMABLE_THRESHOLD) {
+      await uploadViaSupabaseTus(
+        STUDY_FILES_BUCKET,
+        storagePath,
+        file,
+        mimeType,
+        onProgress
+      );
+    } else {
+      await withFirebaseTokenRetry(async (client) => {
+        const { error: uploadErr } = await client.storage
+          .from(STUDY_FILES_BUCKET)
+          .upload(storagePath, file, {
+            contentType: mimeType,
+            upsert: true,
+          });
+        if (uploadErr) throw uploadErr;
+      });
+      onProgress?.(90);
+    }
+
+    await withFirebaseTokenRetry(async (client) => {
       try {
         const { data: signedData } = await client.storage
           .from(STUDY_FILES_BUCKET)
@@ -415,14 +584,38 @@ export async function uploadResourceAttachment(
       if (metaErr) throw metaErr;
     });
 
+    onProgress?.(100);
+
     return {
       storagePath,
+      downloadUrl: signedUrl || undefined,
       mimeType,
       sizeBytes: file.size,
       uploadedToCloud: true,
     };
   } catch (err) {
     console.warn('Supabase study file upload failed:', err);
+    const rawMsg =
+      err instanceof Error
+        ? err.message
+        : err && typeof err === 'object' && 'message' in err
+        ? String((err as { message?: string }).message)
+        : '';
+    const lower = rawMsg.toLowerCase();
+    if (
+      lower.includes('maximum allowed size') ||
+      lower.includes('payload too large') ||
+      lower.includes('413') ||
+      lower.includes('entity too large')
+    ) {
+      return {
+        mimeType,
+        sizeBytes: file.size,
+        uploadedToCloud: false,
+        errorMessage:
+          'تجاوز الملف حد الحجم المفعّل حاليًا في لوحة Supabase Storage (الافتراضي 50 ميجابايت في الباقة المجانية، ويصل إلى 100 ميجابايت بعد رفعه من Storage Settings في باقة Pro).',
+      };
+    }
     return {
       mimeType,
       sizeBytes: file.size,
@@ -432,6 +625,53 @@ export async function uploadResourceAttachment(
         'تعذر رفع الملف إلى التخزين السحابي. تم الاحتفاظ به محليًا على هذا الجهاز.'
       ),
     };
+  }
+}
+
+export async function getFreshStudyFileSignedUrl(options: {
+  uid?: string;
+  resourceId?: string;
+  storagePath?: string;
+}): Promise<string | null> {
+  if (!isSupabaseConfigured || !supabase) return null;
+  const effectiveUid = options.uid || auth?.currentUser?.uid;
+  let resolvedStoragePath = options.storagePath;
+  let resolvedBucket = STUDY_FILES_BUCKET;
+
+  if (effectiveUid && options.resourceId && !resolvedStoragePath) {
+    const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+    try {
+      const { data } = await withFirebaseTokenRetry(async (client) =>
+        client
+          .from('file_attachments')
+          .select('storage_bucket,storage_path')
+          .eq('owner_id', effectiveUid)
+          .eq('id', safeId)
+          .maybeSingle()
+      );
+      if (data) {
+        const row = data as { storage_bucket?: string; storage_path?: string };
+        if (row.storage_bucket) resolvedBucket = row.storage_bucket;
+        if (row.storage_path) resolvedStoragePath = row.storage_path;
+      }
+    } catch {
+      // Ignore lookup fallback
+    }
+  }
+
+  if (!resolvedStoragePath || resolvedStoragePath.startsWith('users/')) {
+    return null;
+  }
+
+  try {
+    const { data } = await withFirebaseTokenRetry(async (client) =>
+      client.storage
+        .from(resolvedBucket)
+        .createSignedUrl(resolvedStoragePath!, 3600)
+    );
+    return data?.signedUrl || null;
+  } catch {
+    return null;
   }
 }
 

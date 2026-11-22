@@ -5,6 +5,9 @@ import { OWNER_ADMIN_EMAIL, auth } from '../firebase';
 const rawSupabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
 const rawSupabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
 
+export const supabaseUrl = rawSupabaseUrl.replace(/\/+$/, '');
+export const supabaseAnonKey = rawSupabaseAnonKey;
+
 export const isSupabaseConfigured = Boolean(
   rawSupabaseUrl &&
     rawSupabaseAnonKey &&

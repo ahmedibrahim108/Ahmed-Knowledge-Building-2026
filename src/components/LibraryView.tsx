@@ -89,6 +89,7 @@ export default function LibraryView({
   const [externalUrl, setExternalUrl] = useState('');
   const [takeaways, setTakeaways] = useState('');
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [uploadProgressPct, setUploadProgressPct] = useState<number>(0);
   const [uploadStatusMsg, setUploadStatusMsg] = useState<{
     ok: boolean;
     text: string;
@@ -100,6 +101,7 @@ export default function LibraryView({
   const [pendingDownloadUrl, setPendingDownloadUrl] = useState<string | undefined>();
   const [confirmDelete, setConfirmDelete] = useState<ReadingLibraryItem | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const replaceFileRef = useRef<HTMLInputElement | null>(null);
 
   const today = getTodayDateKey();
 
@@ -138,11 +140,18 @@ export default function LibraryView({
     e.target.value = '';
     if (!file) return;
     setUploadingFile(true);
+    setUploadProgressPct(0);
     setUploadStatusMsg(null);
     try {
       const resId = `lib-res-${Date.now()}`;
       const effectiveUid = uid || auth?.currentUser?.uid;
-      const uploaded = await uploadResourceAttachment(effectiveUid, resId, file);
+      const uploaded = await uploadResourceAttachment(
+        effectiveUid,
+        resId,
+        file,
+        undefined,
+        (pct) => setUploadProgressPct(pct)
+      );
       setPendingResId(resId);
       setPendingFileName(file.name);
       setPendingStoragePath(uploaded.storagePath);
@@ -168,6 +177,47 @@ export default function LibraryView({
                 'تعذر رفع الملف للسحابة وتم حفظه محليًا فقط على هذا الجهاز.',
             }
       );
+    } finally {
+      setUploadingFile(false);
+    }
+  };
+
+  const handleReplaceSelectedItemPdf = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    item: ReadingLibraryItem
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    setUploadingFile(true);
+    setUploadProgressPct(0);
+    setDownloadError(null);
+    try {
+      const resId = item.attachmentResourceId || `lib-res-${Date.now()}`;
+      const effectiveUid = uid || auth?.currentUser?.uid;
+      const uploaded = await uploadResourceAttachment(
+        effectiveUid,
+        resId,
+        file,
+        undefined,
+        (pct) => setUploadProgressPct(pct)
+      );
+      onUpdateItem(item.id, {
+        attachmentName: file.name,
+        attachmentResourceId: resId,
+        storagePath: uploaded.storagePath,
+        downloadUrl: uploaded.downloadUrl,
+        ...(isPdfAttachment(file.name, file.type)
+          ? { itemType: 'ملف PDF' as ReadingItemType }
+          : {}),
+      });
+      if (!uploaded.uploadedToCloud && uploaded.errorMessage) {
+        setDownloadError(uploaded.errorMessage);
+      }
     } finally {
       setUploadingFile(false);
     }
@@ -290,36 +340,36 @@ export default function LibraryView({
               )}
             </div>
 
-            {hasAttachedFile && (
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                {isViewable && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDownloadError(null);
-                      onOpenPdf({
-                        uid: resolvedUid,
-                        title: selectedItem.title,
-                        fileName:
-                          selectedItem.attachmentName ||
-                          `${selectedItem.title}.pdf`,
-                        resourceId: selectedItem.attachmentResourceId,
-                        storagePath: selectedItem.storagePath,
-                        downloadUrl: selectedItem.downloadUrl,
-                        extractedPreview: selectedItem.takeaways || undefined,
-                        contextLabel: `مكتبة القراءة · ${hubMeta.title}`,
-                      });
-                    }}
-                    className="inline-flex items-center gap-1.5 px-4 py-2.5 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
-                  >
-                    <Eye className="w-4 h-4" aria-hidden="true" />
-                    <span>
-                      {isPdf
-                        ? 'فتح وقراءة PDF داخل المنصة'
-                        : 'فتح وقراءة المستند داخل المنصة'}
-                    </span>
-                  </button>
-                )}
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {hasAttachedFile && isViewable && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDownloadError(null);
+                    onOpenPdf({
+                      uid: resolvedUid,
+                      title: selectedItem.title,
+                      fileName:
+                        selectedItem.attachmentName ||
+                        `${selectedItem.title}.pdf`,
+                      resourceId: selectedItem.attachmentResourceId,
+                      storagePath: selectedItem.storagePath,
+                      downloadUrl: selectedItem.downloadUrl,
+                      extractedPreview: selectedItem.takeaways || undefined,
+                      contextLabel: `مكتبة القراءة · ${hubMeta.title}`,
+                    });
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                >
+                  <Eye className="w-4 h-4" aria-hidden="true" />
+                  <span>
+                    {isPdf
+                      ? 'فتح وقراءة PDF داخل المنصة'
+                      : 'فتح وقراءة المستند داخل المنصة'}
+                  </span>
+                </button>
+              )}
+              {hasAttachedFile && (
                 <button
                   type="button"
                   onClick={async () => {
@@ -342,8 +392,36 @@ export default function LibraryView({
                   <Download className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>{isPdf ? 'تنزيل PDF' : 'تنزيل الملف'}</span>
                 </button>
-              </div>
-            )}
+              )}
+              {canEdit && (
+                <>
+                  <input
+                    ref={replaceFileRef}
+                    type="file"
+                    accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword,.txt,text/plain,.md,.markdown"
+                    className="hidden"
+                    onChange={(e) =>
+                      void handleReplaceSelectedItemPdf(e, selectedItem)
+                    }
+                  />
+                  <button
+                    type="button"
+                    disabled={uploadingFile}
+                    onClick={() => replaceFileRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-medium text-[#1E3A5F] bg-slate-50 border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer disabled:opacity-60"
+                  >
+                    <FileUp className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>
+                      {uploadingFile
+                        ? `جاري الرفع ${uploadProgressPct}%...`
+                        : hasAttachedFile
+                        ? 'تحديث / استبدال الملف'
+                        : 'إرفاق PDF / ملف (حتى 100 ميجا)'}
+                    </span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           {downloadError && (
@@ -642,7 +720,7 @@ export default function LibraryView({
             <input
               ref={fileRef}
               type="file"
-              accept=".pdf,.docx,.doc,.txt,.md,.markdown"
+              accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword,.txt,text/plain,.md,.markdown"
               className="hidden"
               onChange={(e) => void handlePickPdf(e)}
             />
@@ -655,10 +733,10 @@ export default function LibraryView({
               <FileUp className="w-4 h-4" aria-hidden="true" />
               <span>
                 {uploadingFile
-                  ? 'جاري رفع الملف للسحابة...'
+                  ? `جاري رفع الملف للسحابة (${uploadProgressPct}%)...`
                   : pendingFileName
                   ? `تم إرفاق: ${pendingFileName}`
-                  : 'رفع ملف PDF / Word للقراءة داخل التطبيق (اختياري)'}
+                  : 'رفع PDF / Word حتى 100 ميجا (اختياري)'}
               </span>
             </button>
 
