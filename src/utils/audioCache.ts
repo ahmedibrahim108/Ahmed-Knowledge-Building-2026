@@ -368,8 +368,8 @@ async function resolveSupabaseAudioBlob(row: {
     row.storage_path &&
     !row.storage_path.startsWith('users/')
   ) {
+    const bucket = row.storage_bucket || AUDIO_BUCKET;
     try {
-      const bucket = row.storage_bucket || AUDIO_BUCKET;
       const blob = await withFirebaseTokenRetry(async (client) => {
         const { data, error } = await client.storage
           .from(bucket)
@@ -379,7 +379,18 @@ async function resolveSupabaseAudioBlob(row: {
       });
       if (blob) return blob;
     } catch (err) {
-      console.warn('Supabase Storage audio download failed:', err);
+      console.warn('Supabase Storage audio download failed, trying fresh signed URL:', err);
+      try {
+        const { data: signedData } = await withFirebaseTokenRetry(async (client) =>
+          client.storage.from(bucket).createSignedUrl(row.storage_path!, 3600)
+        );
+        if (signedData?.signedUrl) {
+          const signedRes = await fetch(signedData.signedUrl);
+          if (signedRes.ok) return await signedRes.blob();
+        }
+      } catch {
+        // ignore signed URL fallback error
+      }
     }
   }
 

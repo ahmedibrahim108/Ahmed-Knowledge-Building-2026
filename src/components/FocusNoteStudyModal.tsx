@@ -199,10 +199,21 @@ export default function FocusNoteStudyModal({
   // Lock page scroll behind blurred backdrop
   useEffect(() => {
     if (!note || typeof document === 'undefined') return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    const htmlEl = document.documentElement;
+    const bodyEl = document.body;
+    const prevHtmlOverflow = htmlEl.style.overflow;
+    const prevBodyOverflow = bodyEl.style.overflow;
+    const prevHtmlOverscroll = htmlEl.style.overscrollBehavior;
+    const prevBodyOverscroll = bodyEl.style.overscrollBehavior;
+    htmlEl.style.overflow = 'hidden';
+    bodyEl.style.overflow = 'hidden';
+    htmlEl.style.overscrollBehavior = 'none';
+    bodyEl.style.overscrollBehavior = 'none';
     return () => {
-      document.body.style.overflow = prevOverflow;
+      htmlEl.style.overflow = prevHtmlOverflow;
+      bodyEl.style.overflow = prevBodyOverflow;
+      htmlEl.style.overscrollBehavior = prevHtmlOverscroll;
+      bodyEl.style.overscrollBehavior = prevBodyOverscroll;
     };
   }, [Boolean(note)]);
 
@@ -459,18 +470,18 @@ export default function FocusNoteStudyModal({
 
   return (
     <div
-      className="fixed inset-0 z-[60] bg-slate-950/55 backdrop-blur-md flex items-center justify-center p-0 sm:p-4 lg:p-6 transition-opacity"
+      className="fixed inset-0 z-[60] bg-slate-950/55 backdrop-blur-md flex items-center justify-center p-0 sm:p-4 lg:p-6 transition-opacity overscroll-none"
       role="dialog"
       aria-modal="true"
       aria-label={`وضع المذاكرة المركّز: ${note.bookTitle}`}
       onClick={onClose}
     >
       <div
-        className="w-full max-w-[1220px] h-[100dvh] sm:h-[92dvh] bg-[#FAFBFD] sm:rounded-2xl border border-slate-200/80 shadow-2xl flex flex-col overflow-hidden"
+        className="w-full max-w-[1220px] h-[100dvh] sm:h-[92dvh] bg-[#FAFBFD] sm:rounded-2xl border border-slate-200/80 shadow-2xl flex flex-col overflow-hidden overscroll-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Minimal Distraction-Free Top Bar */}
-        <header className="bg-white border-b border-slate-200/90 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 shrink-0">
+        <header className="bg-white border-b border-slate-200/90 px-3 sm:px-6 py-2.5 sm:py-3 flex flex-wrap items-center justify-between gap-2 sm:gap-3 shrink-0">
           <div className="min-w-0 flex-1 space-y-1">
             <p className="text-[11px] sm:text-xs text-slate-500 truncate">
               {metadataSegments.join(' · ')}
@@ -654,8 +665,8 @@ export default function FocusNoteStudyModal({
           </div>
         </header>
 
-        {/* Persistent Study Audio + Repetition Control Bar */}
-        <div className="bg-white/95 border-b border-slate-200 px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-2.5 shrink-0">
+        {/* Desktop Persistent Study Audio + Repetition Control Bar */}
+        <div className="hidden lg:flex bg-white/95 border-b border-slate-200 px-6 py-2.5 flex-wrap items-center justify-between gap-2.5 shrink-0">
           <div className="flex flex-wrap items-center gap-2">
             <ReadAloudButton
               uid={uid}
@@ -685,7 +696,7 @@ export default function FocusNoteStudyModal({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            <span className="text-xs text-slate-600 tabular-nums hidden sm:inline">
+            <span className="text-xs text-slate-600 tabular-nums">
               المراجعة: {reviewCount}×
               {isDueToday
                 ? ' · مستحق اليوم'
@@ -766,10 +777,50 @@ export default function FocusNoteStudyModal({
         <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
           {/* Primary Reading / Editing Canvas */}
           <div
-            className={`flex-1 min-h-0 overflow-y-auto px-4 sm:px-8 py-6 space-y-6 ${
+            className={`flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 sm:px-8 py-4 sm:py-6 space-y-5 sm:space-y-6 ${
               mobilePane !== 'note' ? 'hidden lg:block' : 'block'
             }`}
           >
+            {/* Mobile Compact Audio & Quick Review Strip inside single scroll container */}
+            <div className="lg:hidden bg-white border border-slate-200 rounded-xl p-3 space-y-2.5">
+              <ReadAloudButton
+                uid={uid}
+                entityType={
+                  note.noteType === 'course_lecture' ? 'course' : 'note'
+                }
+                entityId={note.id}
+                title={note.bookTitle}
+                text={richHtmlToPlainText(
+                  isEditingMain ? activeDraft.content : note.content
+                )}
+                voiceName={preferences.readAloudVoice}
+                speed={preferences.readAloudSpeed}
+                disabled={!canEdit}
+                onRequireAuth={onRequireAuth}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleQuickIncrementListen}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[36px] text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer whitespace-nowrap"
+                >
+                  <Headphones className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                  <span className="tabular-nums">+1 سماع ({listenCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleQuickSpacedReview}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs font-semibold rounded-lg cursor-pointer whitespace-nowrap ${
+                    isDueToday
+                      ? 'bg-emerald-700 hover:bg-emerald-800 text-white'
+                      : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200'
+                  }`}
+                >
+                  <Repeat className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>تمت المراجعة الآن</span>
+                </button>
+              </div>
+            </div>
             {/* Linked Course PDFs / Word quick viewer */}
             {linkedCourseDocs.length > 0 && onOpenPdf && (
               <div className={`${noteLayout.widthClass} space-y-2`}>
@@ -936,7 +987,7 @@ export default function FocusNoteStudyModal({
 
                   {/* Quick Voice/Text Append Without Leaving Reading Mode */}
                   {canEdit && (
-                    <div className="bg-white border border-slate-200 rounded-xl p-3 flex flex-wrap items-center gap-2">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2">
                       <input
                         type="text"
                         value={quickMainCapture}
@@ -948,29 +999,31 @@ export default function FocusNoteStudyModal({
                           }
                         }}
                         placeholder="أضف فكرة سريعة إلى متن الملاحظة بدون مغادرة القراءة..."
-                        className="flex-1 min-w-[200px] px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+                        className="w-full sm:flex-1 min-w-0 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
                       />
-                      <button
-                        type="button"
-                        disabled={!quickMainCapture.trim()}
-                        onClick={() =>
-                          handleAppendQuickMainNote(quickMainCapture)
-                        }
-                        className="inline-flex items-center gap-1 px-3 py-2 min-h-[36px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg disabled:opacity-40 cursor-pointer"
-                      >
-                        <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>إضافة</span>
-                      </button>
-                      <VoiceRecorderButton
-                        label="إضافة بالصوت"
-                        dialect={preferences.voiceDialect}
-                        disabled={!canEdit}
-                        onRequireAuth={onRequireAuth}
-                        onTranscript={(t) => {
-                          handleAppendQuickMainNote(t);
-                          onLogVoiceNote?.(note.bookTitle);
-                        }}
-                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={!quickMainCapture.trim()}
+                          onClick={() =>
+                            handleAppendQuickMainNote(quickMainCapture)
+                          }
+                          className="inline-flex items-center gap-1 px-3 py-2 min-h-[36px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg disabled:opacity-40 cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>إضافة</span>
+                        </button>
+                        <VoiceRecorderButton
+                          label="إضافة بالصوت"
+                          dialect={preferences.voiceDialect}
+                          disabled={!canEdit}
+                          onRequireAuth={onRequireAuth}
+                          onTranscript={(t) => {
+                            handleAppendQuickMainNote(t);
+                            onLogVoiceNote?.(note.bookTitle);
+                          }}
+                        />
+                      </div>
                     </div>
                   )}
 
@@ -1274,7 +1327,7 @@ export default function FocusNoteStudyModal({
               </button>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 space-y-5">
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 space-y-5">
               {/* Discussion & Note-Taking Companion */}
               {(mobilePane === 'discussion' ||
                 (mobilePane === 'note' && companionTab === 'discussion')) && (

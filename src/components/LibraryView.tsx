@@ -745,7 +745,7 @@ export default function LibraryView({
               value={externalUrl}
               onChange={(e) => setExternalUrl(e.target.value)}
               placeholder="أو رابط خارجي (اختياري)..."
-              className="flex-1 min-w-[200px] px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+              className="w-full sm:flex-1 min-w-0 px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
             />
           </div>
 

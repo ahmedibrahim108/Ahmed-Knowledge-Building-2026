@@ -621,8 +621,8 @@ export default function VoiceRecorderButton({
   };
 
   return (
-    <div className="inline-flex flex-col items-end gap-1.5">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="inline-flex flex-col items-start sm:items-end gap-1.5 max-w-full">
+      <div className="flex flex-wrap items-center gap-2 max-w-full">
         {phase === 'idle' && (
           <button
             type="button"
@@ -641,14 +641,14 @@ export default function VoiceRecorderButton({
         )}
 
         {phase === 'requesting' && (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg whitespace-nowrap shrink-0">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg max-w-full">
+            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden="true" />
             <span>جاري طلب إذن الميكروفون...</span>
           </span>
         )}
 
         {phase === 'recording' && (
-          <div className="inline-flex items-center gap-2">
+          <div className="inline-flex flex-wrap items-center gap-2 max-w-full">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg whitespace-nowrap shrink-0">
               <span
                 aria-hidden="true"
@@ -672,20 +672,20 @@ export default function VoiceRecorderButton({
         )}
 
         {phase === 'stopped_transcribing' && (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-slate-100 border border-slate-200 rounded-lg whitespace-nowrap shrink-0">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-slate-100 border border-slate-200 rounded-lg max-w-full">
+            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden="true" />
             <span>تم التوقف · جاري تحويل الصوت إلى نص...</span>
           </span>
         )}
 
         {phase === 'stopped_done' && (
-          <div className="inline-flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg whitespace-nowrap shrink-0">
+          <div className="inline-flex flex-wrap items-center gap-2 max-w-full">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg max-w-full">
               <CheckCircle2
-                className="w-3.5 h-3.5 text-emerald-700"
+                className="w-3.5 h-3.5 text-emerald-700 shrink-0"
                 aria-hidden="true"
               />
-              <span>{statusNotice || 'تم التوقف وإدراج النص'}</span>
+              <span className="break-words">{statusNotice || 'تم التوقف وإدراج النص'}</span>
             </span>
             <button
               type="button"
@@ -700,19 +700,19 @@ export default function VoiceRecorderButton({
       </div>
 
       {phase === 'recording' && livePreview && (
-        <p className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1 max-w-sm text-right leading-relaxed">
+        <p className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-2.5 py-1 w-full max-w-sm text-right leading-relaxed break-words">
           {livePreview}
         </p>
       )}
 
       {phase === 'idle' && statusNotice && !errorMsg && (
-        <span className="text-[11px] font-medium text-slate-500">
+        <span className="text-[11px] font-medium text-slate-500 break-words">
           الحالة: {statusNotice}
         </span>
       )}
 
       {lastClip && (phase === 'idle' || phase === 'stopped_done') && (
-        <div className="flex flex-wrap items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px]">
+        <div className="flex flex-wrap items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] max-w-full">
           <button
             type="button"
             onClick={() => void handleTogglePlayLastClip()}
@@ -762,14 +762,14 @@ export default function VoiceRecorderButton({
       {errorMsg && (
         <div
           role="alert"
-          className="flex flex-wrap items-center justify-end gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-[11px] text-red-800 max-w-sm text-right"
+          className="flex flex-wrap items-center justify-start sm:justify-end gap-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-[11px] text-red-800 w-full max-w-sm text-right"
         >
           <span className="inline-flex items-start gap-1.5">
             <AlertCircle
               className="w-3.5 h-3.5 text-red-700 shrink-0 mt-0.5"
               aria-hidden="true"
             />
-            <span>{errorMsg}</span>
+            <span className="break-words">{errorMsg}</span>
           </span>
           {isPermissionError && (
             <button

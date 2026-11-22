@@ -994,7 +994,7 @@ export default function OverviewView({
                     });
                     setQuickDashTaskTitle('');
                   }}
-                  className="flex flex-wrap sm:flex-nowrap items-center gap-2 flex-1"
+                  className="flex flex-col sm:flex-row sm:items-center gap-2 flex-1 min-w-0"
                 >
                   <input
                     type="text"
@@ -1005,27 +1005,29 @@ export default function OverviewView({
                     }}
                     readOnly={!canEdit}
                     placeholder="أضف مهمة سريعة مباشرة من لوحة المتابعة..."
-                    className="flex-1 min-w-[200px] px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+                    className="w-full sm:flex-1 min-w-0 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
                   />
-                  <select
-                    value={quickDashTaskSchedule}
-                    disabled={!canEdit}
-                    onChange={(e) =>
-                      setQuickDashTaskSchedule(
-                        e.target.value as 'today' | 'unscheduled'
-                      )
-                    }
-                    className="px-2.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg"
-                  >
-                    <option value="today">جدولة لليوم</option>
-                    <option value="unscheduled">قائمة الانتظار</option>
-                  </select>
-                  <button
-                    type="submit"
-                    className="inline-flex items-center gap-1 px-3.5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer shrink-0"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> إضافة
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <select
+                      value={quickDashTaskSchedule}
+                      disabled={!canEdit}
+                      onChange={(e) =>
+                        setQuickDashTaskSchedule(
+                          e.target.value as 'today' | 'unscheduled'
+                        )
+                      }
+                      className="flex-1 sm:flex-initial px-2.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg"
+                    >
+                      <option value="today">جدولة لليوم</option>
+                      <option value="unscheduled">قائمة الانتظار</option>
+                    </select>
+                    <button
+                      type="submit"
+                      className="inline-flex items-center gap-1 px-3.5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> إضافة
+                    </button>
+                  </div>
                 </form>
               )}
 

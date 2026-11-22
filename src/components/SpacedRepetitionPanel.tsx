@@ -216,18 +216,18 @@ export default function SpacedRepetitionPanel({
         {canEdit && (
           <form
             onSubmit={handleAddCustomMethod}
-            className="flex items-center gap-2 max-w-sm pt-1"
+            className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:max-w-md pt-1"
           >
             <input
               type="text"
               value={customMethod}
               onChange={(e) => setCustomMethod(e.target.value)}
               placeholder="أسلوب تعلم إضافي (اختياري)..."
-              className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+              className="w-full sm:flex-1 min-w-0 px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
             />
             <button
               type="submit"
-              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-1 px-3.5 py-2 min-h-[36px] text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer shrink-0 whitespace-nowrap"
             >
               <Plus className="w-3.5 h-3.5" aria-hidden="true" />
               <span>إضافة</span>
@@ -245,22 +245,22 @@ export default function SpacedRepetitionPanel({
         }
       >
         {/* Re-listen / Record Tracking */}
-        <div className="bg-white border border-slate-200 rounded-lg p-3.5 flex flex-wrap items-center justify-between gap-3">
-          <div className="space-y-0.5">
+        <div className="bg-white border border-slate-200 rounded-lg p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-0.5 min-w-0">
             <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800">
-              <Headphones className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+              <Headphones className="w-3.5 h-3.5 text-[#1E3A5F] shrink-0" aria-hidden="true" />
               <span>عدّاد السماع / التسجيل المتكرر</span>
             </p>
             <p className="text-[11px] text-slate-500">
               تابِع المواد التي سمعتها أو سجلتها أكثر من مرة ({listenCount} مرة)
             </p>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center justify-end gap-1.5 shrink-0">
             <button
               type="button"
               disabled={!canEdit || listenCount <= 0}
               onClick={() => handleListenDelta(-1)}
-              className="px-2.5 py-1.5 min-h-[34px] text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-40 cursor-pointer"
+              className="px-2.5 py-1.5 min-h-[36px] text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-40 cursor-pointer"
             >
               -1
             </button>
@@ -271,7 +271,7 @@ export default function SpacedRepetitionPanel({
               type="button"
               disabled={!canEdit}
               onClick={() => handleListenDelta(1)}
-              className="px-3 py-1.5 min-h-[34px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg disabled:opacity-50 cursor-pointer"
+              className="px-3 py-1.5 min-h-[36px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg disabled:opacity-50 cursor-pointer whitespace-nowrap"
             >
               +1 سماع / تسجيل
             </button>
@@ -280,10 +280,10 @@ export default function SpacedRepetitionPanel({
 
         {/* Spaced Repetition Queue Control */}
         <div className="bg-white border border-slate-200 rounded-lg p-3.5 space-y-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="space-y-0.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="space-y-0.5 min-w-0">
               <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800">
-                <CalendarClock className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                <CalendarClock className="w-3.5 h-3.5 text-[#1E3A5F] shrink-0" aria-hidden="true" />
                 <span>جدول التكرار المتباعد (المرحلة {repetitionStage + 1})</span>
               </p>
               <p className="text-[11px] text-slate-500 tabular-nums">
@@ -295,7 +295,7 @@ export default function SpacedRepetitionPanel({
               type="button"
               disabled={!canEdit}
               onClick={handleLogSpacedReview}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[34px] text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg disabled:opacity-50 cursor-pointer"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg disabled:opacity-50 cursor-pointer shrink-0 whitespace-nowrap"
             >
               <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
               <span>تمت المراجعة (+1)</span>
@@ -303,7 +303,7 @@ export default function SpacedRepetitionPanel({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
-            <label className="inline-flex items-center gap-2">
+            <label className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2 w-full sm:w-auto">
               <span>تاريخ المراجعة القادمة (اختياري):</span>
               <input
                 type="date"
@@ -312,7 +312,7 @@ export default function SpacedRepetitionPanel({
                 onChange={(e) =>
                   onChange({ nextReviewDateKey: e.target.value })
                 }
-                className="px-2 py-1 text-xs bg-slate-50 border border-slate-300 rounded-md"
+                className="w-full sm:w-auto px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md"
               />
             </label>
           </div>

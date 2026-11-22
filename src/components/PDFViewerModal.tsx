@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import {
@@ -11,22 +11,23 @@ import {
   FileText,
   FileWarning,
   Loader2,
+  RefreshCw,
   X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import {
   downloadResourceAttachmentResult,
+  findCachedAttachmentBlob,
   getAttachmentKind,
   getFreshStudyFileSignedUrl,
-  getLocalAttachmentBlob,
-  getPdfBlobForViewing,
+  getPdfBlobWithCacheInfo,
   renderDocumentBlobToHtml,
 } from '../utils/documentImportExport';
 import { renderSafeBidiHtml } from '../utils/richText';
 import ErrorBoundary from './ErrorBoundary';
 
-// Safe runtime shim for older Android Chrome / WebViews when PDF modal is opened
+// Safe runtime shims for mobile WebViews / older Android Chrome & iOS Safari
 if (
   typeof Promise !== 'undefined' &&
   typeof (Promise as unknown as { withResolvers?: unknown }).withResolvers !==
@@ -51,10 +52,27 @@ if (
   };
 }
 
+if (
+  typeof URL !== 'undefined' &&
+  typeof (URL as unknown as { parse?: unknown }).parse !== 'function'
+) {
+  (
+    URL as unknown as {
+      parse: (url: string, base?: string) => URL | null;
+    }
+  ).parse = function (url: string, base?: string): URL | null {
+    try {
+      return base !== undefined ? new URL(url, base) : new URL(url);
+    } catch {
+      return null;
+    }
+  };
+}
+
 try {
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 } catch {
-  // Fallback handled cleanly by ErrorBoundary / download option
+  // Fallback handled cleanly via native iframe / download option
 }
 
 export interface ActivePdfTarget {
@@ -95,8 +113,14 @@ export default function PDFViewerModal({
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   const [freshExternalUrl, setFreshExternalUrl] = useState<string | null>(null);
+  const [cacheBadge, setCacheBadge] = useState<'cache' | 'cloud' | null>(null);
+  const [pdfBinaryData, setPdfBinaryData] = useState<{ data: Uint8Array } | null>(
+    null
+  );
+  const [useNativeIframeFallback, setUseNativeIframeFallback] = useState(false);
   const blobFallbackTriedRef = useRef(false);
   const blobUrlRef = useRef<string | null>(null);
+  const rawBlobRef = useRef<Blob | null>(null);
 
   const attachmentKind = useMemo(
     () => getAttachmentKind(target?.fileName, target?.mimeType),
@@ -106,13 +130,37 @@ export default function PDFViewerModal({
   const isPdfMode = attachmentKind === 'pdf';
 
   useEffect(() => {
+    if (!target || typeof document === 'undefined') return;
+    const htmlEl = document.documentElement;
+    const bodyEl = document.body;
+    const prevHtmlOverflow = htmlEl.style.overflow;
+    const prevBodyOverflow = bodyEl.style.overflow;
+    const prevHtmlOverscroll = htmlEl.style.overscrollBehavior;
+    const prevBodyOverscroll = bodyEl.style.overscrollBehavior;
+    htmlEl.style.overflow = 'hidden';
+    bodyEl.style.overflow = 'hidden';
+    htmlEl.style.overscrollBehavior = 'none';
+    bodyEl.style.overscrollBehavior = 'none';
+    return () => {
+      htmlEl.style.overflow = prevHtmlOverflow;
+      bodyEl.style.overflow = prevBodyOverflow;
+      htmlEl.style.overscrollBehavior = prevHtmlOverscroll;
+      bodyEl.style.overscrollBehavior = prevBodyOverscroll;
+    };
+  }, [Boolean(target)]);
+
+  useEffect(() => {
     if (!target) {
       if (blobUrlRef.current) {
         URL.revokeObjectURL(blobUrlRef.current);
         blobUrlRef.current = null;
       }
+      rawBlobRef.current = null;
       setPdfUrl(null);
+      setPdfBinaryData(null);
+      setUseNativeIframeFallback(false);
       setFreshExternalUrl(null);
+      setCacheBadge(null);
       setDocHtml(null);
       setPreviewOnlyNotice(false);
       setNumPages(0);
@@ -126,6 +174,7 @@ export default function PDFViewerModal({
     let cancelled = false;
     const resolvedUid = uid || target.uid;
     blobFallbackTriedRef.current = false;
+    rawBlobRef.current = null;
 
     if (blobUrlRef.current) {
       URL.revokeObjectURL(blobUrlRef.current);
@@ -137,6 +186,9 @@ export default function PDFViewerModal({
       setLoadError(null);
       setDownloadNotice(null);
       setPdfUrl(null);
+      setPdfBinaryData(null);
+      setUseNativeIframeFallback(false);
+      setCacheBadge(null);
       setFreshExternalUrl(target.downloadUrl || null);
       setDocHtml(null);
       setPreviewOnlyNotice(false);
@@ -146,63 +198,88 @@ export default function PDFViewerModal({
 
       try {
         if (isPdfMode) {
-          // 1) Fast offline local IndexedDB blob when cached on this device
-          if (target.resourceId) {
-            const local = await getLocalAttachmentBlob(target.resourceId);
-            if (cancelled) return;
-            if (local?.blob) {
-              const typedBlob =
-                local.blob.type === 'application/pdf'
-                  ? local.blob
-                  : new Blob([local.blob], { type: 'application/pdf' });
-              const objUrl = URL.createObjectURL(typedBlob);
-              blobUrlRef.current = objUrl;
-              setPdfUrl(objUrl);
-              const signed = await getFreshStudyFileSignedUrl({
-                uid: resolvedUid,
-                resourceId: target.resourceId,
-                storagePath: target.storagePath,
-              });
+          // 1) Instant local IndexedDB cache check (ZERO network usage on repeat opens!)
+          const local = await findCachedAttachmentBlob({
+            resourceId: target.resourceId,
+            storagePath: target.storagePath,
+            fileName: target.fileName,
+          });
+          if (cancelled) return;
+          if (local?.blob) {
+            const typedBlob =
+              local.blob.type === 'application/pdf'
+                ? local.blob
+                : new Blob([local.blob], { type: 'application/pdf' });
+            rawBlobRef.current = typedBlob;
+            const objUrl = URL.createObjectURL(typedBlob);
+            blobUrlRef.current = objUrl;
+            setPdfUrl(objUrl);
+            setCacheBadge('cache');
+            setLoadingBlob(false);
+            // Lazily refresh external open URL in background without blocking viewer
+            void getFreshStudyFileSignedUrl({
+              uid: resolvedUid,
+              resourceId: target.resourceId,
+              storagePath: target.storagePath,
+              fileName: target.fileName,
+            }).then((signed) => {
               if (!cancelled && signed) setFreshExternalUrl(signed);
-              return;
-            }
+            });
+            return;
           }
 
-          // 2) Mint fresh Supabase Signed URL so pdf.js streams 50-100 MB PDFs via HTTP Range Requests on mobile!
+          // 2) First fetch on this device: download blob from Supabase Storage & SAVE to IndexedDB cache!
+          const fetched = await getPdfBlobWithCacheInfo({
+            uid: resolvedUid,
+            resourceId: target.resourceId,
+            fileName: target.fileName,
+            mimeType: target.mimeType,
+            storagePath: target.storagePath,
+            downloadUrl: target.downloadUrl,
+          });
+          if (cancelled) return;
+
+          if (fetched?.blob) {
+            const typedBlob =
+              fetched.blob.type === 'application/pdf'
+                ? fetched.blob
+                : new Blob([fetched.blob], { type: 'application/pdf' });
+            rawBlobRef.current = typedBlob;
+            const objUrl = URL.createObjectURL(typedBlob);
+            blobUrlRef.current = objUrl;
+            setPdfUrl(objUrl);
+            setCacheBadge(fetched.source);
+            void getFreshStudyFileSignedUrl({
+              uid: resolvedUid,
+              resourceId: target.resourceId,
+              storagePath: fetched.storagePath || target.storagePath,
+              fileName: target.fileName,
+            }).then((signed) => {
+              if (!cancelled && signed) setFreshExternalUrl(signed);
+            });
+            return;
+          }
+
+          // 3) Fallback signed URL streaming (if blob download wasn't reachable)
           const freshSignedUrl = await getFreshStudyFileSignedUrl({
             uid: resolvedUid,
             resourceId: target.resourceId,
             storagePath: target.storagePath,
+            fileName: target.fileName,
           });
           if (cancelled) return;
           if (freshSignedUrl) {
             setFreshExternalUrl(freshSignedUrl);
             setPdfUrl(freshSignedUrl);
+            setCacheBadge('cloud');
             return;
           }
 
-          // 3) Fallback to authenticated blob download or legacy URL
-          const blob = await getPdfBlobForViewing({
-            uid: resolvedUid,
-            resourceId: target.resourceId,
-            fileName: target.fileName,
-            mimeType: target.mimeType,
-            storagePath: target.storagePath,
-            downloadUrl: target.downloadUrl,
-          });
-          if (cancelled) return;
-
-          if (!blob) {
-            setLoadError(
-              'لم يُعثر على ملف الـ PDF في قاعدة البيانات السحابية أو المحلية لهذا الجهاز. إذا رفعته قبل تحديث المزامنة، أعد رفعه مرة واحدة من الجهاز الأصلي ليفتح على كل الأجهزة.'
-            );
-          } else {
-            const objUrl = URL.createObjectURL(blob);
-            blobUrlRef.current = objUrl;
-            setPdfUrl(objUrl);
-          }
+          setLoadError(
+            'لم يُعثر على ملف الـ PDF في التخزين السحابي (Supabase) ولا في كاش هذا الجهاز. إذا رفعته سابقًا من اللابتوب قبل تفعيل المزامنة السحابية، افتح الكورس من اللابتوب نفسه أو أعد رفع الملف ليزامن تلقائيًا لجميع أجهزتك.'
+          );
         } else {
-          const blob = await getPdfBlobForViewing({
+          const fetched = await getPdfBlobWithCacheInfo({
             uid: resolvedUid,
             resourceId: target.resourceId,
             fileName: target.fileName,
@@ -212,9 +289,10 @@ export default function PDFViewerModal({
           });
           if (cancelled) return;
 
-          if (blob) {
+          if (fetched?.blob) {
+            setCacheBadge(fetched.source);
             const rawHtml = await renderDocumentBlobToHtml(
-              blob,
+              fetched.blob,
               target.fileName,
               target.mimeType
             );
@@ -226,7 +304,7 @@ export default function PDFViewerModal({
             setPreviewOnlyNotice(true);
           } else {
             setLoadError(
-              'لم يُعثر على محتوى المستند في السحابة أو على هذا الجهاز. إذا رفعته قبل تحديث المزامنة، أعد رفعه مرة واحدة من الجهاز الأصلي.'
+              'لم يُعثر على محتوى المستند في السحابة أو على هذا الجهاز. أعد رفع الملف مرة واحدة من الجهاز الأصلي ليتزامن مع باقي أجهزتك.'
             );
           }
         }
@@ -327,23 +405,34 @@ export default function PDFViewerModal({
 
   return (
     <div
-      className="fixed inset-0 z-[80] bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4"
+      className="fixed inset-0 z-[80] bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-1.5 sm:p-4 overscroll-none"
       role="dialog"
       aria-modal="true"
       aria-label={`عارض المستندات: ${target.title}`}
       onClick={onClose}
     >
       <div
-        className="w-full max-w-5xl h-[94dvh] flex flex-col bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden"
+        className="w-full max-w-5xl h-[96dvh] sm:h-[94dvh] flex flex-col bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top Bar */}
-        <div className="px-3 sm:px-5 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
+        <div className="px-3 sm:px-5 py-2.5 sm:py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
           <div className="min-w-0 flex-1">
-            {target.contextLabel && (
-              <p className="text-[11px] font-medium text-[#1E3A5F] truncate">
-                {target.contextLabel}
-              </p>
+            {(target.contextLabel || cacheBadge) && (
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                {target.contextLabel && (
+                  <p className="font-medium text-[#1E3A5F] truncate">
+                    {target.contextLabel}
+                  </p>
+                )}
+                {cacheBadge && (
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-semibold">
+                    {cacheBadge === 'cache'
+                      ? 'من كاش الجهاز (بدون نت/باقة)'
+                      : 'تم التنزيل والحفظ في كاش الجهاز'}
+                  </span>
+                )}
+              </div>
             )}
             <div className="flex items-center gap-2 min-w-0">
               <FileText
@@ -528,77 +617,174 @@ export default function PDFViewerModal({
             </div>
           )}
 
-          {/* PDF Renderer */}
-          {!loadingBlob && !loadError && isPdfMode && pdfUrl && (
-            <ErrorBoundary
-              inline
-              fallbackTitle="تعذّر عرض ملف الـ PDF داخل المتصفح الحالي"
-              fallbackMessage="قد لا يدعم متصفح الهاتف الحالي عارض الـ PDF المدمج. يمكنك استخدام زر «تنزيل PDF» بالأعلى لفتح الملف مباشرة."
-            >
-              <Document
-                file={pdfUrl}
-                loading={
-                  <div className="flex items-center gap-2 text-slate-200 py-12 text-sm">
-                    <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
-                    <span>جاري تحميل الصفحات...</span>
-                  </div>
-                }
-                error={
-                  <div className="bg-white rounded-xl p-5 text-xs text-red-700 space-y-2 text-center">
-                    <p>
-                      تعذر قراءة هذا المستند بصيغة PDF. يمكنك تجربة زر «تنزيل
-                      PDF».
-                    </p>
-                  </div>
-                }
-                onLoadError={() => {
-                  if (blobFallbackTriedRef.current || pdfUrl.startsWith('blob:')) {
-                    return;
-                  }
-                  blobFallbackTriedRef.current = true;
-                  void getPdfBlobForViewing({
-                    uid: uid || target.uid,
-                    resourceId: target.resourceId,
-                    fileName: target.fileName,
-                    mimeType: target.mimeType,
-                    storagePath: target.storagePath,
-                    downloadUrl: target.downloadUrl,
-                  }).then((blob) => {
-                    if (!blob) return;
-                    if (blobUrlRef.current) {
-                      URL.revokeObjectURL(blobUrlRef.current);
-                    }
-                    const objUrl = URL.createObjectURL(blob);
-                    blobUrlRef.current = objUrl;
-                    setPdfUrl(objUrl);
-                  });
-                }}
-                onLoadSuccess={({ numPages: total }) => {
-                  setNumPages(total);
-                  setCurrentPage(1);
-                }}
-              >
-                <div className="flex flex-col items-center gap-4">
-                  {renderedPages.map((pageNumber) => (
-                    <div
-                      key={pageNumber}
-                      ref={(el) => {
-                        pageRefs.current[pageNumber] = el;
+          {/* PDF Renderer (Legacy polyfilled PDF.js + Uint8Array transfer + Native Fallback) */}
+          {!loadingBlob &&
+            !loadError &&
+            isPdfMode &&
+            (pdfBinaryData || pdfUrl) &&
+            useNativeIframeFallback && (
+              <div className="w-full h-full flex flex-col gap-3">
+                <div className="bg-white rounded-xl p-3 sm:p-4 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <p className="text-slate-700 font-medium">
+                    يتم عرض الملف بوضع التوافق للمتصفح الحالي.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUseNativeIframeFallback(false);
+                        blobFallbackTriedRef.current = false;
                       }}
-                      className="bg-white shadow-xl rounded-sm overflow-hidden"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                     >
-                      <Page
-                        pageNumber={pageNumber}
-                        width={pageRenderWidth}
-                        renderTextLayer
-                        renderAnnotationLayer
-                      />
-                    </div>
-                  ))}
+                      <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>إعادة تجربة العارض التفاعلي</span>
+                    </button>
+                    {(freshExternalUrl || target.downloadUrl || pdfUrl) && (
+                      <a
+                        href={freshExternalUrl || target.downloadUrl || pdfUrl || undefined}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>فتح مباشر</span>
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void handleExplicitDownload()}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>{downloadLabel}</span>
+                    </button>
+                  </div>
                 </div>
-              </Document>
-            </ErrorBoundary>
-          )}
+                <iframe
+                  title={target.title || target.fileName}
+                  src={pdfUrl || freshExternalUrl || target.downloadUrl}
+                  className="w-full flex-1 min-h-[65dvh] bg-white rounded-xl border border-slate-200"
+                />
+              </div>
+            )}
+
+          {!loadingBlob &&
+            !loadError &&
+            isPdfMode &&
+            (pdfBinaryData || pdfUrl) &&
+            !useNativeIframeFallback && (
+              <ErrorBoundary
+                inline
+                fallbackTitle="يتم التحويل إلى وضع العرض المباشر"
+                fallbackMessage="متصفح الجهاز الحالي يفضّل العارض المدمج للنظام أو التنزيل المباشر."
+                onReset={() => setUseNativeIframeFallback(true)}
+              >
+                <Document
+                  file={pdfBinaryData || pdfUrl}
+                  loading={
+                    <div className="flex items-center gap-2 text-slate-200 py-12 text-sm">
+                      <Loader2
+                        className="w-5 h-5 animate-spin"
+                        aria-hidden="true"
+                      />
+                      <span>جاري تحميل الصفحات...</span>
+                    </div>
+                  }
+                  error={
+                    <div className="bg-white rounded-xl p-5 text-xs text-slate-700 space-y-3 text-center max-w-sm">
+                      <p className="font-semibold text-slate-900">
+                        تعذر تشغيل العارض التفاعلي على هذا المتصفح.
+                      </p>
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setUseNativeIframeFallback(true)}
+                          className="px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                        >
+                          تشغيل وضع التوافق المباشر
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleExplicitDownload()}
+                          className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg cursor-pointer"
+                        >
+                          {downloadLabel}
+                        </button>
+                      </div>
+                    </div>
+                  }
+                  onLoadError={() => {
+                    if (!blobFallbackTriedRef.current) {
+                      blobFallbackTriedRef.current = true;
+                      if (rawBlobRef.current) {
+                        void rawBlobRef.current
+                          .arrayBuffer()
+                          .then((buf) => {
+                            setPdfBinaryData({ data: new Uint8Array(buf) });
+                          })
+                          .catch(() => {
+                            setUseNativeIframeFallback(true);
+                          });
+                        return;
+                      }
+                      void getPdfBlobWithCacheInfo({
+                        uid: uid || target.uid,
+                        resourceId: target.resourceId,
+                        fileName: target.fileName,
+                        mimeType: target.mimeType,
+                        storagePath: target.storagePath,
+                        downloadUrl: target.downloadUrl,
+                      }).then(async (fetched) => {
+                        if (!fetched?.blob) {
+                          setUseNativeIframeFallback(true);
+                          return;
+                        }
+                        rawBlobRef.current = fetched.blob;
+                        if (blobUrlRef.current) {
+                          URL.revokeObjectURL(blobUrlRef.current);
+                        }
+                        const objUrl = URL.createObjectURL(fetched.blob);
+                        blobUrlRef.current = objUrl;
+                        setPdfUrl(objUrl);
+                        setCacheBadge(fetched.source);
+                        try {
+                          const buf = await fetched.blob.arrayBuffer();
+                          setPdfBinaryData({ data: new Uint8Array(buf) });
+                        } catch {
+                          setUseNativeIframeFallback(true);
+                        }
+                      });
+                      return;
+                    }
+                    setUseNativeIframeFallback(true);
+                  }}
+                  onLoadSuccess={({ numPages: total }) => {
+                    setNumPages(total);
+                    setCurrentPage(1);
+                  }}
+                >
+                  <div className="flex flex-col items-center gap-4">
+                    {renderedPages.map((pageNumber) => (
+                      <div
+                        key={pageNumber}
+                        ref={(el) => {
+                          pageRefs.current[pageNumber] = el;
+                        }}
+                        className="bg-white shadow-xl rounded-sm overflow-hidden"
+                      >
+                        <Page
+                          pageNumber={pageNumber}
+                          width={pageRenderWidth}
+                          renderTextLayer
+                          renderAnnotationLayer
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </Document>
+              </ErrorBoundary>
+            )}
 
           {/* Word / Doc / Text Renderer */}
           {!loadingBlob && !loadError && !isPdfMode && docHtml !== null && (

@@ -643,6 +643,8 @@ export interface CalendarPreferences {
   filterHub: LearningHubId | 'all';
   filterPriority: TaskPriority | 'all';
   filterStatus: 'all' | 'pending' | 'done';
+  dayStartHour?: number;
+  dayEndHour?: number;
 }
 
 export const DEFAULT_CALENDAR_PREFERENCES: CalendarPreferences = {
@@ -654,6 +656,8 @@ export const DEFAULT_CALENDAR_PREFERENCES: CalendarPreferences = {
   filterHub: 'all',
   filterPriority: 'all',
   filterStatus: 'all',
+  dayStartHour: 0,
+  dayEndHour: 24,
 };
 
 export type MeetingAttendanceStatus = 'pending' | 'attended' | 'missed' | 'excused';

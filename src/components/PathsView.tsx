@@ -362,9 +362,9 @@ export default function PathsView({
           )}
         </div>
 
-        <section className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
+        <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-8 space-y-6">
           <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-slate-100 pb-5">
-            <div className="space-y-2 max-w-3xl">
+            <div className="space-y-2 max-w-3xl min-w-0">
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span
                   className={`px-2.5 py-0.5 font-semibold border rounded-md ${hubMeta.badgeClass}`}
@@ -399,7 +399,7 @@ export default function PathsView({
               )}
             </div>
 
-            <div className="min-w-[200px] bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2 shrink-0">
+            <div className="w-full md:w-56 bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2 shrink-0">
               <div className="flex items-center justify-between text-xs">
                 <span className="text-slate-500">التقدم العام</span>
                 <span className="font-bold text-slate-900 tabular-nums">
@@ -553,21 +553,21 @@ export default function PathsView({
                   const isSchedOpen = schedStageId === stage.id;
                   return (
                     <div key={stage.id} className="bg-white">
-                      <div className="px-4 py-3 flex items-center justify-between gap-3">
-                        <div className="flex-1 min-w-0 space-y-1">
+                      <div className="px-3.5 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                        <div className="w-full flex-1 min-w-0 space-y-1.5">
                           <button
                             type="button"
                             disabled={!canEdit}
                             onClick={() => handleToggleStage(selectedPath, stage.id)}
-                            className="flex items-center gap-2.5 text-right w-full cursor-pointer disabled:opacity-75"
+                            className="flex items-start gap-2.5 text-right w-full cursor-pointer disabled:opacity-75"
                           >
                             {stage.done ? (
-                              <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0" aria-hidden="true" />
+                              <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" aria-hidden="true" />
                             ) : (
-                              <Square className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
+                              <Square className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" aria-hidden="true" />
                             )}
                             <span
-                              className={`text-sm ${
+                              className={`text-sm leading-relaxed text-right break-words flex-1 min-w-0 ${
                                 stage.done
                                   ? 'line-through text-slate-400'
                                   : 'text-slate-800'
@@ -604,7 +604,7 @@ export default function PathsView({
                         </div>
 
                         {canEdit && (
-                          <div className="flex items-center gap-1 shrink-0">
+                          <div className="flex flex-wrap items-center justify-end gap-1.5 pt-2 sm:pt-0 border-t border-slate-100 sm:border-t-0 shrink-0">
                             {(onAddUnifiedTask || onUpdateUnifiedTask) && (
                               <button
                                 type="button"
@@ -621,9 +621,9 @@ export default function PathsView({
                                     setSchedPriority(linkedSched?.priority || 'medium');
                                   }
                                 }}
-                                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[34px] text-[11px] font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
                               >
-                                <Calendar className="w-3 h-3" aria-hidden="true" />
+                                <Calendar className="w-3.5 h-3.5" aria-hidden="true" />
                                 <span>
                                   {isSchedOpen
                                     ? 'إغلاق'
@@ -638,7 +638,7 @@ export default function PathsView({
                               disabled={idx === 0}
                               onClick={() => handleMoveStage(selectedPath, idx, -1)}
                               aria-label="تحريك لأعلى"
-                              className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                              className="min-h-[34px] min-w-[34px] flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md disabled:opacity-30 cursor-pointer"
                             >
                               <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
                             </button>
@@ -647,7 +647,7 @@ export default function PathsView({
                               disabled={idx === selectedPath.stages.length - 1}
                               onClick={() => handleMoveStage(selectedPath, idx, 1)}
                               aria-label="تحريك لأسفل"
-                              className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                              className="min-h-[34px] min-w-[34px] flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md disabled:opacity-30 cursor-pointer"
                             >
                               <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
                             </button>
@@ -655,7 +655,7 @@ export default function PathsView({
                               type="button"
                               onClick={() => handleDeleteStage(selectedPath, stage.id)}
                               aria-label="حذف المرحلة"
-                              className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer"
+                              className="min-h-[34px] min-w-[34px] flex items-center justify-center text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md cursor-pointer"
                             >
                               <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                             </button>
@@ -737,18 +737,18 @@ export default function PathsView({
             {canEdit && (
               <form
                 onSubmit={(e) => handleAddStage(e, selectedPath)}
-                className="flex items-center gap-2"
+                className="flex flex-col sm:flex-row sm:items-center gap-2"
               >
                 <input
                   type="text"
                   value={newStageInput}
                   onChange={(e) => setNewStageInput(e.target.value)}
                   placeholder="أضف مرحلة أو معلمًا جديدًا في المسار..."
-                  className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+                  className="w-full sm:flex-1 min-w-0 px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
                 />
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1 px-4 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer shrink-0 whitespace-nowrap"
                 >
                   <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>إضافة مرحلة</span>
@@ -799,7 +799,7 @@ export default function PathsView({
                   return (
                     <div
                       key={ut.id}
-                      className="px-3.5 py-2.5 bg-white flex items-center justify-between gap-2"
+                      className="px-3.5 py-2.5 bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-2"
                     >
                       <button
                         type="button"
@@ -809,15 +809,15 @@ export default function PathsView({
                             status: isDone ? 'todo' : 'done',
                           })
                         }
-                        className="flex items-center gap-2.5 text-right flex-1 cursor-pointer disabled:opacity-60"
+                        className="flex items-start gap-2.5 text-right flex-1 min-w-0 cursor-pointer disabled:opacity-60"
                       >
                         {isDone ? (
-                          <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0" aria-hidden="true" />
+                          <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" aria-hidden="true" />
                         ) : (
-                          <Square className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
+                          <Square className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" aria-hidden="true" />
                         )}
                         <span
-                          className={`text-xs ${
+                          className={`text-xs leading-relaxed break-words min-w-0 ${
                             isDone ? 'line-through text-slate-400' : 'text-slate-800 font-medium'
                           }`}
                         >
@@ -825,7 +825,7 @@ export default function PathsView({
                         </span>
                       </button>
                       {(ut.scheduledDate || ut.dueDate) && (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-[#1E3A5F] font-medium tabular-nums shrink-0">
+                        <span className="inline-flex items-center gap-1 pr-6 sm:pr-0 text-[11px] text-[#1E3A5F] font-medium tabular-nums shrink-0">
                           <Calendar className="w-3 h-3" aria-hidden="true" />
                           {ut.scheduledDate || ut.dueDate}
                           {ut.startTime ? ` · ${ut.startTime}` : ''}
@@ -840,32 +840,34 @@ export default function PathsView({
             {canEdit && onAddUnifiedTask && (
               <form
                 onSubmit={(e) => handleAddGeneralPathTask(e, selectedPath)}
-                className="flex flex-wrap items-center gap-2"
+                className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2"
               >
                 <input
                   type="text"
                   value={newPathTaskTitle}
                   onChange={(e) => setNewPathTaskTitle(e.target.value)}
                   placeholder="أضف مهمة مرتبطة بهذا المسار وتظهر في المهام والتقويم..."
-                  className="flex-1 min-w-[200px] px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+                  className="w-full sm:flex-1 min-w-0 px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
                 />
-                <input
-                  type="date"
-                  value={newPathTaskDate}
-                  onChange={(e) => setNewPathTaskDate(e.target.value)}
-                  title="تاريخ الجدولة (اختياري)"
-                  className="px-2.5 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
-                />
-                <input
-                  type="time"
-                  value={newPathTaskTime}
-                  onChange={(e) => setNewPathTaskTime(e.target.value)}
-                  title="الوقت (اختياري)"
-                  className="px-2.5 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
-                />
+                <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto">
+                  <input
+                    type="date"
+                    value={newPathTaskDate}
+                    onChange={(e) => setNewPathTaskDate(e.target.value)}
+                    title="تاريخ الجدولة (اختياري)"
+                    className="w-full sm:w-auto min-w-0 px-2.5 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                  />
+                  <input
+                    type="time"
+                    value={newPathTaskTime}
+                    onChange={(e) => setNewPathTaskTime(e.target.value)}
+                    title="الوقت (اختياري)"
+                    className="w-full sm:w-auto min-w-0 px-2.5 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                  />
+                </div>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1 px-3.5 py-2 text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2 min-h-[38px] text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer shrink-0 whitespace-nowrap"
                 >
                   <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>ربط مهمة</span>

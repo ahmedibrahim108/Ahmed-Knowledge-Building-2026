@@ -79,7 +79,10 @@ import {
   signInWithGoogle,
   signOutUser,
 } from './firebase';
-import { deleteCloudAttachment } from './utils/documentImportExport';
+import {
+  deleteCloudAttachment,
+  rescueLocalAttachmentToCloud,
+} from './utils/documentImportExport';
 import { deleteDentalCaseCoverStorage } from './utils/imageStorage';
 import {
   CloudAttachmentItem,
@@ -602,6 +605,199 @@ export default function App() {
     };
   }, []);
 
+  // Automatically rescue stranded local-only IndexedDB attachments (or reconcile from cloudAttachments) to Supabase Storage
+  const rescuedAttachmentKeysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!user) {
+      rescuedAttachmentKeysRef.current.clear();
+      return;
+    }
+
+    let cancelled = false;
+    const runRescue = async () => {
+      // 1) Courses resources
+      for (const course of courses) {
+        if (cancelled) return;
+        let courseChanged = false;
+        const nextResources = await Promise.all(
+          (course.resources || []).map(async (res) => {
+            const needsCloudSync =
+              Boolean(res.attachmentName) &&
+              (!res.storagePath || res.storagePath.startsWith('users/'));
+            if (!needsCloudSync) return res;
+
+            const safeId = res.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+            const cloudMatch = cloudAttachments.find(
+              (a) =>
+                a.id === safeId ||
+                a.id === res.id ||
+                (res.attachmentName && a.fileName === res.attachmentName)
+            );
+            if (cloudMatch?.storagePath) {
+              courseChanged = true;
+              return {
+                ...res,
+                storagePath: cloudMatch.storagePath,
+                downloadUrl: res.downloadUrl,
+                mimeType: cloudMatch.mimeType || res.mimeType,
+                sizeBytes: cloudMatch.sizeBytes || res.sizeBytes,
+              };
+            }
+
+            const attemptKey = `course:${course.id}:${res.id}`;
+            if (rescuedAttachmentKeysRef.current.has(attemptKey)) return res;
+            rescuedAttachmentKeysRef.current.add(attemptKey);
+
+            const rescued = await rescueLocalAttachmentToCloud(
+              user.uid,
+              res.id,
+              res.attachmentName,
+              res.extractedPreview
+            );
+            if (rescued?.uploadedToCloud && rescued.storagePath) {
+              courseChanged = true;
+              return {
+                ...res,
+                storagePath: rescued.storagePath,
+                downloadUrl: rescued.downloadUrl || res.downloadUrl,
+                mimeType: rescued.mimeType || res.mimeType,
+                sizeBytes: rescued.sizeBytes || res.sizeBytes,
+              };
+            }
+            return res;
+          })
+        );
+
+        if (!cancelled && courseChanged) {
+          const updatedCourse = { ...course, resources: nextResources };
+          setCourses((prev) =>
+            prev.map((c) => (c.id === course.id ? updatedCourse : c))
+          );
+          void saveCourseDoc(user.uid, updatedCourse);
+        }
+      }
+
+      // 2) Monthly plan resources
+      for (const month of months) {
+        if (cancelled) return;
+        let monthChanged = false;
+        const nextResources = await Promise.all(
+          (month.resources || []).map(async (res) => {
+            const needsCloudSync =
+              Boolean(res.attachmentName) &&
+              (!res.storagePath || res.storagePath.startsWith('users/'));
+            if (!needsCloudSync) return res;
+
+            const safeId = res.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+            const cloudMatch = cloudAttachments.find(
+              (a) =>
+                a.id === safeId ||
+                a.id === res.id ||
+                (res.attachmentName && a.fileName === res.attachmentName)
+            );
+            if (cloudMatch?.storagePath) {
+              monthChanged = true;
+              return {
+                ...res,
+                storagePath: cloudMatch.storagePath,
+                downloadUrl: res.downloadUrl,
+                mimeType: cloudMatch.mimeType || res.mimeType,
+                sizeBytes: cloudMatch.sizeBytes || res.sizeBytes,
+              };
+            }
+
+            const attemptKey = `month:${month.id}:${res.id}`;
+            if (rescuedAttachmentKeysRef.current.has(attemptKey)) return res;
+            rescuedAttachmentKeysRef.current.add(attemptKey);
+
+            const rescued = await rescueLocalAttachmentToCloud(
+              user.uid,
+              res.id,
+              res.attachmentName,
+              res.extractedPreview
+            );
+            if (rescued?.uploadedToCloud && rescued.storagePath) {
+              monthChanged = true;
+              return {
+                ...res,
+                storagePath: rescued.storagePath,
+                downloadUrl: rescued.downloadUrl || res.downloadUrl,
+                mimeType: rescued.mimeType || res.mimeType,
+                sizeBytes: rescued.sizeBytes || res.sizeBytes,
+              };
+            }
+            return res;
+          })
+        );
+
+        if (!cancelled && monthChanged) {
+          const updatedMonth = { ...month, resources: nextResources };
+          setMonths((prev) =>
+            prev.map((m) => (m.id === month.id ? updatedMonth : m))
+          );
+          void saveMonthDoc(user.uid, updatedMonth);
+        }
+      }
+
+      // 3) Reading library items
+      for (const item of readingItems) {
+        if (cancelled) return;
+        const needsCloudSync =
+          Boolean(item.attachmentName) &&
+          (!item.storagePath || item.storagePath.startsWith('users/'));
+        if (!needsCloudSync) continue;
+
+        const targetResId = item.attachmentResourceId || item.id;
+        const safeId = targetResId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+        const cloudMatch = cloudAttachments.find(
+          (a) =>
+            a.id === safeId ||
+            a.id === targetResId ||
+            (item.attachmentName && a.fileName === item.attachmentName)
+        );
+        if (cloudMatch?.storagePath) {
+          const updatedItem: ReadingLibraryItem = {
+            ...item,
+            storagePath: cloudMatch.storagePath,
+            downloadUrl: item.downloadUrl,
+          };
+          setReadingItems((prev) =>
+            prev.map((i) => (i.id === item.id ? updatedItem : i))
+          );
+          void saveReadingItemDoc(user.uid, updatedItem);
+          continue;
+        }
+
+        const attemptKey = `library:${item.id}:${targetResId}`;
+        if (rescuedAttachmentKeysRef.current.has(attemptKey)) continue;
+        rescuedAttachmentKeysRef.current.add(attemptKey);
+
+        const rescued = await rescueLocalAttachmentToCloud(
+          user.uid,
+          targetResId,
+          item.attachmentName
+        );
+        if (!cancelled && rescued?.uploadedToCloud && rescued.storagePath) {
+          const updatedItem: ReadingLibraryItem = {
+            ...item,
+            attachmentResourceId: targetResId,
+            storagePath: rescued.storagePath,
+            downloadUrl: rescued.downloadUrl || item.downloadUrl,
+          };
+          setReadingItems((prev) =>
+            prev.map((i) => (i.id === item.id ? updatedItem : i))
+          );
+          void saveReadingItemDoc(user.uid, updatedItem);
+        }
+      }
+    };
+
+    void runRescue();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, courses, months, readingItems, cloudAttachments]);
+
   const handleGoogleSignIn = async () => {
     setAuthError(null);
     setAuthPromptNotice(null);
@@ -1087,6 +1283,30 @@ export default function App() {
     );
   };
 
+  const handleUpdateMonthResource = (
+    monthId: number,
+    resourceId: string,
+    updates: Partial<StudyResource>
+  ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setMonths((prev) =>
+      prev.map((m) => {
+        if (m.id !== monthId) return m;
+        const next = {
+          ...m,
+          resources: m.resources.map((r) =>
+            r.id === resourceId ? { ...r, ...updates } : r
+          ),
+        };
+        syncMonth(next);
+        return next;
+      })
+    );
+  };
+
   const handleDeleteMonthResource = (monthId: number, resourceId: string) => {
     if (!user) {
       handleRequireAuth();
@@ -1397,6 +1617,30 @@ export default function App() {
       prev.map((c) => {
         if (c.id !== courseId) return c;
         const next = { ...c, resources: [...c.resources, newRes] };
+        syncCourse(next);
+        return next;
+      })
+    );
+  };
+
+  const handleUpdateCourseResource = (
+    courseId: number,
+    resourceId: string,
+    updates: Partial<StudyResource>
+  ) => {
+    if (!user) {
+      handleRequireAuth();
+      return;
+    }
+    setCourses((prev) =>
+      prev.map((c) => {
+        if (c.id !== courseId) return c;
+        const next = {
+          ...c,
+          resources: c.resources.map((r) =>
+            r.id === resourceId ? { ...r, ...updates } : r
+          ),
+        };
         syncCourse(next);
         return next;
       })
@@ -2302,7 +2546,7 @@ export default function App() {
         </div>
       )}
 
-      <main className="flex-1 max-w-[1280px] w-full mx-auto px-3 sm:px-8 py-5 sm:py-8 pb-24 lg:pb-10">
+      <main className="flex-1 max-w-[1280px] w-full mx-auto px-3 sm:px-8 py-5 sm:py-8 pb-24 lg:pb-10 overflow-x-hidden">
         {backStack.length > 0 && (
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <button
@@ -2425,6 +2669,7 @@ export default function App() {
             onAddMonthTask={handleAddMonthTask}
             onDeleteMonthTask={handleDeleteMonthTask}
             onAddMonthResource={handleAddMonthResource}
+            onUpdateMonthResource={handleUpdateMonthResource}
             onDeleteMonthResource={handleDeleteMonthResource}
             onOpenBookNote={handleAddOrOpenBookNote}
           />
@@ -2489,6 +2734,7 @@ export default function App() {
             onAddCourseTask={handleAddCourseTask}
             onDeleteCourseTask={handleDeleteCourseTask}
             onAddCourseResource={handleAddCourseResource}
+            onUpdateCourseResource={handleUpdateCourseResource}
             onDeleteCourseResource={handleDeleteCourseResource}
             onJumpToMonth={handleJumpToMonth}
             onOpenPaths={() => navigateToTab('paths')}

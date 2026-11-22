@@ -38,12 +38,24 @@ import {
   PersonalCourse,
   PracticalProject,
   StudyResource,
+  TaskPriority,
   UnifiedTask,
   UserPreferences,
   getCourseStageMeta,
   getHubMeta,
+  getTodayDateKey,
   resolveCourseStudyStage,
 } from '../data/curriculumData';
+
+const COURSE_DURATION_OPTIONS = [15, 30, 45, 60, 90, 120, 180];
+
+function computeEndTimeFromStart(startTime: string, durationMinutes: number): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(startTime.trim());
+  if (!m) return '';
+  const startMins = Number(m[1]) * 60 + Number(m[2]);
+  const endMins = Math.min(23 * 60 + 59, startMins + Math.max(15, durationMinutes));
+  return `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
+}
 import { auth } from '../firebase';
 import {
   downloadResourceAttachmentResult,
@@ -107,6 +119,11 @@ interface CourseDetailPageProps {
       sizeBytes?: number;
     }
   ) => void;
+  onUpdateCourseResource?: (
+    courseId: number,
+    resourceId: string,
+    updates: Partial<StudyResource>
+  ) => void;
   onDeleteCourseResource: (courseId: number, resourceId: string) => void;
   onJumpToMonth: (monthId: number) => void;
   onOpenPaths: () => void;
@@ -153,10 +170,12 @@ export default function CourseDetailPage({
   onAddCourseTask,
   onDeleteCourseTask,
   onAddCourseResource,
+  onUpdateCourseResource,
   onDeleteCourseResource,
   onJumpToMonth,
   onOpenPaths,
   onOpenTasksTab,
+  onOpenCalendar,
   onOpenNoteById,
   onAddStructuredNote,
   onUpdateBookNote,
@@ -183,6 +202,23 @@ export default function CourseDetailPage({
   // Tasks & Unified Tasks forms
   const [newTaskText, setNewTaskText] = useState('');
   const [newLinkedUnifiedTask, setNewLinkedUnifiedTask] = useState('');
+  const [showNewUnifiedSched, setShowNewUnifiedSched] = useState(false);
+  const [newUnifiedDate, setNewUnifiedDate] = useState<string>(() => getTodayDateKey());
+  const [newUnifiedTime, setNewUnifiedTime] = useState<string>('18:00');
+  const [newUnifiedDuration, setNewUnifiedDuration] = useState<number>(60);
+  const [newUnifiedPriority, setNewUnifiedPriority] =
+    useState<TaskPriority>('medium');
+
+  // Inline task scheduling state (for course.tasks and linkedUnifiedTasks)
+  const [schedCourseTaskId, setSchedCourseTaskId] = useState<string | null>(null);
+  const [schedUnifiedTaskId, setSchedUnifiedTaskId] = useState<string | null>(
+    null
+  );
+  const [schedDate, setSchedDate] = useState<string>(() => getTodayDateKey());
+  const [schedTime, setSchedTime] = useState<string>('18:00');
+  const [schedDuration, setSchedDuration] = useState<number>(60);
+  const [schedPriority, setSchedPriority] = useState<TaskPriority>('medium');
+  const [schedFeedback, setSchedFeedback] = useState<string | null>(null);
 
   // Add resource state
   const [showAddResource, setShowAddResource] = useState(false);
@@ -210,7 +246,9 @@ export default function CourseDetailPage({
     null
   );
   const [expandedResId, setExpandedResId] = useState<string | null>(null);
+  const [replacingResId, setReplacingResId] = useState<string | null>(null);
   const courseResFileRef = useRef<HTMLInputElement | null>(null);
+  const replaceResFileRef = useRef<HTMLInputElement | null>(null);
 
   // Course Notes (in-page structured notes management)
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
@@ -238,6 +276,10 @@ export default function CourseDetailPage({
     setShowAddResource(false);
     setNewTaskText('');
     setNewLinkedUnifiedTask('');
+    setShowNewUnifiedSched(false);
+    setSchedCourseTaskId(null);
+    setSchedUnifiedTaskId(null);
+    setSchedFeedback(null);
     setExpandedResId(null);
     setIsEditingNote(false);
     setShowNewNoteForm(false);
@@ -362,17 +404,31 @@ export default function CourseDetailPage({
     if (!requireEdit()) return;
     const title = newLinkedUnifiedTask.trim();
     if (!title) return;
+    const pickedDate = showNewUnifiedSched ? newUnifiedDate : '';
+    const pickedTime = showNewUnifiedSched ? newUnifiedTime : '';
+    const pickedDuration = showNewUnifiedSched ? newUnifiedDuration : 60;
     onAddUnifiedTask({
       title,
       description: `مهمة تطبيقية مرتبطة بكورس: ${course.title}`,
       hubId: course.hubId ?? 'knowledge',
       categoryLabel: course.category || 'تطبيق الكورسات',
-      priority: 'medium',
+      priority: showNewUnifiedSched ? newUnifiedPriority : 'medium',
       status: 'todo',
-      dueDate: '',
+      dueDate: pickedDate,
+      scheduledDate: pickedDate,
+      startTime: pickedTime,
+      endTime: pickedTime
+        ? computeEndTimeFromStart(pickedTime, pickedDuration)
+        : '',
+      durationMinutes: pickedDuration,
+      projectId: `course:${course.id}`,
       linkedLabel: course.title,
     });
     setNewLinkedUnifiedTask('');
+    if (showNewUnifiedSched) {
+      setShowNewUnifiedSched(false);
+      setSchedFeedback(`تمت إضافة «${title}» وجدولتها ليوم ${pickedDate || 'بدون تاريخ'}.`);
+    }
   };
 
   const handlePickCourseResourceFile = async (
@@ -460,6 +516,54 @@ export default function CourseDetailPage({
     setPendingResId('');
     setUploadStatusMsg(null);
     setShowAddResource(false);
+  };
+
+  const handleReplaceCourseResourceFile = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    const targetResId = replacingResId;
+    e.target.value = '';
+    if (!file || !targetResId || !course || !onUpdateCourseResource) {
+      setReplacingResId(null);
+      return;
+    }
+    if (!requireEdit()) {
+      setReplacingResId(null);
+      return;
+    }
+
+    setUploadingFile(true);
+    setUploadProgressPct(0);
+    setResourceActionError(null);
+    try {
+      const effectiveUid = uid || auth?.currentUser?.uid;
+      const parsed = await parseDocumentFile(file);
+      const previewSlice = isPdfAttachment(file.name, file.type)
+        ? ''
+        : parsed.plainText.slice(0, 7500);
+      const uploadRes = await uploadResourceAttachment(
+        effectiveUid,
+        targetResId,
+        file,
+        previewSlice,
+        (pct) => setUploadProgressPct(pct)
+      );
+      onUpdateCourseResource(course.id, targetResId, {
+        attachmentName: file.name,
+        mimeType: uploadRes.mimeType,
+        sizeBytes: uploadRes.sizeBytes,
+        storagePath: uploadRes.storagePath,
+        downloadUrl: uploadRes.downloadUrl,
+        ...(previewSlice ? { extractedPreview: previewSlice } : {}),
+      });
+      if (!uploadRes.uploadedToCloud && uploadRes.errorMessage) {
+        setResourceActionError(uploadRes.errorMessage);
+      }
+    } finally {
+      setUploadingFile(false);
+      setReplacingResId(null);
+    }
   };
 
   const createCourseNoteInPlace = (
@@ -555,12 +659,12 @@ export default function CourseDetailPage({
   return (
     <div className="space-y-6">
       {/* Top Breadcrumb & Navigation Header Bar */}
-      <div className="bg-white border border-slate-200 rounded-xl px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3 min-w-0">
+      <div className="bg-white border border-slate-200 rounded-xl px-3.5 sm:px-6 py-3 sm:py-3.5 flex flex-wrap items-center justify-between gap-2.5 sm:gap-3">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 min-w-0">
           <button
             type="button"
             onClick={onBack}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-2 min-h-[40px] text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <ArrowRight className="w-4 h-4" aria-hidden="true" />
             <span>العودة إلى الكورسات</span>
@@ -586,7 +690,7 @@ export default function CourseDetailPage({
           </nav>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end shrink-0">
           {canEdit && (
             <>
               <button
@@ -613,7 +717,7 @@ export default function CourseDetailPage({
           <button
             type="button"
             onClick={() => createCourseNoteInPlace()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg whitespace-nowrap shrink-0 cursor-pointer flex-1 sm:flex-initial"
           >
             <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
             <span>+ نوت جديدة للكورس</span>
@@ -622,7 +726,7 @@ export default function CourseDetailPage({
       </div>
 
       {/* Standalone Hero Summary & KPI Strip */}
-      <section className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
+      <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-8 space-y-6">
         {isEditingCourse && canEdit ? (
           <form onSubmit={handleSaveCourseEdit} className="space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
@@ -1030,7 +1134,7 @@ export default function CourseDetailPage({
                           })
                         }
                         placeholder="مثلاً: الربع الثالث 2026 / شهر سبتمبر..."
-                        className="flex-1 min-w-[200px] px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+                        className="w-full sm:flex-1 min-w-0 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
                       />
                     </div>
                   )}
@@ -1388,6 +1492,14 @@ export default function CourseDetailPage({
                 </div>
               )}
 
+              <input
+                ref={replaceResFileRef}
+                type="file"
+                accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword,.txt,text/plain,.md,.markdown"
+                className="hidden"
+                onChange={(e) => void handleReplaceCourseResourceFile(e)}
+              />
+
               <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl bg-slate-50/40">
                 {course.resources.length === 0 ? (
                   <p className="p-4 text-xs text-slate-500">
@@ -1401,6 +1513,11 @@ export default function CourseDetailPage({
                     const hasAttachedFile = Boolean(
                       res.attachmentName || res.storagePath || res.downloadUrl
                     );
+                    const needsCloudSync =
+                      Boolean(res.attachmentName) &&
+                      (!res.storagePath || res.storagePath.startsWith('users/'));
+                    const isReplacingThis =
+                      uploadingFile && replacingResId === res.id;
                     const isViewable =
                       isPdf ||
                       isViewableDocumentAttachment(
@@ -1456,8 +1573,13 @@ export default function CourseDetailPage({
                               </span>
                               <span className="text-slate-500">{res.type}</span>
                               {res.attachmentName && (
-                                <span className="text-[11px] text-emerald-700 font-medium truncate">
+                                <span className="text-[11px] text-emerald-700 font-medium break-all">
                                   ({res.attachmentName})
+                                </span>
+                              )}
+                              {needsCloudSync && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold bg-amber-50 text-amber-900 border border-amber-200 rounded">
+                                  محلي فقط — يحتاج مزامنة للسحابة
                                 </span>
                               )}
                             </div>
@@ -1544,6 +1666,44 @@ export default function CourseDetailPage({
                                   aria-hidden="true"
                                 />
                                 <span>تنزيل</span>
+                              </button>
+                            )}
+
+                            {canEdit && onUpdateCourseResource && (
+                              <button
+                                type="button"
+                                disabled={uploadingFile}
+                                onClick={() => {
+                                  setReplacingResId(res.id);
+                                  replaceResFileRef.current?.click();
+                                }}
+                                title="رفع أو استبدال ملف PDF ومزامنته على كل الأجهزة"
+                                className={`inline-flex items-center gap-1 px-2 py-1.5 text-[11px] font-semibold rounded-md cursor-pointer disabled:opacity-50 ${
+                                  needsCloudSync
+                                    ? 'text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300'
+                                    : 'text-[#1E3A5F] bg-slate-100 hover:bg-slate-200'
+                                }`}
+                              >
+                                {isReplacingThis ? (
+                                  <Loader2
+                                    className="w-3 h-3 animate-spin"
+                                    aria-hidden="true"
+                                  />
+                                ) : (
+                                  <FileUp
+                                    className="w-3 h-3"
+                                    aria-hidden="true"
+                                  />
+                                )}
+                                <span>
+                                  {isReplacingThis
+                                    ? `${uploadProgressPct}%`
+                                    : needsCloudSync
+                                    ? 'مزامنة للسحابة'
+                                    : hasAttachedFile
+                                    ? 'استبدال'
+                                    : 'إرفاق ملف'}
+                                </span>
                               </button>
                             )}
 
@@ -1636,12 +1796,35 @@ export default function CourseDetailPage({
               } space-y-6`}
             >
               {/* Course Lesson & Action Tasks */}
-              <section className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-                <div className="flex items-center justify-between text-xs">
+              <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-6 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                   <h2 className="text-base font-bold text-slate-900">
                     مهام الدروس والتطبيق المباشر ({tasksDone} / {course.tasks.length})
                   </h2>
+                  {onOpenCalendar && (
+                    <button
+                      type="button"
+                      onClick={onOpenCalendar}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                    >
+                      <Calendar className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>فتح تقويم الجدولة ←</span>
+                    </button>
+                  )}
                 </div>
+
+                {schedFeedback && (
+                  <div className="px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-900 flex items-center justify-between gap-2">
+                    <span>{schedFeedback}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSchedFeedback(null)}
+                      className="text-[11px] font-semibold hover:underline cursor-pointer"
+                    >
+                      إخفاء
+                    </button>
+                  </div>
+                )}
 
                 <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden">
                   {course.tasks.length === 0 ? (
@@ -1649,77 +1832,284 @@ export default function CourseDetailPage({
                       لا توجد مهام مضافة بعد. أضف أول مهمة عملية للكورس.
                     </p>
                   ) : (
-                    course.tasks.map((task) => (
-                      <div
-                        key={task.id}
-                        className="flex items-start justify-between gap-2 px-3.5 py-2.5 bg-white"
-                      >
-                        <button
-                          type="button"
-                          disabled={!canEdit}
-                          onClick={() => onToggleCourseTask(course.id, task.id)}
-                          aria-pressed={task.done}
-                          className="flex items-start gap-2.5 text-right flex-1 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75"
-                        >
-                          {task.done ? (
-                            <CheckSquare
-                              className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
-                              aria-hidden="true"
-                            />
-                          ) : (
-                            <Square
-                              className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
-                              aria-hidden="true"
-                            />
-                          )}
-                          <span
-                            className={`text-xs sm:text-sm leading-relaxed ${
-                              task.done
-                                ? 'line-through text-slate-400'
-                                : 'text-slate-800'
-                            }`}
-                          >
-                            <BidiText text={task.text} />
-                          </span>
-                        </button>
+                    course.tasks.map((task) => {
+                      const canonicalId = `course:${course.id}:${task.id}`;
+                      const linkedCalTask = linkedUnifiedTasks.find(
+                        (ut) => ut.projectId === canonicalId
+                      );
+                      const scheduledDate =
+                        linkedCalTask?.scheduledDate ||
+                        linkedCalTask?.dueDate ||
+                        '';
+                      const isSchedulingThis = schedCourseTaskId === task.id;
 
-                        {canEdit && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setConfirmState({
-                                type: 'task',
-                                courseId: course.id,
-                                taskId: task.id,
-                                label: task.text,
-                              })
-                            }
-                            aria-label="حذف المهمة"
-                            className="p-1 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                          </button>
-                        )}
-                      </div>
-                    ))
+                      return (
+                        <div key={task.id} className="bg-white px-3.5 py-3 space-y-2.5">
+                          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+                            <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                              <button
+                                type="button"
+                                disabled={!canEdit}
+                                onClick={() => onToggleCourseTask(course.id, task.id)}
+                                aria-pressed={task.done}
+                                className="flex items-start gap-2.5 text-right flex-1 min-w-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-75"
+                              >
+                                {task.done ? (
+                                  <CheckSquare
+                                    className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
+                                    aria-hidden="true"
+                                  />
+                                ) : (
+                                  <Square
+                                    className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
+                                    aria-hidden="true"
+                                  />
+                                )}
+                                <span
+                                  className={`text-xs sm:text-sm leading-relaxed break-words ${
+                                    task.done
+                                      ? 'line-through text-slate-400'
+                                      : 'text-slate-800'
+                                  }`}
+                                >
+                                  <BidiText text={task.text} />
+                                </span>
+                              </button>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                              {canEdit && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isSchedulingThis) {
+                                      setSchedCourseTaskId(null);
+                                      return;
+                                    }
+                                    setSchedUnifiedTaskId(null);
+                                    setSchedCourseTaskId(task.id);
+                                    setSchedDate(scheduledDate || getTodayDateKey());
+                                    setSchedTime(linkedCalTask?.startTime || '18:00');
+                                    setSchedDuration(
+                                      linkedCalTask?.durationMinutes || 60
+                                    );
+                                    setSchedPriority(
+                                      linkedCalTask?.priority || 'medium'
+                                    );
+                                  }}
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium rounded-lg border cursor-pointer ${
+                                    scheduledDate
+                                      ? 'bg-[#1E3A5F]/10 border-[#1E3A5F]/30 text-[#1E3A5F]'
+                                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                                  }`}
+                                >
+                                  <Calendar
+                                    className="w-3 h-3"
+                                    aria-hidden="true"
+                                  />
+                                  <span>
+                                    {scheduledDate ? 'تعديل الجدول' : 'جدولة'}
+                                  </span>
+                                </button>
+                              )}
+
+                              {canEdit && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setConfirmState({
+                                      type: 'task',
+                                      courseId: course.id,
+                                      taskId: task.id,
+                                      label: task.text,
+                                    })
+                                  }
+                                  aria-label="حذف المهمة"
+                                  className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 cursor-pointer shrink-0"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {scheduledDate && (
+                            <div className="flex flex-wrap items-center gap-2 pr-6 text-[11px] text-[#1E3A5F]">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 rounded border border-slate-200 font-medium tabular-nums">
+                                <Clock className="w-3 h-3" aria-hidden="true" />
+                                <span>
+                                  مجدولة: {scheduledDate}
+                                  {linkedCalTask?.startTime
+                                    ? ` · ${linkedCalTask.startTime}`
+                                    : ''}
+                                  {linkedCalTask?.durationMinutes
+                                    ? ` · ${linkedCalTask.durationMinutes}د`
+                                    : ''}
+                                </span>
+                              </span>
+                              {onOpenCalendar && (
+                                <button
+                                  type="button"
+                                  onClick={onOpenCalendar}
+                                  className="font-semibold hover:underline cursor-pointer"
+                                >
+                                  عرض في التقويم ←
+                                </button>
+                              )}
+                            </div>
+                          )}
+
+                          {isSchedulingThis && canEdit && (
+                            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5 text-xs">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                                <label className="block text-[11px] text-slate-600">
+                                  التاريخ
+                                  <input
+                                    type="date"
+                                    value={schedDate}
+                                    onChange={(e) => setSchedDate(e.target.value)}
+                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  />
+                                </label>
+                                <label className="block text-[11px] text-slate-600">
+                                  وقت البدء
+                                  <input
+                                    type="time"
+                                    value={schedTime}
+                                    onChange={(e) => setSchedTime(e.target.value)}
+                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  />
+                                </label>
+                                <label className="block text-[11px] text-slate-600">
+                                  المدة
+                                  <select
+                                    value={schedDuration}
+                                    onChange={(e) =>
+                                      setSchedDuration(Number(e.target.value))
+                                    }
+                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  >
+                                    {COURSE_DURATION_OPTIONS.map((m) => (
+                                      <option key={m} value={m}>
+                                        {m} دقيقة
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label className="block text-[11px] text-slate-600">
+                                  الأولوية
+                                  <select
+                                    value={schedPriority}
+                                    onChange={(e) =>
+                                      setSchedPriority(
+                                        e.target.value as TaskPriority
+                                      )
+                                    }
+                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  >
+                                    <option value="high">عالية</option>
+                                    <option value="medium">متوسطة</option>
+                                    <option value="low">منخفضة</option>
+                                  </select>
+                                </label>
+                              </div>
+
+                              <div className="flex flex-wrap items-center justify-end gap-2">
+                                {linkedCalTask && scheduledDate && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      onUpdateUnifiedTask(linkedCalTask.id, {
+                                        scheduledDate: '',
+                                        dueDate: '',
+                                        startTime: '',
+                                        endTime: '',
+                                      });
+                                      setSchedCourseTaskId(null);
+                                      setSchedFeedback('تم إلغاء جدولة المهمة من التقويم.');
+                                    }}
+                                    className="px-2.5 py-1.5 text-[11px] font-medium text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg cursor-pointer"
+                                  >
+                                    إلغاء الجدولة
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setSchedCourseTaskId(null)}
+                                  className="px-3 py-1.5 text-[11px] text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer"
+                                >
+                                  إلغاء
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const endTime = schedTime
+                                      ? computeEndTimeFromStart(
+                                          schedTime,
+                                          schedDuration
+                                        )
+                                      : '';
+                                    if (linkedCalTask) {
+                                      onUpdateUnifiedTask(linkedCalTask.id, {
+                                        scheduledDate: schedDate,
+                                        dueDate: schedDate,
+                                        startTime: schedTime,
+                                        endTime,
+                                        durationMinutes: schedDuration,
+                                        priority: schedPriority,
+                                        status: task.done ? 'done' : 'todo',
+                                      });
+                                    } else {
+                                      onAddUnifiedTask({
+                                        title: task.text,
+                                        description: `مهمة درس / تطبيق من كورس: ${course.title}`,
+                                        hubId: course.hubId ?? 'knowledge',
+                                        categoryLabel:
+                                          course.category || 'مهام ودروس الكورسات',
+                                        priority: schedPriority,
+                                        status: task.done ? 'done' : 'todo',
+                                        dueDate: schedDate,
+                                        scheduledDate: schedDate,
+                                        startTime: schedTime,
+                                        endTime,
+                                        durationMinutes: schedDuration,
+                                        projectId: canonicalId,
+                                        linkedLabel: course.title,
+                                      });
+                                    }
+                                    setSchedCourseTaskId(null);
+                                    setSchedFeedback(
+                                      `تم حفظ جدولة «${task.text}» يوم ${schedDate} الساعة ${schedTime}.`
+                                    );
+                                  }}
+                                  className="px-3 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                                >
+                                  حفظ في المهام والتقويم
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
                   )}
                 </div>
 
                 {canEdit && (
                   <form
                     onSubmit={handleTaskSubmit}
-                    className="flex items-center gap-2"
+                    className="flex flex-col sm:flex-row sm:items-center gap-2"
                   >
                     <input
                       type="text"
                       value={newTaskText}
                       onChange={(e) => setNewTaskText(e.target.value)}
                       placeholder="أضف مهمة أو درسًا جديدًا داخل الكورس..."
-                      className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+                      className="w-full sm:flex-1 min-w-0 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
                     />
                     <button
                       type="submit"
-                      className="inline-flex items-center gap-1 px-3.5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-1 px-3.5 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
                     >
                       <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>إضافة</span>
@@ -1729,7 +2119,7 @@ export default function CourseDetailPage({
               </section>
 
               {/* Linked Unified Tasks & Practical Projects */}
-              <section className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+              <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-6 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <FolderKanban
@@ -1741,13 +2131,24 @@ export default function CourseDetailPage({
                       {linkedProjects.length + linkedUnifiedTasks.length})
                     </h2>
                   </div>
-                  <button
-                    type="button"
-                    onClick={onOpenTasksTab}
-                    className="text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-                  >
-                    إدارة كل المهام والمشاريع ←
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {onOpenCalendar && (
+                      <button
+                        type="button"
+                        onClick={onOpenCalendar}
+                        className="text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                      >
+                        التقويم ←
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={onOpenTasksTab}
+                      className="text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                    >
+                      إدارة كل المهام والمشاريع ←
+                    </button>
+                  </div>
                 </div>
 
                 {linkedProjects.length > 0 && (
@@ -1784,46 +2185,208 @@ export default function CourseDetailPage({
                   <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden">
                     {linkedUnifiedTasks.map((ut) => {
                       const isDone = ut.status === 'done';
+                      const utSchedDate = ut.scheduledDate || ut.dueDate || '';
+                      const isSchedulingUt = schedUnifiedTaskId === ut.id;
                       return (
-                        <div
-                          key={ut.id}
-                          className="px-3.5 py-2.5 bg-white flex items-center justify-between gap-2"
-                        >
-                          <button
-                            type="button"
-                            disabled={!canEdit}
-                            onClick={() =>
-                              onUpdateUnifiedTask(ut.id, {
-                                status: isDone ? 'todo' : 'done',
-                              })
-                            }
-                            className="flex items-center gap-2.5 text-right flex-1 cursor-pointer disabled:cursor-not-allowed"
-                          >
-                            {isDone ? (
-                              <CheckSquare
-                                className="w-4 h-4 text-emerald-700 shrink-0"
-                                aria-hidden="true"
-                              />
-                            ) : (
-                              <Square
-                                className="w-4 h-4 text-slate-400 shrink-0"
-                                aria-hidden="true"
-                              />
-                            )}
-                            <span
-                              className={`text-xs ${
-                                isDone
-                                  ? 'line-through text-slate-400'
-                                  : 'text-slate-800 font-medium'
-                              }`}
+                        <div key={ut.id} className="px-3.5 py-2.5 bg-white space-y-2">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              disabled={!canEdit}
+                              onClick={() =>
+                                onUpdateUnifiedTask(ut.id, {
+                                  status: isDone ? 'todo' : 'done',
+                                })
+                              }
+                              className="flex items-start gap-2.5 text-right flex-1 min-w-0 cursor-pointer disabled:cursor-not-allowed"
                             >
-                              <BidiText text={ut.title} />
-                            </span>
-                          </button>
-                          {ut.dueDate && (
-                            <span className="text-[11px] text-slate-500 tabular-nums shrink-0">
-                              {ut.dueDate}
-                            </span>
+                              {isDone ? (
+                                <CheckSquare
+                                  className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
+                                  aria-hidden="true"
+                                />
+                              ) : (
+                                <Square
+                                  className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
+                                  aria-hidden="true"
+                                />
+                              )}
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <span
+                                  className={`text-xs block break-words ${
+                                    isDone
+                                      ? 'line-through text-slate-400'
+                                      : 'text-slate-800 font-medium'
+                                  }`}
+                                >
+                                  <BidiText text={ut.title} />
+                                </span>
+                                {utSchedDate && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-slate-100 border border-slate-200 text-[#1E3A5F] rounded tabular-nums">
+                                    <Clock className="w-3 h-3" aria-hidden="true" />
+                                    <span>
+                                      {utSchedDate}
+                                      {ut.startTime ? ` · ${ut.startTime}` : ''}
+                                      {ut.durationMinutes
+                                        ? ` · ${ut.durationMinutes}د`
+                                        : ''}
+                                    </span>
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {utSchedDate && onOpenCalendar && (
+                                <button
+                                  type="button"
+                                  onClick={onOpenCalendar}
+                                  className="px-2 py-1 text-[11px] font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                                >
+                                  في التقويم
+                                </button>
+                              )}
+                              {canEdit && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isSchedulingUt) {
+                                      setSchedUnifiedTaskId(null);
+                                      return;
+                                    }
+                                    setSchedCourseTaskId(null);
+                                    setSchedUnifiedTaskId(ut.id);
+                                    setSchedDate(utSchedDate || getTodayDateKey());
+                                    setSchedTime(ut.startTime || '18:00');
+                                    setSchedDuration(ut.durationMinutes || 60);
+                                    setSchedPriority(ut.priority || 'medium');
+                                  }}
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium rounded-lg border cursor-pointer ${
+                                    utSchedDate
+                                      ? 'bg-[#1E3A5F]/10 border-[#1E3A5F]/30 text-[#1E3A5F]'
+                                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                                  }`}
+                                >
+                                  <Calendar
+                                    className="w-3 h-3"
+                                    aria-hidden="true"
+                                  />
+                                  <span>
+                                    {utSchedDate ? 'تعديل الجدول' : 'جدولة'}
+                                  </span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {isSchedulingUt && canEdit && (
+                            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5 text-xs">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+                                <label className="block text-[11px] text-slate-600">
+                                  التاريخ
+                                  <input
+                                    type="date"
+                                    value={schedDate}
+                                    onChange={(e) => setSchedDate(e.target.value)}
+                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  />
+                                </label>
+                                <label className="block text-[11px] text-slate-600">
+                                  وقت البدء
+                                  <input
+                                    type="time"
+                                    value={schedTime}
+                                    onChange={(e) => setSchedTime(e.target.value)}
+                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  />
+                                </label>
+                                <label className="block text-[11px] text-slate-600">
+                                  المدة
+                                  <select
+                                    value={schedDuration}
+                                    onChange={(e) =>
+                                      setSchedDuration(Number(e.target.value))
+                                    }
+                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  >
+                                    {COURSE_DURATION_OPTIONS.map((m) => (
+                                      <option key={m} value={m}>
+                                        {m} دقيقة
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label className="block text-[11px] text-slate-600">
+                                  الأولوية
+                                  <select
+                                    value={schedPriority}
+                                    onChange={(e) =>
+                                      setSchedPriority(
+                                        e.target.value as TaskPriority
+                                      )
+                                    }
+                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                  >
+                                    <option value="high">عالية</option>
+                                    <option value="medium">متوسطة</option>
+                                    <option value="low">منخفضة</option>
+                                  </select>
+                                </label>
+                              </div>
+
+                              <div className="flex flex-wrap items-center justify-end gap-2">
+                                {utSchedDate && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      onUpdateUnifiedTask(ut.id, {
+                                        scheduledDate: '',
+                                        dueDate: '',
+                                        startTime: '',
+                                        endTime: '',
+                                      });
+                                      setSchedUnifiedTaskId(null);
+                                      setSchedFeedback('تم إلغاء جدولة المهمة.');
+                                    }}
+                                    className="px-2.5 py-1.5 text-[11px] font-medium text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg cursor-pointer"
+                                  >
+                                    إلغاء الجدولة
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setSchedUnifiedTaskId(null)}
+                                  className="px-3 py-1.5 text-[11px] text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer"
+                                >
+                                  إلغاء
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onUpdateUnifiedTask(ut.id, {
+                                      scheduledDate: schedDate,
+                                      dueDate: schedDate,
+                                      startTime: schedTime,
+                                      endTime: schedTime
+                                        ? computeEndTimeFromStart(
+                                            schedTime,
+                                            schedDuration
+                                          )
+                                        : '',
+                                      durationMinutes: schedDuration,
+                                      priority: schedPriority,
+                                    });
+                                    setSchedUnifiedTaskId(null);
+                                    setSchedFeedback(
+                                      `تم تحديث موعد «${ut.title}» إلى ${schedDate}.`
+                                    );
+                                  }}
+                                  className="px-3 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                                >
+                                  حفظ الموعد
+                                </button>
+                              </div>
+                            </div>
                           )}
                         </div>
                       );
@@ -1840,22 +2403,91 @@ export default function CourseDetailPage({
                 {canEdit && (
                   <form
                     onSubmit={handleAddLinkedUnifiedSubmit}
-                    className="flex items-center gap-2"
+                    className="space-y-2.5"
                   >
-                    <input
-                      type="text"
-                      value={newLinkedUnifiedTask}
-                      onChange={(e) => setNewLinkedUnifiedTask(e.target.value)}
-                      placeholder="إضافة مهمة في قائمة المهام العامة مرتبطة بهذا الكورس..."
-                      className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
-                    />
-                    <button
-                      type="submit"
-                      className="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>ربط مهمة</span>
-                    </button>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                      <input
+                        type="text"
+                        value={newLinkedUnifiedTask}
+                        onChange={(e) => setNewLinkedUnifiedTask(e.target.value)}
+                        placeholder="إضافة مهمة أو تطبيق عملي مرتبط بالكورس..."
+                        className="w-full sm:flex-1 min-w-0 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+                      />
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setShowNewUnifiedSched((v) => !v)}
+                          className={`inline-flex items-center gap-1 px-3 py-2 min-h-[38px] text-xs font-medium rounded-lg border cursor-pointer ${
+                            showNewUnifiedSched
+                              ? 'bg-[#1E3A5F]/10 border-[#1E3A5F]/30 text-[#1E3A5F]'
+                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          <Calendar className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>جدولة بالوقت</span>
+                        </button>
+                        <button
+                          type="submit"
+                          className="inline-flex items-center justify-center gap-1 px-3 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>ربط مهمة</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {showNewUnifiedSched && (
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+                        <label className="block text-[11px] text-slate-600">
+                          التاريخ
+                          <input
+                            type="date"
+                            value={newUnifiedDate}
+                            onChange={(e) => setNewUnifiedDate(e.target.value)}
+                            className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                          />
+                        </label>
+                        <label className="block text-[11px] text-slate-600">
+                          وقت البدء
+                          <input
+                            type="time"
+                            value={newUnifiedTime}
+                            onChange={(e) => setNewUnifiedTime(e.target.value)}
+                            className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                          />
+                        </label>
+                        <label className="block text-[11px] text-slate-600">
+                          المدة
+                          <select
+                            value={newUnifiedDuration}
+                            onChange={(e) =>
+                              setNewUnifiedDuration(Number(e.target.value))
+                            }
+                            className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                          >
+                            {COURSE_DURATION_OPTIONS.map((m) => (
+                              <option key={m} value={m}>
+                                {m} دقيقة
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block text-[11px] text-slate-600">
+                          الأولوية
+                          <select
+                            value={newUnifiedPriority}
+                            onChange={(e) =>
+                              setNewUnifiedPriority(e.target.value as TaskPriority)
+                            }
+                            className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                          >
+                            <option value="high">عالية</option>
+                            <option value="medium">متوسطة</option>
+                            <option value="low">منخفضة</option>
+                          </select>
+                        </label>
+                      </div>
+                    )}
                   </form>
                 )}
               </section>
@@ -1866,7 +2498,7 @@ export default function CourseDetailPage({
 
       {/* SECTION 4: Dedicated Course Notes & Quick Scratchpad */}
       {showNotes && (
-        <section className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
+        <section className="bg-white border border-slate-200 rounded-xl p-4 sm:p-8 space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200">
             <div className="space-y-1">
               <div className="flex items-center gap-2">

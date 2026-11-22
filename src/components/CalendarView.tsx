@@ -151,7 +151,8 @@ const WEEKDAY_NAMES_BY_JS_DAY = [
   'السبت',
 ];
 
-const HOURS_LIST = Array.from({ length: 18 }, (_, i) => i + 6); // 06:00 -> 23:00
+const FULL_HOURS_START_OPTIONS = Array.from({ length: 24 }, (_, i) => i); // 0..23
+const FULL_HOURS_END_OPTIONS = Array.from({ length: 24 }, (_, i) => i + 1); // 1..24
 
 const CATEGORIES: CalendarCategory[] = [
   'شخصي',
@@ -212,7 +213,7 @@ const COLOR_STYLES: Record<
   },
 };
 
-const DURATION_OPTIONS = [15, 30, 45, 60, 90, 120, 180];
+const DURATION_OPTIONS = [15, 30, 45, 60, 90, 120, 180, 240, 300];
 
 function toDateKey(d: Date): string {
   const y = d.getFullYear();
@@ -243,9 +244,16 @@ function parseMinutesFromTime(hhmm?: string): number | null {
 }
 
 function formatHourLabel(hour: number): string {
+  if (hour === 24) return '12:00 ص';
   const h12 = hour % 12 === 0 ? 12 : hour % 12;
   const suffix = hour < 12 ? 'ص' : 'م';
   return `${h12}:00 ${suffix}`;
+}
+
+function formatHourOptionLabel(hour: number): string {
+  if (hour === 0) return '12:00 ص (00:00)';
+  if (hour === 24) return '12:00 ص نهاية اليوم (24:00)';
+  return `${formatHourLabel(hour)} (${String(hour).padStart(2, '0')}:00)`;
 }
 
 function formatArabicMonthYear(d: Date): string {
@@ -434,6 +442,45 @@ export default function CalendarView({
   const filterHub = localPrefs.filterHub;
   const filterPriority = localPrefs.filterPriority;
   const filterStatus = localPrefs.filterStatus;
+
+  const dayStartHour = Math.max(
+    0,
+    Math.min(23, Number(localPrefs.dayStartHour ?? 0))
+  );
+  const dayEndHour = Math.max(
+    dayStartHour + 1,
+    Math.min(24, Number(localPrefs.dayEndHour ?? 24))
+  );
+  const visibleHours = useMemo(
+    () =>
+      Array.from(
+        { length: dayEndHour - dayStartHour },
+        (_, i) => dayStartHour + i
+      ),
+    [dayStartHour, dayEndHour]
+  );
+  const gridStartMins = dayStartHour * 60;
+  const gridEndMins = dayEndHour * 60;
+
+  const updateDayTimeWindow = (nextStart: number, nextEnd: number) => {
+    const safeStart = Math.max(0, Math.min(23, nextStart));
+    const safeEnd = Math.max(safeStart + 1, Math.min(24, nextEnd));
+    userTouchedViewRef.current = true;
+    const next = {
+      ...localPrefs,
+      dayStartHour: safeStart,
+      dayEndHour: safeEnd,
+    };
+    setLocalPrefs(next);
+    try {
+      localStorage.setItem(calPrefsStorageKey, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+    if (canEdit) {
+      onUpdatePreferences({ calendarPrefs: next });
+    }
+  };
 
   const [mobilePane, setMobilePane] = useState<'calendar' | 'tasks'>('calendar');
   const [showSettingsDrawer, setShowSettingsDrawer] = useState(false);
@@ -1337,7 +1384,7 @@ export default function CalendarView({
     const timedItems = dayItems.filter(
       (it) => parseMinutesFromTime(it.startTime) !== null
     );
-    const totalGridHeight = HOURS_LIST.length * HOUR_HEIGHT;
+    const totalGridHeight = visibleHours.length * HOUR_HEIGHT;
 
     return (
       <div
@@ -1347,7 +1394,7 @@ export default function CalendarView({
         style={{ height: `${totalGridHeight}px` }}
       >
         {/* Hour drop rows */}
-        {HOURS_LIST.map((hour) => {
+        {visibleHours.map((hour) => {
           const hourStr = `${String(hour).padStart(2, '0')}:00`;
           const dropId = `${dateKey}@${hourStr}`;
           const isHighlighted = dropHighlightKey === dropId;
@@ -1380,12 +1427,12 @@ export default function CalendarView({
         })}
 
         {/* Current time indicator line */}
-        {isToday && nowMinutes >= 6 * 60 && nowMinutes <= 24 * 60 && (
+        {isToday && nowMinutes >= gridStartMins && nowMinutes <= gridEndMins && (
           <div
             aria-hidden="true"
             className="absolute inset-x-0 z-10 pointer-events-none flex items-center"
             style={{
-              top: `${((nowMinutes - 6 * 60) / 60) * HOUR_HEIGHT}px`,
+              top: `${((nowMinutes - gridStartMins) / 60) * HOUR_HEIGHT}px`,
             }}
           >
             <span className="w-2 h-2 rounded-full bg-rose-600 -mr-1" />
@@ -1396,12 +1443,15 @@ export default function CalendarView({
         {/* Timed Items */}
         {timedItems.map((item) => {
           const mins = parseMinutesFromTime(item.startTime)!;
-          const clampedMins = Math.max(6 * 60, Math.min(23 * 60 + 45, mins));
+          const clampedMins = Math.max(
+            gridStartMins,
+            Math.min(gridEndMins - 15, mins)
+          );
           const activeDur =
             resizingState && resizingState.id === item.id && resizingState.kind === item.kind
               ? resizingState.currentDuration
               : item.durationMinutes;
-          const topPx = ((clampedMins - 6 * 60) / 60) * HOUR_HEIGHT;
+          const topPx = ((clampedMins - gridStartMins) / 60) * HOUR_HEIGHT;
           const heightPx = Math.max(24, (activeDur / 60) * HOUR_HEIGHT - 2);
           const resizable = canEdit && (item.kind === 'task' || item.kind === 'event');
 
@@ -1639,7 +1689,7 @@ export default function CalendarView({
               </select>
             </label>
 
-            <label className="block text-slate-600">
+            <div className="block text-slate-600">
               <span className="block mb-1 font-medium">كثافة العرض والحالة</span>
               <div className="flex flex-wrap gap-1.5">
                 <button
@@ -1681,7 +1731,94 @@ export default function CalendarView({
                   {showWeekends ? 'عطلة نهاية الأسبوع: ظاهرة' : 'أيام العمل فقط'}
                 </button>
               </div>
-            </label>
+            </div>
+
+            <div className="sm:col-span-2 lg:col-span-4 pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-slate-700">
+              <div className="flex flex-wrap items-center gap-2">
+                <Clock className="w-3.5 h-3.5 text-[#1E3A5F] shrink-0" />
+                <span className="font-semibold">نطاق ساعات اليوم:</span>
+                <label className="inline-flex items-center gap-1.5">
+                  <span className="text-slate-500">من</span>
+                  <select
+                    aria-label="بداية اليوم بالساعة"
+                    value={dayStartHour}
+                    onChange={(e) => {
+                      const nextStart = Number(e.target.value);
+                      updateDayTimeWindow(
+                        nextStart,
+                        Math.max(nextStart + 1, dayEndHour)
+                      );
+                    }}
+                    className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900"
+                  >
+                    {FULL_HOURS_START_OPTIONS.map((h) => (
+                      <option key={h} value={h}>
+                        {formatHourOptionLabel(h)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="inline-flex items-center gap-1.5">
+                  <span className="text-slate-500">إلى</span>
+                  <select
+                    aria-label="نهاية اليوم بالساعة"
+                    value={dayEndHour}
+                    onChange={(e) => {
+                      const nextEnd = Number(e.target.value);
+                      updateDayTimeWindow(
+                        Math.min(dayStartHour, nextEnd - 1),
+                        nextEnd
+                      );
+                    }}
+                    className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900"
+                  >
+                    {FULL_HOURS_END_OPTIONS.filter((h) => h > dayStartHour).map(
+                      (h) => (
+                        <option key={h} value={h}>
+                          {formatHourOptionLabel(h)}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => updateDayTimeWindow(0, 24)}
+                  className={`px-2.5 py-1.5 rounded-md font-medium cursor-pointer border ${
+                    dayStartHour === 0 && dayEndHour === 24
+                      ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  24 ساعة كاملة
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateDayTimeWindow(8, 24)}
+                  className={`px-2.5 py-1.5 rounded-md font-medium cursor-pointer border ${
+                    dayStartHour === 8 && dayEndHour === 24
+                      ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  8 ص – 12 منتصف الليل
+                </button>
+                <button
+                  type="button"
+                  onClick={() => updateDayTimeWindow(6, 23)}
+                  className={`px-2.5 py-1.5 rounded-md font-medium cursor-pointer border ${
+                    dayStartHour === 6 && dayEndHour === 23
+                      ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  6 ص – 11 م
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -2120,6 +2257,70 @@ export default function CalendarView({
             mobilePane === 'calendar' ? 'block' : 'hidden lg:block'
           }`}
         >
+          {(viewMode === 'day' || viewMode === 'week') && (
+            <div className="px-3 sm:px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1 font-semibold text-[#1E3A5F]">
+                  <Clock className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>ساعات العرض:</span>
+                </span>
+                <select
+                  aria-label="ساعة البداية"
+                  value={dayStartHour}
+                  onChange={(e) => {
+                    const nextStart = Number(e.target.value);
+                    updateDayTimeWindow(
+                      nextStart,
+                      Math.max(nextStart + 1, dayEndHour)
+                    );
+                  }}
+                  className="px-2 py-1 bg-white border border-slate-200 rounded-md text-slate-800 text-[11px]"
+                >
+                  {FULL_HOURS_START_OPTIONS.map((h) => (
+                    <option key={h} value={h}>
+                      من {formatHourOptionLabel(h)}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="ساعة النهاية"
+                  value={dayEndHour}
+                  onChange={(e) => {
+                    const nextEnd = Number(e.target.value);
+                    updateDayTimeWindow(
+                      Math.min(dayStartHour, nextEnd - 1),
+                      nextEnd
+                    );
+                  }}
+                  className="px-2 py-1 bg-white border border-slate-200 rounded-md text-slate-800 text-[11px]"
+                >
+                  {FULL_HOURS_END_OPTIONS.filter((h) => h > dayStartHour).map(
+                    (h) => (
+                      <option key={h} value={h}>
+                        إلى {formatHourOptionLabel(h)}
+                      </option>
+                    )
+                  )}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-slate-500 tabular-nums hidden sm:inline">
+                  ({visibleHours.length} ساعة)
+                </span>
+                {(dayStartHour !== 0 || dayEndHour !== 24) && (
+                  <button
+                    type="button"
+                    onClick={() => updateDayTimeWindow(0, 24)}
+                    className="px-2 py-1 text-[11px] font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-100 rounded-md cursor-pointer"
+                  >
+                    عرض 24 ساعة
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* VIEW 1: DAY VIEW */}
           {viewMode === 'day' && (
             <div className="divide-y divide-slate-200">
@@ -2212,7 +2413,7 @@ export default function CalendarView({
               {/* Hourly grid */}
               <div className="grid grid-cols-[64px_1fr] max-h-[640px] overflow-y-auto">
                 <div className="bg-slate-50 border-l border-slate-200 select-none">
-                  {HOURS_LIST.map((hour) => (
+                  {visibleHours.map((hour) => (
                     <div
                       key={hour}
                       style={{ height: `${HOUR_HEIGHT}px` }}
@@ -2338,7 +2539,7 @@ export default function CalendarView({
                   }}
                 >
                   <div className="bg-slate-50 border-l border-slate-200 select-none">
-                    {HOURS_LIST.map((hour) => (
+                    {visibleHours.map((hour) => (
                       <div
                         key={hour}
                         style={{ height: `${HOUR_HEIGHT}px` }}

@@ -154,9 +154,10 @@ export default defineConfig(() => {
       },
     },
     resolve: {
-      alias: {
-        '@': path.resolve(__dirname, '.'),
-      },
+      alias: [
+        { find: /^pdfjs-dist$/, replacement: 'pdfjs-dist/legacy/build/pdf.mjs' },
+        { find: '@', replacement: path.resolve(__dirname, '.') },
+      ],
     },
     server: {
       host: '0.0.0.0',

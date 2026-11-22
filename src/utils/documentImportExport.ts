@@ -36,7 +36,7 @@ const STUDY_FILES_BUCKET = 'study-files';
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
 const TUS_RESUMABLE_THRESHOLD = 6 * 1024 * 1024; // 6 MB
 const TUS_CHUNK_SIZE = 6 * 1024 * 1024; // 6 MB chunks (Supabase recommended)
-const MAX_LOCAL_IDB_BYTES = 40 * 1024 * 1024; // Skip caching >40 MB blobs in mobile IndexedDB
+const MAX_LOCAL_IDB_BYTES = 100 * 1024 * 1024; // Match 100 MB Supabase limit so fetched PDFs stay cached locally without re-downloading
 
 function escapeHtml(text: string): string {
   return text
@@ -272,6 +272,17 @@ export async function saveLocalAttachment(
   }
 }
 
+export function resolveAttachmentCacheKey(
+  resourceId?: string,
+  storagePath?: string,
+  fileName?: string
+): string | null {
+  if (resourceId && resourceId.trim()) return resourceId.trim();
+  if (storagePath && storagePath.trim()) return `path:${storagePath.trim()}`;
+  if (fileName && fileName.trim()) return `file:${fileName.trim()}`;
+  return null;
+}
+
 export async function getLocalAttachmentBlob(
   resourceId: string
 ): Promise<{ blob: Blob; name?: string; type?: string } | null> {
@@ -293,6 +304,26 @@ export async function getLocalAttachmentBlob(
   } catch {
     return null;
   }
+}
+
+export async function findCachedAttachmentBlob(options: {
+  resourceId?: string;
+  storagePath?: string;
+  fileName?: string;
+}): Promise<{ blob: Blob; name?: string; type?: string; key: string } | null> {
+  const candidates = [
+    options.resourceId?.trim(),
+    options.storagePath?.trim() ? `path:${options.storagePath.trim()}` : undefined,
+    options.fileName?.trim() ? `file:${options.fileName.trim()}` : undefined,
+  ].filter((k): k is string => Boolean(k));
+
+  for (const key of candidates) {
+    const hit = await getLocalAttachmentBlob(key);
+    if (hit?.blob) {
+      return { ...hit, key };
+    }
+  }
+  return null;
 }
 
 export async function downloadLocalAttachment(
@@ -632,30 +663,64 @@ export async function getFreshStudyFileSignedUrl(options: {
   uid?: string;
   resourceId?: string;
   storagePath?: string;
+  fileName?: string;
 }): Promise<string | null> {
   if (!isSupabaseConfigured || !supabase) return null;
   const effectiveUid = options.uid || auth?.currentUser?.uid;
   let resolvedStoragePath = options.storagePath;
   let resolvedBucket = STUDY_FILES_BUCKET;
 
-  if (effectiveUid && options.resourceId && !resolvedStoragePath) {
-    const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
-    try {
-      const { data } = await withFirebaseTokenRetry(async (client) =>
-        client
-          .from('file_attachments')
-          .select('storage_bucket,storage_path')
-          .eq('owner_id', effectiveUid)
-          .eq('id', safeId)
-          .maybeSingle()
-      );
-      if (data) {
-        const row = data as { storage_bucket?: string; storage_path?: string };
-        if (row.storage_bucket) resolvedBucket = row.storage_bucket;
-        if (row.storage_path) resolvedStoragePath = row.storage_path;
+  if (
+    effectiveUid &&
+    (!resolvedStoragePath || resolvedStoragePath.startsWith('users/'))
+  ) {
+    if (options.resourceId) {
+      const safeId = options.resourceId
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .slice(0, 128);
+      try {
+        const { data } = await withFirebaseTokenRetry(async (client) =>
+          client
+            .from('file_attachments')
+            .select('storage_bucket,storage_path')
+            .eq('owner_id', effectiveUid)
+            .eq('id', safeId)
+            .maybeSingle()
+        );
+        if (data) {
+          const row = data as { storage_bucket?: string; storage_path?: string };
+          if (row.storage_bucket) resolvedBucket = row.storage_bucket;
+          if (row.storage_path) resolvedStoragePath = row.storage_path;
+        }
+      } catch {
+        // Ignore lookup fallback
       }
-    } catch {
-      // Ignore lookup fallback
+    }
+
+    if (
+      (!resolvedStoragePath || resolvedStoragePath.startsWith('users/')) &&
+      options.fileName
+    ) {
+      try {
+        const { data: byName } = await withFirebaseTokenRetry(async (client) =>
+          client
+            .from('file_attachments')
+            .select('storage_bucket,storage_path')
+            .eq('owner_id', effectiveUid)
+            .eq('file_name', options.fileName!)
+            .order('updated_at', { ascending: false })
+            .limit(1)
+        );
+        const first = (
+          byName as Array<{ storage_bucket?: string; storage_path?: string }> | null
+        )?.[0];
+        if (first?.storage_path) {
+          if (first.storage_bucket) resolvedBucket = first.storage_bucket;
+          resolvedStoragePath = first.storage_path;
+        }
+      } catch {
+        // Ignore filename fallback
+      }
     }
   }
 
@@ -675,31 +740,47 @@ export async function getFreshStudyFileSignedUrl(options: {
   }
 }
 
-export async function getPdfBlobForViewing(options: {
+export interface PdfBlobResult {
+  blob: Blob;
+  source: 'cache' | 'cloud';
+  storagePath?: string;
+}
+
+export async function getPdfBlobWithCacheInfo(options: {
   uid?: string;
   resourceId?: string;
   fileName?: string;
   mimeType?: string;
   storagePath?: string;
   downloadUrl?: string;
-}): Promise<Blob | null> {
+}): Promise<PdfBlobResult | null> {
   const inferredMime = inferMimeTypeFromFileName(
     options.fileName,
     options.mimeType
   );
+  const cacheKey = resolveAttachmentCacheKey(
+    options.resourceId,
+    options.storagePath,
+    options.fileName
+  );
 
-  // 1) Local IndexedDB cache (instant open offline/online)
-  if (options.resourceId) {
-    const local = await getLocalAttachmentBlob(options.resourceId);
-    if (local?.blob) {
-      if (
-        inferredMime !== 'application/octet-stream' &&
-        local.blob.type !== inferredMime
-      ) {
-        return new Blob([local.blob], { type: inferredMime });
-      }
-      return local.blob;
-    }
+  // 1) Local IndexedDB cache (instant open offline/online with ZERO mobile data usage)
+  const local = await findCachedAttachmentBlob({
+    resourceId: options.resourceId,
+    storagePath: options.storagePath,
+    fileName: options.fileName,
+  });
+  if (local?.blob) {
+    const normalizedBlob =
+      inferredMime !== 'application/octet-stream' &&
+      local.blob.type !== inferredMime
+        ? new Blob([local.blob], { type: inferredMime })
+        : local.blob;
+    return {
+      blob: normalizedBlob,
+      source: 'cache',
+      storagePath: options.storagePath,
+    };
   }
 
   const effectiveUid = options.uid || auth?.currentUser?.uid;
@@ -708,40 +789,85 @@ export async function getPdfBlobForViewing(options: {
   let resolvedFallbackUrl = options.downloadUrl;
   let resolvedMime = inferredMime;
 
-  // 2) Lookup metadata row in Postgres `file_attachments` if storagePath missing or to verify bucket
-  if (isSupabaseConfigured && supabase && effectiveUid && options.resourceId) {
-    const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
-    try {
-      const { data } = await withFirebaseTokenRetry(async (client) =>
-        client
-          .from('file_attachments')
-          .select('storage_bucket,storage_path,download_url,mime_type,file_name')
-          .eq('owner_id', effectiveUid)
-          .eq('id', safeId)
-          .maybeSingle()
-      );
-      if (data) {
-        const row = data as {
-          storage_bucket?: string;
-          storage_path?: string;
-          download_url?: string;
-          mime_type?: string;
-          file_name?: string;
-        };
-        if (row.storage_bucket) resolvedBucket = row.storage_bucket;
-        if (row.storage_path) resolvedStoragePath = row.storage_path;
-        if (row.download_url) resolvedFallbackUrl = row.download_url;
-        resolvedMime = inferMimeTypeFromFileName(
-          row.file_name || options.fileName,
-          row.mime_type || inferredMime
+  // 2) Lookup metadata row in Postgres `file_attachments` by resourceId or fileName fallback
+  if (isSupabaseConfigured && supabase && effectiveUid) {
+    if (
+      options.resourceId &&
+      (!resolvedStoragePath || resolvedStoragePath.startsWith('users/'))
+    ) {
+      const safeId = options.resourceId
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .slice(0, 128);
+      try {
+        const { data } = await withFirebaseTokenRetry(async (client) =>
+          client
+            .from('file_attachments')
+            .select('storage_bucket,storage_path,download_url,mime_type,file_name')
+            .eq('owner_id', effectiveUid)
+            .eq('id', safeId)
+            .maybeSingle()
         );
+        if (data) {
+          const row = data as {
+            storage_bucket?: string;
+            storage_path?: string;
+            download_url?: string;
+            mime_type?: string;
+            file_name?: string;
+          };
+          if (row.storage_bucket) resolvedBucket = row.storage_bucket;
+          if (row.storage_path) resolvedStoragePath = row.storage_path;
+          if (row.download_url) resolvedFallbackUrl = row.download_url;
+          resolvedMime = inferMimeTypeFromFileName(
+            row.file_name || options.fileName,
+            row.mime_type || inferredMime
+          );
+        }
+      } catch (err) {
+        console.warn('Supabase file_attachments lookup failed:', err);
       }
-    } catch (err) {
-      console.warn('Supabase file_attachments lookup failed:', err);
+    }
+
+    if (
+      (!resolvedStoragePath || resolvedStoragePath.startsWith('users/')) &&
+      options.fileName
+    ) {
+      try {
+        const { data: rowsByName } = await withFirebaseTokenRetry(async (client) =>
+          client
+            .from('file_attachments')
+            .select('storage_bucket,storage_path,download_url,mime_type,file_name')
+            .eq('owner_id', effectiveUid)
+            .eq('file_name', options.fileName!)
+            .order('updated_at', { ascending: false })
+            .limit(1)
+        );
+        const match = (
+          rowsByName as Array<{
+            storage_bucket?: string;
+            storage_path?: string;
+            download_url?: string;
+            mime_type?: string;
+            file_name?: string;
+          }> | null
+        )?.[0];
+        if (match) {
+          if (match.storage_bucket) resolvedBucket = match.storage_bucket;
+          if (match.storage_path) resolvedStoragePath = match.storage_path;
+          if (match.download_url) resolvedFallbackUrl = match.download_url;
+          resolvedMime = inferMimeTypeFromFileName(
+            match.file_name || options.fileName,
+            match.mime_type || inferredMime
+          );
+        }
+      } catch {
+        // Ignore filename fallback error
+      }
     }
   }
 
-  // 3) Download directly from private Supabase Storage bucket using authenticated Firebase JWT
+  // 3) Download directly from private Supabase Storage bucket using authenticated Firebase JWT,
+  //    or mint a fresh signed URL if direct SDK download hits a mobile network edge case
   if (
     isSupabaseConfigured &&
     supabase &&
@@ -761,12 +887,36 @@ export async function getPdfBlobForViewing(options: {
         rawBlob.type !== resolvedMime
           ? new Blob([rawBlob], { type: resolvedMime })
           : rawBlob;
-      if (options.resourceId && blob) {
-        await saveLocalAttachment(options.resourceId, blob, options.fileName);
+      if (cacheKey && blob) {
+        await saveLocalAttachment(cacheKey, blob, options.fileName);
       }
-      return blob;
+      return { blob, source: 'cloud', storagePath: resolvedStoragePath };
     } catch (err) {
-      console.warn('Supabase Storage download failed:', err);
+      console.warn('Supabase Storage download failed, trying fresh signed URL:', err);
+      try {
+        const { data: signedData } = await withFirebaseTokenRetry(async (client) =>
+          client.storage
+            .from(resolvedBucket)
+            .createSignedUrl(resolvedStoragePath!, 3600)
+        );
+        if (signedData?.signedUrl) {
+          const signedRes = await fetch(signedData.signedUrl);
+          if (signedRes.ok) {
+            const rawBlob = await signedRes.blob();
+            const blob =
+              resolvedMime !== 'application/octet-stream' &&
+              rawBlob.type !== resolvedMime
+                ? new Blob([rawBlob], { type: resolvedMime })
+                : rawBlob;
+            if (cacheKey && blob) {
+              await saveLocalAttachment(cacheKey, blob, options.fileName);
+            }
+            return { blob, source: 'cloud', storagePath: resolvedStoragePath };
+          }
+        }
+      } catch (signedErr) {
+        console.warn('Signed URL blob fetch fallback failed:', signedErr);
+      }
     }
   }
 
@@ -781,10 +931,10 @@ export async function getPdfBlobForViewing(options: {
           rawBlob.type !== resolvedMime
             ? new Blob([rawBlob], { type: resolvedMime })
             : rawBlob;
-        if (options.resourceId && blob) {
-          await saveLocalAttachment(options.resourceId, blob, options.fileName);
+        if (cacheKey && blob) {
+          await saveLocalAttachment(cacheKey, blob, options.fileName);
         }
-        return blob;
+        return { blob, source: 'cloud', storagePath: resolvedStoragePath };
       }
     } catch (err) {
       console.warn('Fallback downloadUrl fetch failed:', err);
@@ -792,6 +942,37 @@ export async function getPdfBlobForViewing(options: {
   }
 
   return null;
+}
+
+export async function getPdfBlobForViewing(options: {
+  uid?: string;
+  resourceId?: string;
+  fileName?: string;
+  mimeType?: string;
+  storagePath?: string;
+  downloadUrl?: string;
+}): Promise<Blob | null> {
+  const res = await getPdfBlobWithCacheInfo(options);
+  return res?.blob ?? null;
+}
+
+/**
+ * Re-uploads any attachment currently residing ONLY in local IndexedDB on this device
+ * (e.g. uploaded earlier while offline or before Supabase Storage migration) up to Supabase Cloud.
+ */
+export async function rescueLocalAttachmentToCloud(
+  uid: string,
+  resourceId: string,
+  fallbackFileName?: string,
+  extractedPreview?: string
+): Promise<UploadedAttachmentResult | null> {
+  const local = await getLocalAttachmentBlob(resourceId);
+  if (!local?.blob) return null;
+  const fileName =
+    local.name || fallbackFileName || `${resourceId}.pdf`;
+  const mime = inferMimeTypeFromFileName(fileName, local.type || local.blob.type);
+  const file = new File([local.blob], fileName, { type: mime });
+  return uploadResourceAttachment(uid, resourceId, file, extractedPreview);
 }
 
 export interface DownloadAttachmentResult {

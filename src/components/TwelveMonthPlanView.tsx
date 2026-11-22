@@ -110,6 +110,11 @@ interface TwelveMonthPlanViewProps {
       sizeBytes?: number;
     }
   ) => void;
+  onUpdateMonthResource?: (
+    monthId: number,
+    resourceId: string,
+    updates: Partial<StudyResource>
+  ) => void;
   onDeleteMonthResource: (monthId: number, resourceId: string) => void;
   onOpenBookNote: (
     bookTitle: string,
@@ -173,6 +178,7 @@ export default function TwelveMonthPlanView({
   onAddMonthTask,
   onDeleteMonthTask,
   onAddMonthResource,
+  onUpdateMonthResource,
   onDeleteMonthResource,
   onOpenBookNote,
 }: TwelveMonthPlanViewProps) {
@@ -240,7 +246,9 @@ export default function TwelveMonthPlanView({
   const [expandedResPreviewId, setExpandedResPreviewId] = useState<string | null>(
     null
   );
+  const [replacingResId, setReplacingResId] = useState<string | null>(null);
   const resFileInputRef = useRef<HTMLInputElement | null>(null);
+  const replaceResFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const getDomainTitle = (domainId: DomainId) =>
     domains.find((d) => d.id === domainId)?.title ?? domainId;
@@ -424,6 +432,55 @@ export default function TwelveMonthPlanView({
     setPendingResId('');
     setUploadStatusMsg(null);
     setShowAddResource(false);
+  };
+
+  const handleReplaceMonthResourceFile = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    const targetResId = replacingResId;
+    e.target.value = '';
+    if (!file || !targetResId || !activeMonth || !onUpdateMonthResource) {
+      setReplacingResId(null);
+      return;
+    }
+    if (!canEdit) {
+      onRequireAuth();
+      setReplacingResId(null);
+      return;
+    }
+
+    setUploadingResFile(true);
+    setUploadProgressPct(0);
+    setResourceActionError(null);
+    try {
+      const effectiveUid = uid || auth?.currentUser?.uid;
+      const parsed = await parseDocumentFile(file);
+      const previewSlice = isPdfAttachment(file.name, file.type)
+        ? ''
+        : parsed.plainText.slice(0, 7500);
+      const uploaded = await uploadResourceAttachment(
+        effectiveUid,
+        targetResId,
+        file,
+        previewSlice,
+        (pct) => setUploadProgressPct(pct)
+      );
+      onUpdateMonthResource(activeMonth.id, targetResId, {
+        attachmentName: file.name,
+        mimeType: uploaded.mimeType || file.type || '',
+        sizeBytes: uploaded.sizeBytes ?? file.size,
+        storagePath: uploaded.storagePath,
+        downloadUrl: uploaded.downloadUrl,
+        ...(previewSlice ? { extractedPreview: previewSlice } : {}),
+      });
+      if (!uploaded.uploadedToCloud && uploaded.errorMessage) {
+        setResourceActionError(uploaded.errorMessage);
+      }
+    } finally {
+      setUploadingResFile(false);
+      setReplacingResId(null);
+    }
   };
 
   const handleAppendVoiceToMonthNotes = (transcript: string) => {
@@ -1441,7 +1498,7 @@ export default function TwelveMonthPlanView({
                       placeholder="رابط خارجي اختياري (https://...) — يوتيوب / درايف / مقال"
                       className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
                     />
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
                       <input
                         ref={resFileInputRef}
                         type="file"
@@ -1453,14 +1510,14 @@ export default function TwelveMonthPlanView({
                         type="button"
                         disabled={uploadingResFile}
                         onClick={() => resFileInputRef.current?.click()}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-100 rounded-md cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-60"
+                        className="w-full min-w-0 max-w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-100 rounded-md cursor-pointer disabled:opacity-60"
                       >
                         {uploadingResFile ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                          <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden="true" />
                         ) : (
-                          <FileUp className="w-3.5 h-3.5" aria-hidden="true" />
+                          <FileUp className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                         )}
-                        <span>
+                        <span className="truncate">
                           {uploadingResFile
                             ? `جاري الرفع ${uploadProgressPct}%...`
                             : newResAttachmentName
@@ -1512,6 +1569,14 @@ export default function TwelveMonthPlanView({
                 </div>
               )}
 
+              <input
+                ref={replaceResFileInputRef}
+                type="file"
+                accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword,.txt,text/plain,.md,.markdown"
+                className="hidden"
+                onChange={(e) => void handleReplaceMonthResourceFile(e)}
+              />
+
               <div className="divide-y divide-slate-200 border border-slate-200 rounded-lg">
                 {activeMonth.resources.map((res) => {
                   const isPreviewOpen = expandedResPreviewId === res.id;
@@ -1519,6 +1584,11 @@ export default function TwelveMonthPlanView({
                   const hasAttachment = Boolean(
                     res.attachmentName || res.storagePath || res.downloadUrl
                   );
+                  const needsCloudSync =
+                    Boolean(res.attachmentName) &&
+                    (!res.storagePath || res.storagePath.startsWith('users/'));
+                  const isReplacingThis =
+                    uploadingResFile && replacingResId === res.id;
                   const isViewable =
                     isPdf ||
                     isViewableDocumentAttachment(
@@ -1550,7 +1620,7 @@ export default function TwelveMonthPlanView({
                   return (
                     <div key={res.id} className="bg-white">
                       <div className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div className="space-y-0.5">
+                        <div className="space-y-0.5 min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2 text-xs">
                             {isViewable && onOpenPdf ? (
                               <button
@@ -1570,8 +1640,13 @@ export default function TwelveMonthPlanView({
                             </span>
                             <span className="text-slate-500">{res.type}</span>
                             {res.attachmentName && (
-                              <span className="text-[11px] text-emerald-700 font-medium">
+                              <span className="text-[11px] text-emerald-700 font-medium break-all">
                                 ({res.attachmentName})
+                              </span>
+                            )}
+                            {needsCloudSync && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold bg-amber-50 text-amber-900 border border-amber-200 rounded">
+                                محلي فقط — يحتاج مزامنة للسحابة
                               </span>
                             )}
                           </div>
@@ -1647,6 +1722,38 @@ export default function TwelveMonthPlanView({
                             >
                               <Download className="w-3 h-3" aria-hidden="true" />
                               <span>تنزيل</span>
+                            </button>
+                          )}
+
+                          {canEdit && onUpdateMonthResource && (
+                            <button
+                              type="button"
+                              disabled={uploadingResFile}
+                              onClick={() => {
+                                setReplacingResId(res.id);
+                                replaceResFileInputRef.current?.click();
+                              }}
+                              title="رفع أو استبدال ملف PDF ومزامنته على كل الأجهزة"
+                              className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold rounded cursor-pointer disabled:opacity-50 ${
+                                needsCloudSync
+                                  ? 'text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300'
+                                  : 'text-[#1E3A5F] bg-slate-100 hover:bg-slate-200'
+                              }`}
+                            >
+                              {isReplacingThis ? (
+                                <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+                              ) : (
+                                <FileUp className="w-3 h-3" aria-hidden="true" />
+                              )}
+                              <span>
+                                {isReplacingThis
+                                  ? `${uploadProgressPct}%`
+                                  : needsCloudSync
+                                  ? 'مزامنة للسحابة'
+                                  : hasAttachment
+                                  ? 'استبدال'
+                                  : 'إرفاق ملف'}
+                              </span>
                             </button>
                           )}
 
