@@ -139,6 +139,9 @@ export default defineConfig(() => {
               ) {
                 return 'vendor-firebase';
               }
+              if (normalized.includes('/node_modules/@supabase/')) {
+                return 'vendor-supabase';
+              }
               if (normalized.includes('/node_modules/xlsx/')) {
                 return 'vendor-xlsx';
               }

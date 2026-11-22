@@ -1,34 +1,16 @@
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
-  writeBatch,
-} from 'firebase/firestore';
-import {
-  getBlob,
-  getDownloadURL,
-  ref,
-  uploadBytes,
-} from 'firebase/storage';
 import { ReadAloudVoiceName } from '../data/curriculumData';
 import {
-  OperationType,
-  db,
-  handleFirestoreError,
-  storage,
-} from '../firebase';
+  isJwtExpiredOrAuthError,
+  isSupabaseConfigured,
+  supabase,
+  withFirebaseTokenRetry,
+} from '../services/supabaseClient';
 
 const DB_NAME = 'mizan_tts_audio_cache_v2';
 const STORE_NAME = 'audio_clips';
 const META_STORE_NAME = 'entity_index';
 const DB_VERSION = 2;
-const CHUNK_CHAR_SIZE = 500_000;
+const AUDIO_BUCKET = 'audio-cache';
 
 export type AudioEntityType = 'note' | 'month' | 'course' | 'summary' | 'other';
 
@@ -129,13 +111,16 @@ async function getLocalClip(cacheId: string): Promise<LocalRecord | null> {
   }
 }
 
-async function getLocalEntityIndex(entityKey: string): Promise<EntityIndexRecord | null> {
+async function getLocalEntityIndex(
+  entityKey: string
+): Promise<EntityIndexRecord | null> {
   try {
     const database = await openAudioDb();
     return await new Promise((resolve) => {
       const tx = database.transaction(META_STORE_NAME, 'readonly');
       const req = tx.objectStore(META_STORE_NAME).get(entityKey);
-      req.onsuccess = () => resolve((req.result as EntityIndexRecord | undefined) ?? null);
+      req.onsuccess = () =>
+        resolve((req.result as EntityIndexRecord | undefined) ?? null);
       req.onerror = () => resolve(null);
     });
   } catch {
@@ -147,7 +132,9 @@ async function putLocalClip(record: LocalRecord): Promise<void> {
   try {
     const database = await openAudioDb();
     await new Promise<void>((resolve) => {
-      const stores = record.entityId ? [STORE_NAME, META_STORE_NAME] : [STORE_NAME];
+      const stores = record.entityId
+        ? [STORE_NAME, META_STORE_NAME]
+        : [STORE_NAME];
       const tx = database.transaction(stores, 'readwrite');
       tx.objectStore(STORE_NAME).put(record);
       if (record.entityId && record.contentHash) {
@@ -180,9 +167,6 @@ export function computeTextContentHash(text: string): string {
   return `${(h1 >>> 0).toString(36)}_${(h2 >>> 0).toString(36)}_${normalized.length.toString(36)}`;
 }
 
-/**
- * Computes a deterministic Firestore/Storage-safe ID for (text, voiceName, speed).
- */
 export function computeAudioCacheId(
   text: string,
   voiceName: ReadAloudVoiceName,
@@ -228,20 +212,6 @@ export function base64ToAudioBlob(base64: string, mimeType = 'audio/wav'): Blob 
   return new Blob([base64ToUint8Array(base64)], { type: mimeType });
 }
 
-function dataUrlToBlob(dataUrl: string): Blob | null {
-  try {
-    const commaIdx = dataUrl.indexOf(',');
-    if (commaIdx === -1) return null;
-    const header = dataUrl.slice(0, commaIdx);
-    const base64 = dataUrl.slice(commaIdx + 1);
-    const mimeMatch = header.match(/data:([^;]+)/i);
-    const mime = mimeMatch ? mimeMatch[1] : 'audio/wav';
-    return base64ToAudioBlob(base64, mime);
-  } catch {
-    return null;
-  }
-}
-
 function parseWavInfo(bytes: Uint8Array): {
   isPcm16MonoWav: boolean;
   sampleRate: number;
@@ -250,13 +220,25 @@ function parseWavInfo(bytes: Uint8Array): {
   durationSeconds: number;
 } {
   if (bytes.length < 44) {
-    return { isPcm16MonoWav: false, sampleRate: 24000, dataOffset: 44, dataSize: 0, durationSeconds: 0 };
+    return {
+      isPcm16MonoWav: false,
+      sampleRate: 24000,
+      dataOffset: 44,
+      dataSize: 0,
+      durationSeconds: 0,
+    };
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const riff = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
   const wave = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]);
   if (riff !== 'RIFF' || wave !== 'WAVE') {
-    return { isPcm16MonoWav: false, sampleRate: 24000, dataOffset: 44, dataSize: 0, durationSeconds: 0 };
+    return {
+      isPcm16MonoWav: false,
+      sampleRate: 24000,
+      dataOffset: 44,
+      dataSize: 0,
+      durationSeconds: 0,
+    };
   }
   const audioFormat = view.getUint16(20, true);
   const channels = view.getUint16(22, true);
@@ -268,7 +250,12 @@ function parseWavInfo(bytes: Uint8Array): {
   let dataOffset = 44;
   let dataSize = bytes.length - 44;
   while (offset + 8 <= bytes.length) {
-    const chunkId = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+    const chunkId = String.fromCharCode(
+      bytes[offset],
+      bytes[offset + 1],
+      bytes[offset + 2],
+      bytes[offset + 3]
+    );
     const chunkSize = view.getUint32(offset + 4, true);
     if (chunkId === 'data') {
       dataOffset = offset + 8;
@@ -297,7 +284,11 @@ function downsamplePcm16MonoWav(
   const ratio = info.sampleRate / targetRate;
   const dstSamples = Math.floor(srcSamples / ratio);
   const outBuffer = new ArrayBuffer(44 + dstSamples * 2);
-  const srcView = new DataView(bytes.buffer, bytes.byteOffset + info.dataOffset, srcSamples * 2);
+  const srcView = new DataView(
+    bytes.buffer,
+    bytes.byteOffset + info.dataOffset,
+    srcSamples * 2
+  );
   const dstView = new DataView(outBuffer);
 
   const writeAscii = (pos: number, str: string) => {
@@ -339,8 +330,7 @@ function downsamplePcm16MonoWav(
 }
 
 /**
- * Downsamples 24kHz mono 16-bit PCM WAV -> 16kHz (or 12kHz if close to single-doc limit)
- * so most notes fit inside a single Firestore doc (<= 750KB dataUrl).
+ * Downsamples 24kHz PCM WAV -> 16kHz for compact fast storage & streaming across mobile/desktop.
  */
 function compactWavIfHelpful(
   audioBase64: string,
@@ -359,88 +349,51 @@ function compactWavIfHelpful(
         durationSeconds: Math.round(info.durationSeconds * 10) / 10,
       };
     }
-
-    const res16 = downsamplePcm16MonoWav(bytes, info, 16000);
-    // Base64 overhead for dataUrl header (~24 chars) + base64
-    if (res16.base64.length + 30 > 740_000 && res16.base64.length < 1_050_000) {
-      const res12 = downsamplePcm16MonoWav(bytes, info, 12000);
-      if (res12.base64.length + 30 <= 740_000) {
-        return res12;
-      }
-    }
-    return res16;
+    return downsamplePcm16MonoWav(bytes, info, 16000);
   } catch {
     return { base64: audioBase64, mimeType, durationSeconds: 0 };
   }
 }
 
-async function resolveCloudBlobFromDoc(
-  uid: string,
-  cacheId: string,
-  data: {
-    mimeType?: string;
-    storagePath?: string;
-    downloadUrl?: string;
-    inlineDataUrl?: string;
-    chunkCount?: number;
-  }
-): Promise<Blob | null> {
-  const mimeType = data.mimeType || 'audio/wav';
-
-  if (data.inlineDataUrl) {
-    const b = dataUrlToBlob(data.inlineDataUrl);
-    if (b) return b;
-  }
-
-  if (data.chunkCount && data.chunkCount > 0) {
+async function resolveSupabaseAudioBlob(row: {
+  storage_bucket?: string;
+  storage_path?: string;
+  download_url?: string;
+  mime_type?: string;
+}): Promise<Blob | null> {
+  if (
+    isSupabaseConfigured &&
+    supabase &&
+    row.storage_path &&
+    !row.storage_path.startsWith('users/')
+  ) {
     try {
-      const chunksSnap = await getDocs(
-        query(
-          collection(db, 'users', uid, 'audioCache', cacheId, 'chunks'),
-          where('ownerId', '==', uid)
-        )
-      );
-      if (!chunksSnap.empty) {
-        const sorted = chunksSnap.docs
-          .map((d) => d.data() as { chunkIndex: number; data: string })
-          .sort((a, b) => a.chunkIndex - b.chunkIndex);
-        const fullDataUrl = sorted.map((c) => c.data).join('');
-        const b = dataUrlToBlob(fullDataUrl);
-        if (b) return b;
-      }
+      const bucket = row.storage_bucket || AUDIO_BUCKET;
+      const blob = await withFirebaseTokenRetry(async (client) => {
+        const { data, error } = await client.storage
+          .from(bucket)
+          .download(row.storage_path!);
+        if (error || !data) throw error || new Error('Empty audio blob');
+        return data;
+      });
+      if (blob) return blob;
     } catch (err) {
-      console.warn('Could not read audio chunks:', err);
+      console.warn('Supabase Storage audio download failed:', err);
     }
   }
 
-  if (data.storagePath) {
+  if (row.download_url) {
     try {
-      const b = await getBlob(ref(storage, data.storagePath));
-      if (b) return b;
+      const res = await fetch(row.download_url);
+      if (res.ok) return await res.blob();
     } catch {
-      // try downloadUrl
-    }
-  }
-
-  if (data.downloadUrl) {
-    try {
-      const res = await fetch(data.downloadUrl);
-      if (res.ok) {
-        return await res.blob();
-      }
-    } catch {
-      // failed
+      // ignore fallback fetch error
     }
   }
 
   return null;
 }
 
-/**
- * Loads previously synthesized audio for exact (text, voiceName, speed) OR matching entityId + contentHash:
- * 1) IndexedDB on this device
- * 2) Firestore users/{uid}/audioCache (with inline, chunked, or Storage payload) cross-device
- */
 export async function loadCachedAudioClip(
   uid: string | null | undefined,
   text: string,
@@ -452,211 +405,150 @@ export async function loadCachedAudioClip(
   if (!clean) return null;
 
   const cacheId = computeAudioCacheId(clean, voiceName, speed);
-  const contentHash = computeTextContentHash(clean);
+  const currentHash = computeTextContentHash(clean);
 
-  // 1. Check local IndexedDB by exact cacheId
-  const local = await getLocalClip(cacheId);
-  if (local) {
+  // 1) Fast local IndexedDB lookup by exact hash ID
+  const localExact = await getLocalClip(cacheId);
+  if (localExact) {
     return {
       cacheId,
-      mimeType: local.mimeType || 'audio/wav',
-      blob: local.blob,
+      mimeType: localExact.mimeType,
+      blob: localExact.blob,
       source: 'local',
-      durationSeconds: local.durationSeconds,
-      lastPositionSeconds: local.lastPositionSeconds ?? 0,
-      playbackRate: local.playbackRate ?? 1,
-      title: local.title,
-      entityId: local.entityId,
-      entityType: local.entityType,
+      durationSeconds: localExact.durationSeconds,
+      lastPositionSeconds: localExact.lastPositionSeconds ?? 0,
+      playbackRate: localExact.playbackRate ?? 1,
+      title: localExact.title || meta?.title,
+      entityId: localExact.entityId || meta?.entityId,
+      entityType: localExact.entityType || meta?.entityType,
+      isStaleContent: false,
+      cloudSaved: true,
     };
   }
 
-  // 1b. Check local IndexedDB by entityId (accept exact contentHash first, or saved entity audio)
+  // 2) Fallback local lookup by entityId
   if (meta?.entityId) {
-    const candidateKeys = Array.from(
-      new Set([
-        `${meta.entityType || 'other'}:${meta.entityId}`,
-        `note:${meta.entityId}`,
-        `course:${meta.entityId}`,
-        `summary:${meta.entityId}`,
-      ])
-    );
-    let fallbackEntityClip: LocalRecord | null = null;
-    let fallbackHashMatch = false;
-    for (const k of candidateKeys) {
-      const idx = await getLocalEntityIndex(k);
-      if (!idx) continue;
-      const byEntity = await getLocalClip(idx.cacheId);
-      if (byEntity) {
-        fallbackEntityClip = byEntity;
-        fallbackHashMatch = idx.contentHash === contentHash;
-        if (fallbackHashMatch) break;
+    const entityKey = `${meta.entityType || 'other'}:${meta.entityId}`;
+    const idxRec = await getLocalEntityIndex(entityKey);
+    if (idxRec) {
+      const localByEntity = await getLocalClip(idxRec.cacheId);
+      if (localByEntity) {
+        return {
+          cacheId: localByEntity.id,
+          mimeType: localByEntity.mimeType,
+          blob: localByEntity.blob,
+          source: 'local',
+          durationSeconds: localByEntity.durationSeconds,
+          lastPositionSeconds: localByEntity.lastPositionSeconds ?? 0,
+          playbackRate: localByEntity.playbackRate ?? 1,
+          title: localByEntity.title || meta.title,
+          entityId: meta.entityId,
+          entityType: meta.entityType,
+          isStaleContent: idxRec.contentHash !== currentHash,
+          cloudSaved: true,
+        };
       }
-    }
-    if (fallbackEntityClip && fallbackHashMatch) {
-      return {
-        cacheId: fallbackEntityClip.id,
-        mimeType: fallbackEntityClip.mimeType || 'audio/wav',
-        blob: fallbackEntityClip.blob,
-        source: 'local',
-        durationSeconds: fallbackEntityClip.durationSeconds,
-        lastPositionSeconds: fallbackEntityClip.lastPositionSeconds ?? 0,
-        playbackRate: fallbackEntityClip.playbackRate ?? 1,
-        title: fallbackEntityClip.title,
-        entityId: fallbackEntityClip.entityId,
-        entityType: fallbackEntityClip.entityType,
-        isStaleContent: false,
-      };
-    }
-    // Keep as fallback if cloud also has nothing or user is offline
-    if (fallbackEntityClip && !uid) {
-      return {
-        cacheId: fallbackEntityClip.id,
-        mimeType: fallbackEntityClip.mimeType || 'audio/wav',
-        blob: fallbackEntityClip.blob,
-        source: 'local',
-        durationSeconds: fallbackEntityClip.durationSeconds,
-        lastPositionSeconds: fallbackEntityClip.lastPositionSeconds ?? 0,
-        playbackRate: fallbackEntityClip.playbackRate ?? 1,
-        title: fallbackEntityClip.title,
-        entityId: fallbackEntityClip.entityId,
-        entityType: fallbackEntityClip.entityType,
-        isStaleContent: true,
-      };
     }
   }
 
-  if (!uid) return null;
+  // 3) Cross-device Supabase PostgreSQL + Supabase Storage lookup
+  if (!uid || !isSupabaseConfigured || !supabase) return null;
 
   try {
-    // 2. Check exact Firestore doc
-    let targetDocId = cacheId;
-    let rawData: Record<string, unknown> | null = null;
-    let isStaleContent = false;
+    const row = await withFirebaseTokenRetry(async (client) => {
+      const { data: exactRow } = await client
+        .from('audio_cache')
+        .select('*')
+        .eq('owner_id', uid)
+        .eq('id', cacheId)
+        .maybeSingle();
 
-    const snap = await getDoc(doc(db, 'users', uid, 'audioCache', cacheId));
-    if (snap.exists()) {
-      rawData = snap.data() as Record<string, unknown>;
-    } else if (meta?.entityId) {
-      // 2b. Query by entityId across devices (even if text edited slightly or voice/speed changed)
-      const qSnap = await getDocs(
-        query(
-          collection(db, 'users', uid, 'audioCache'),
-          where('ownerId', '==', uid),
-          where('entityId', '==', meta.entityId.slice(0, 128))
-        )
-      );
-      if (!qSnap.empty) {
-        const docs = qSnap.docs
-          .map((d) => {
-            const dData = d.data() as Record<string, unknown>;
-            const upd = dData.updatedAt as { toMillis?: () => number } | undefined;
-            return {
-              id: d.id,
-              data: dData,
-              updatedAtMs: typeof upd?.toMillis === 'function' ? upd.toMillis() : 0,
-            };
-          })
-          .sort((a, b) => b.updatedAtMs - a.updatedAtMs);
-        const exactContentMatch = docs.find((d) => d.data.contentHash === contentHash);
-        const chosen = exactContentMatch ?? docs[0];
-        if (chosen) {
-          targetDocId = chosen.id;
-          rawData = chosen.data;
-          isStaleContent = !exactContentMatch;
-        }
-      }
-    }
+      if (exactRow) return exactRow as Record<string, unknown>;
 
-    if (!rawData) {
-      // Fall back to local entity clip even if content changed slightly while cloud doesn't have an entity entry
       if (meta?.entityId) {
-        const k = `${meta.entityType || 'other'}:${meta.entityId}`;
-        const idx = await getLocalEntityIndex(k);
-        if (idx) {
-          const byEntity = await getLocalClip(idx.cacheId);
-          if (byEntity) {
-            return {
-              cacheId: byEntity.id,
-              mimeType: byEntity.mimeType || 'audio/wav',
-              blob: byEntity.blob,
-              source: 'local',
-              durationSeconds: byEntity.durationSeconds,
-              lastPositionSeconds: byEntity.lastPositionSeconds ?? 0,
-              playbackRate: byEntity.playbackRate ?? 1,
-              title: byEntity.title,
-              entityId: byEntity.entityId,
-              entityType: byEntity.entityType,
-              isStaleContent: idx.contentHash !== contentHash,
-              cloudSaved: true,
-            };
-          }
+        const { data: byEntityRows } = await client
+          .from('audio_cache')
+          .select('*')
+          .eq('owner_id', uid)
+          .eq('entity_id', meta.entityId)
+          .order('created_at_ms', { ascending: false })
+          .limit(1);
+
+        if (byEntityRows && byEntityRows.length > 0) {
+          return byEntityRows[0] as Record<string, unknown>;
         }
       }
       return null;
-    }
-
-    const mimeType = String(rawData.mimeType || 'audio/wav');
-    const blob = await resolveCloudBlobFromDoc(uid, targetDocId, {
-      mimeType,
-      storagePath: rawData.storagePath ? String(rawData.storagePath) : undefined,
-      downloadUrl: rawData.downloadUrl ? String(rawData.downloadUrl) : undefined,
-      inlineDataUrl: rawData.inlineDataUrl ? String(rawData.inlineDataUrl) : undefined,
-      chunkCount: typeof rawData.chunkCount === 'number' ? rawData.chunkCount : undefined,
     });
 
+    if (!row) return null;
+
+    const blob = await resolveSupabaseAudioBlob({
+      storage_bucket: row.storage_bucket ? String(row.storage_bucket) : undefined,
+      storage_path: row.storage_path ? String(row.storage_path) : undefined,
+      download_url: row.download_url ? String(row.download_url) : undefined,
+      mime_type: row.mime_type ? String(row.mime_type) : undefined,
+    });
     if (!blob) return null;
 
-    const durationSeconds = Number(rawData.durationSeconds ?? 0);
-    const lastPositionSeconds = Number(rawData.lastPositionSeconds ?? 0);
-    const playbackRate = Number(rawData.playbackRate ?? 1);
+    const resolvedId = String(row.id || cacheId);
+    const resolvedMime = String(row.mime_type || blob.type || 'audio/wav');
+    const resolvedDuration =
+      typeof row.duration_seconds === 'number' ? row.duration_seconds : undefined;
+    const resolvedLastPos =
+      typeof row.last_position_seconds === 'number'
+        ? row.last_position_seconds
+        : 0;
+    const resolvedRate =
+      typeof row.playback_rate === 'number' ? row.playback_rate : 1;
 
     await putLocalClip({
-      id: targetDocId,
-      mimeType,
+      id: resolvedId,
+      mimeType: resolvedMime,
       blob,
       updatedAtMs: Date.now(),
-      durationSeconds,
-      lastPositionSeconds,
-      playbackRate,
-      entityId: meta?.entityId || (rawData.entityId ? String(rawData.entityId) : undefined),
-      entityType: meta?.entityType || (rawData.entityType as AudioEntityType | undefined),
-      title: meta?.title || (rawData.title ? String(rawData.title) : undefined),
-      contentHash: rawData.contentHash ? String(rawData.contentHash) : contentHash,
+      durationSeconds: resolvedDuration,
+      lastPositionSeconds: resolvedLastPos,
+      playbackRate: resolvedRate,
+      entityId: row.entity_id ? String(row.entity_id) : meta?.entityId,
+      entityType:
+        (row.entity_type as AudioEntityType | undefined) || meta?.entityType,
+      title: row.title ? String(row.title) : meta?.title,
+      contentHash: row.content_hash ? String(row.content_hash) : currentHash,
     });
 
     return {
-      cacheId: targetDocId,
-      mimeType,
+      cacheId: resolvedId,
+      mimeType: resolvedMime,
       blob,
       source: 'cloud',
-      durationSeconds,
-      lastPositionSeconds,
-      playbackRate,
-      title: rawData.title ? String(rawData.title) : meta?.title,
-      entityId: rawData.entityId ? String(rawData.entityId) : meta?.entityId,
-      entityType: (rawData.entityType as AudioEntityType | undefined) || meta?.entityType,
-      isStaleContent,
+      durationSeconds: resolvedDuration,
+      lastPositionSeconds: resolvedLastPos,
+      playbackRate: resolvedRate,
+      title: row.title ? String(row.title) : meta?.title,
+      entityId: row.entity_id ? String(row.entity_id) : meta?.entityId,
+      entityType:
+        (row.entity_type as AudioEntityType | undefined) || meta?.entityType,
+      isStaleContent: Boolean(row.content_hash && row.content_hash !== currentHash),
       cloudSaved: true,
     };
   } catch (err) {
-    console.warn('Could not read cloud audio cache:', err);
+    console.warn('Supabase audio cache load failed:', err);
     return null;
   }
 }
 
-/**
- * Loads a cached clip directly by its cacheId (for Dashboard Saved Audio strip).
- */
 export async function loadAudioClipById(
   uid: string | null | undefined,
   cacheId: string
 ): Promise<CachedAudioEntry | null> {
+  if (!cacheId) return null;
+
   const local = await getLocalClip(cacheId);
   if (local) {
     return {
       cacheId,
-      mimeType: local.mimeType || 'audio/wav',
+      mimeType: local.mimeType,
       blob: local.blob,
       source: 'local',
       durationSeconds: local.durationSeconds,
@@ -665,96 +557,123 @@ export async function loadAudioClipById(
       title: local.title,
       entityId: local.entityId,
       entityType: local.entityType,
+      cloudSaved: true,
     };
   }
-  if (!uid) return null;
+
+  if (!uid || !isSupabaseConfigured || !supabase) return null;
+
   try {
-    const snap = await getDoc(doc(db, 'users', uid, 'audioCache', cacheId));
-    if (!snap.exists()) return null;
-    const raw = snap.data() as Record<string, unknown>;
-    const mimeType = String(raw.mimeType || 'audio/wav');
-    const blob = await resolveCloudBlobFromDoc(uid, cacheId, {
-      mimeType,
-      storagePath: raw.storagePath ? String(raw.storagePath) : undefined,
-      downloadUrl: raw.downloadUrl ? String(raw.downloadUrl) : undefined,
-      inlineDataUrl: raw.inlineDataUrl ? String(raw.inlineDataUrl) : undefined,
-      chunkCount: typeof raw.chunkCount === 'number' ? raw.chunkCount : undefined,
+    const row = await withFirebaseTokenRetry(async (client) => {
+      const { data } = await client
+        .from('audio_cache')
+        .select('*')
+        .eq('owner_id', uid)
+        .eq('id', cacheId)
+        .maybeSingle();
+      return (data as Record<string, unknown> | null) ?? null;
+    });
+    if (!row) return null;
+
+    const blob = await resolveSupabaseAudioBlob({
+      storage_bucket: row.storage_bucket ? String(row.storage_bucket) : undefined,
+      storage_path: row.storage_path ? String(row.storage_path) : undefined,
+      download_url: row.download_url ? String(row.download_url) : undefined,
+      mime_type: row.mime_type ? String(row.mime_type) : undefined,
     });
     if (!blob) return null;
 
-    const entry: LocalRecord = {
+    const mime = String(row.mime_type || blob.type || 'audio/wav');
+    await putLocalClip({
       id: cacheId,
-      mimeType,
+      mimeType: mime,
       blob,
       updatedAtMs: Date.now(),
-      durationSeconds: Number(raw.durationSeconds ?? 0),
-      lastPositionSeconds: Number(raw.lastPositionSeconds ?? 0),
-      playbackRate: Number(raw.playbackRate ?? 1),
-      title: raw.title ? String(raw.title) : undefined,
-      entityId: raw.entityId ? String(raw.entityId) : undefined,
-      entityType: raw.entityType as AudioEntityType | undefined,
-      contentHash: raw.contentHash ? String(raw.contentHash) : undefined,
-    };
-    await putLocalClip(entry);
+      durationSeconds:
+        typeof row.duration_seconds === 'number'
+          ? row.duration_seconds
+          : undefined,
+      lastPositionSeconds:
+        typeof row.last_position_seconds === 'number'
+          ? row.last_position_seconds
+          : 0,
+      playbackRate:
+        typeof row.playback_rate === 'number' ? row.playback_rate : 1,
+      entityId: row.entity_id ? String(row.entity_id) : undefined,
+      entityType: row.entity_type as AudioEntityType | undefined,
+      title: row.title ? String(row.title) : undefined,
+      contentHash: row.content_hash ? String(row.content_hash) : undefined,
+    });
+
     return {
       cacheId,
-      mimeType,
+      mimeType: mime,
       blob,
       source: 'cloud',
-      durationSeconds: entry.durationSeconds,
-      lastPositionSeconds: entry.lastPositionSeconds,
-      playbackRate: entry.playbackRate,
-      title: entry.title,
-      entityId: entry.entityId,
-      entityType: entry.entityType,
+      durationSeconds:
+        typeof row.duration_seconds === 'number'
+          ? row.duration_seconds
+          : undefined,
+      lastPositionSeconds:
+        typeof row.last_position_seconds === 'number'
+          ? row.last_position_seconds
+          : 0,
+      playbackRate:
+        typeof row.playback_rate === 'number' ? row.playback_rate : 1,
+      title: row.title ? String(row.title) : undefined,
+      entityId: row.entity_id ? String(row.entity_id) : undefined,
+      entityType: row.entity_type as AudioEntityType | undefined,
+      cloudSaved: true,
     };
-  } catch (err) {
-    console.warn('loadAudioClipById error:', err);
+  } catch {
     return null;
   }
 }
 
-/**
- * Lists all saved audio clips for the current user across devices.
- */
 export async function listUserAudioClips(
   uid: string | null | undefined
 ): Promise<SavedAudioClipSummary[]> {
-  if (!uid) return [];
+  if (!uid || !isSupabaseConfigured || !supabase) return [];
   try {
-    const snap = await getDocs(
-      query(collection(db, 'users', uid, 'audioCache'), where('ownerId', '==', uid))
-    );
-    return snap.docs
-      .map((d) => {
-        const raw = d.data() as Record<string, unknown>;
-        const updatedAt = raw.updatedAt as { toMillis?: () => number } | undefined;
-        return {
-          id: String(raw.id ?? d.id),
-          title: String(raw.title || raw.previewText || 'تسجيل صوتي محفوظ'),
-          previewText: String(raw.previewText || ''),
-          entityType: (raw.entityType as AudioEntityType) || 'other',
-          entityId: String(raw.entityId || ''),
-          voiceName: (raw.voiceName as ReadAloudVoiceName) || 'Kore',
-          speed: raw.speed === 'calm' ? 'calm' : 'normal',
-          mimeType: String(raw.mimeType || 'audio/wav'),
-          sizeBytes: Number(raw.sizeBytes ?? 0),
-          durationSeconds: Number(raw.durationSeconds ?? 0),
-          lastPositionSeconds: Number(raw.lastPositionSeconds ?? 0),
-          playbackRate: Number(raw.playbackRate ?? 1),
-          updatedAtMs: typeof updatedAt?.toMillis === 'function' ? updatedAt.toMillis() : 0,
-        } satisfies SavedAudioClipSummary;
-      })
-      .sort((a, b) => (b.updatedAtMs ?? 0) - (a.updatedAtMs ?? 0));
+    const rows = await withFirebaseTokenRetry(async (client) => {
+      const { data, error } = await client
+        .from('audio_cache')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('updated_at', { ascending: false });
+      if (error) throw error;
+      return (data || []) as Record<string, unknown>[];
+    });
+
+    return rows.map((raw) => {
+      const updatedStr =
+        typeof raw.updated_at === 'string' ? raw.updated_at : '';
+      const updatedMs = updatedStr ? Date.parse(updatedStr) : Number(raw.created_at_ms ?? 0);
+      return {
+        id: String(raw.id),
+        title: String(raw.title || 'مقطع صوتي محفوظ'),
+        previewText: '',
+        entityType: (raw.entity_type as AudioEntityType) || 'other',
+        entityId: String(raw.entity_id || ''),
+        voiceName: (raw.voice_name as ReadAloudVoiceName) || 'Kore',
+        speed: raw.speed === 'calm' ? 'calm' : 'normal',
+        mimeType: String(raw.mime_type || 'audio/wav'),
+        sizeBytes: Number(raw.size_bytes ?? 0),
+        durationSeconds: Number(raw.duration_seconds ?? 0),
+        lastPositionSeconds: Number(raw.last_position_seconds ?? 0),
+        playbackRate: Number(raw.playback_rate ?? 1),
+        updatedAtMs: Number.isFinite(updatedMs) ? updatedMs : 0,
+      };
+    });
   } catch (err) {
-    console.warn('Could not list audio clips:', err);
+    console.warn('Could not list Supabase audio clips:', err);
     return [];
   }
 }
 
 /**
- * Persists synthesized audio locally (IndexedDB) and in Firebase Storage + Firestore
- * (inline or chunked) so future plays & mobile/desktop devices never re-call /api/tts.
+ * Persists synthesized audio locally (IndexedDB) and in Supabase Storage + PostgreSQL
+ * so future plays & mobile/desktop devices stream seamlessly without regenerating TTS.
  */
 export async function saveAudioClipToCache(
   uid: string | null | undefined,
@@ -786,106 +705,74 @@ export async function saveAudioClipToCache(
   });
 
   let cloudSaved = false;
-  let cloudErrorCode: CachedAudioEntry['cloudErrorCode'] = uid ? undefined : 'NO_AUTH';
+  let cloudErrorCode: CachedAudioEntry['cloudErrorCode'] = uid
+    ? undefined
+    : 'NO_AUTH';
 
-  if (uid) {
+  if (uid && isSupabaseConfigured && supabase) {
     const ext = compacted.mimeType.includes('mpeg') ? 'mp3' : 'wav';
-    const storagePath = `users/${uid}/audioCache/${cacheId}.${ext}`;
-    let downloadUrl = '';
-
-    try {
-      const storageRef = ref(storage, storagePath);
-      await uploadBytes(storageRef, blob, { contentType: compacted.mimeType });
-      downloadUrl = await getDownloadURL(storageRef);
-    } catch (storageErr) {
-      console.warn('Storage upload for audio cache failed, using Firestore inline/chunked persistence:', storageErr);
-    }
-
-    const dataUrl = `data:${compacted.mimeType};base64,${compacted.base64}`;
-    const inlineDataUrl = dataUrl.length <= 750_000 ? dataUrl : '';
-    let chunkCount = 0;
+    const storagePath = `${uid}/audio/${cacheId}.${ext}`;
     const safeSizeBytes = Math.max(0, Math.round(blob.size));
 
-    const docPath = `users/${uid}/audioCache/${cacheId}`;
     try {
-      if (!inlineDataUrl && dataUrl.length <= 18_000_000) {
-        const totalChunks = Math.ceil(dataUrl.length / CHUNK_CHAR_SIZE);
-        chunkCount = totalChunks;
-      }
-
-      await setDoc(doc(db, 'users', uid, 'audioCache', cacheId), {
-        id: cacheId,
-        ownerId: uid,
-        voiceName,
-        speed,
-        mimeType: compacted.mimeType.slice(0, 80),
-        sizeBytes: safeSizeBytes,
-        storagePath: downloadUrl ? storagePath : '',
-        downloadUrl,
-        inlineDataUrl,
-        previewText: clean.slice(0, 120),
-        entityType: meta?.entityType || 'other',
-        entityId: (meta?.entityId || '').slice(0, 128),
-        title: (meta?.title || clean.slice(0, 80)).slice(0, 200),
-        contentHash,
-        durationSeconds: compacted.durationSeconds,
-        lastPositionSeconds: 0,
-        playbackRate: 1,
-        chunkCount,
-        updatedAt: serverTimestamp(),
-      });
-
-      if (chunkCount > 0) {
-        const batch = writeBatch(db);
-        for (let i = 0; i < chunkCount; i++) {
-          const chunkId = `chunk_${String(i).padStart(4, '0')}`;
-          const slice = dataUrl.slice(i * CHUNK_CHAR_SIZE, (i + 1) * CHUNK_CHAR_SIZE);
-          batch.set(doc(db, 'users', uid, 'audioCache', cacheId, 'chunks', chunkId), {
-            id: chunkId,
-            ownerId: uid,
-            chunkIndex: i,
-            data: slice,
-            updatedAt: serverTimestamp(),
+      await withFirebaseTokenRetry(async (client) => {
+        const { error: uploadErr } = await client.storage
+          .from(AUDIO_BUCKET)
+          .upload(storagePath, blob, {
+            contentType: compacted.mimeType,
+            upsert: true,
           });
-        }
-        await batch.commit();
-      }
-      cloudSaved = true;
-    } catch (fsErr) {
-      const code = (fsErr as { code?: string })?.code ?? '';
-      const msg = fsErr instanceof Error ? fsErr.message.toLowerCase() : '';
-      const isPerm = code === 'permission-denied' || msg.includes('permission') || msg.includes('insufficient');
-      if (isPerm && (inlineDataUrl || downloadUrl)) {
-        // Fallback for older deployed firestore.rules that only allow legacy audioCache fields
+        if (uploadErr) throw uploadErr;
+
+        let signedUrl = '';
         try {
-          await setDoc(doc(db, 'users', uid, 'audioCache', cacheId), {
-            id: cacheId,
-            ownerId: uid,
-            voiceName,
-            speed,
-            mimeType: compacted.mimeType.slice(0, 80),
-            sizeBytes: safeSizeBytes,
-            storagePath: downloadUrl ? storagePath : '',
-            downloadUrl,
-            inlineDataUrl,
-            previewText: clean.slice(0, 120),
-            updatedAt: serverTimestamp(),
-          });
-          cloudSaved = true;
-        } catch (fallbackErr) {
-          console.warn('Legacy Firestore audioCache fallback failed:', fallbackErr);
-          cloudErrorCode = 'PERMISSION';
-        }
-      } else {
-        cloudErrorCode = isPerm ? 'PERMISSION' : 'NETWORK';
-        console.warn('Firestore audioCache write failed:', fsErr);
-        try {
-          handleFirestoreError(fsErr, OperationType.WRITE, docPath);
+          const { data: signed } = await client.storage
+            .from(AUDIO_BUCKET)
+            .createSignedUrl(storagePath, 3600);
+          if (signed?.signedUrl) signedUrl = signed.signedUrl;
         } catch {
-          // Keep playing audio locally even if cloud quota/network error occurs
+          // Optional
         }
-      }
+
+        const { error: rowErr } = await client.from('audio_cache').upsert(
+          {
+            owner_id: uid,
+            id: cacheId,
+            entity_type: meta?.entityType || 'other',
+            entity_id: (meta?.entityId || '').slice(0, 128),
+            title: (meta?.title || clean.slice(0, 80)).slice(0, 200),
+            content_hash: contentHash,
+            voice_name: voiceName,
+            speed,
+            mime_type: compacted.mimeType.slice(0, 80),
+            size_bytes: safeSizeBytes,
+            duration_seconds: compacted.durationSeconds,
+            last_position_seconds: 0,
+            playback_rate: 1,
+            storage_bucket: AUDIO_BUCKET,
+            storage_path: storagePath,
+            download_url: signedUrl,
+            created_at_ms: Date.now(),
+          },
+          { onConflict: 'owner_id,id' }
+        );
+        if (rowErr) throw rowErr;
+      });
+      cloudSaved = true;
+    } catch (err) {
+      const msg =
+        err && typeof err === 'object' && 'message' in err
+          ? String((err as { message?: string }).message).toLowerCase()
+          : '';
+      const isPerm =
+        isJwtExpiredOrAuthError(err) ||
+        msg.includes('row-level security') ||
+        msg.includes('permission denied');
+      cloudErrorCode = isPerm ? 'PERMISSION' : 'NETWORK';
+      console.warn('Supabase audioCache write failed:', err);
     }
+  } else if (uid && !isSupabaseConfigured) {
+    cloudErrorCode = 'NETWORK';
   }
 
   return {
@@ -906,7 +793,7 @@ export async function saveAudioClipToCache(
 }
 
 /**
- * Updates resume playback position & speed locally and in Firestore cleanly.
+ * Updates resume playback position & speed locally and in Supabase cleanly.
  */
 export async function updateAudioPlaybackProgress(
   uid: string | null | undefined,
@@ -935,17 +822,197 @@ export async function updateAudioPlaybackProgress(
     // ignore local write errors
   }
 
-  if (!uid || !cacheId) return;
+  if (!uid || !cacheId || !isSupabaseConfigured || !supabase) return;
   try {
-    await updateDoc(doc(db, 'users', uid, 'audioCache', cacheId), {
-      lastPositionSeconds: safePos,
-      playbackRate: safeRate,
-      ...(typeof durationSeconds === 'number' && durationSeconds > 0
-        ? { durationSeconds: Math.round(durationSeconds * 10) / 10 }
-        : {}),
-      updatedAt: serverTimestamp(),
+    await withFirebaseTokenRetry(async (client) => {
+      const updatePayload: Record<string, unknown> = {
+        last_position_seconds: safePos,
+        playback_rate: safeRate,
+      };
+      if (typeof durationSeconds === 'number' && durationSeconds > 0) {
+        updatePayload.duration_seconds = Math.round(durationSeconds * 10) / 10;
+      }
+      await client
+        .from('audio_cache')
+        .update(updatePayload)
+        .eq('owner_id', uid)
+        .eq('id', cacheId);
     });
   } catch {
     // Non-fatal if doc doesn't exist in cloud yet or offline
   }
 }
+
+function getAudioExtensionFromMime(mimeType: string): string {
+  const lower = mimeType.toLowerCase();
+  if (lower.includes('mp4') || lower.includes('m4a')) return 'mp4';
+  if (lower.includes('mpeg') || lower.includes('mp3')) return 'mp3';
+  if (lower.includes('ogg')) return 'ogg';
+  if (lower.includes('wav')) return 'wav';
+  return 'webm';
+}
+
+/**
+ * Stores a user-recorded microphone voice note directly in Supabase Storage (`audio-cache`)
+ * and saves its metadata & storage path in `public.audio_cache` (no database blobs).
+ */
+export async function saveVoiceRecordingToCache(
+  uid: string | null | undefined,
+  blob: Blob,
+  mimeType: string,
+  durationSeconds: number,
+  title: string,
+  meta?: AudioEntityMeta
+): Promise<{
+  cacheId: string;
+  storagePath: string;
+  cloudSaved: boolean;
+  errorMessage?: string;
+}> {
+  const cleanMime = (blob.type || mimeType || 'audio/webm').split(';')[0].trim();
+  const ext = getAudioExtensionFromMime(cleanMime);
+  const cacheId = `rec_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+  const cleanTitle = (title || 'تسجيل صوتي').trim().slice(0, 200);
+  const safeDuration = Math.max(0, Math.round(durationSeconds * 10) / 10);
+
+  await putLocalClip({
+    id: cacheId,
+    mimeType: cleanMime,
+    blob,
+    updatedAtMs: Date.now(),
+    durationSeconds: safeDuration,
+    lastPositionSeconds: 0,
+    playbackRate: 1,
+    entityId: meta?.entityId,
+    entityType: meta?.entityType || 'other',
+    title: cleanTitle,
+    contentHash: cacheId,
+  });
+
+  if (!uid || !isSupabaseConfigured || !supabase) {
+    return {
+      cacheId,
+      storagePath: '',
+      cloudSaved: false,
+      errorMessage: !uid
+        ? 'يجب تسجيل الدخول لحفظ التسجيل في السحابة.'
+        : 'إعدادات Supabase غير مكتملة.',
+    };
+  }
+
+  const storagePath = `${uid}/audio/${cacheId}.${ext}`;
+  try {
+    await withFirebaseTokenRetry(async (client) => {
+      const { error: uploadErr } = await client.storage
+        .from(AUDIO_BUCKET)
+        .upload(storagePath, blob, {
+          contentType: cleanMime,
+          upsert: true,
+        });
+      if (uploadErr) throw uploadErr;
+
+      let signedUrl = '';
+      try {
+        const { data: signed } = await client.storage
+          .from(AUDIO_BUCKET)
+          .createSignedUrl(storagePath, 3600);
+        if (signed?.signedUrl) signedUrl = signed.signedUrl;
+      } catch {
+        // Signed URL optional; authenticated download() works cross-device
+      }
+
+      const { error: rowErr } = await client.from('audio_cache').upsert(
+        {
+          owner_id: uid,
+          id: cacheId,
+          entity_type: meta?.entityType || 'other',
+          entity_id: (meta?.entityId || '').slice(0, 128),
+          title: cleanTitle,
+          content_hash: cacheId,
+          voice_name: 'Kore',
+          speed: 'normal',
+          mime_type: cleanMime.slice(0, 80),
+          size_bytes: Math.max(0, Math.round(blob.size)),
+          duration_seconds: safeDuration,
+          last_position_seconds: 0,
+          playback_rate: 1,
+          storage_bucket: AUDIO_BUCKET,
+          storage_path: storagePath,
+          download_url: signedUrl,
+          created_at_ms: Date.now(),
+        },
+        { onConflict: 'owner_id,id' }
+      );
+      if (rowErr) throw rowErr;
+    });
+
+    return { cacheId, storagePath, cloudSaved: true };
+  } catch (err) {
+    console.warn('Supabase voice recording upload failed:', err);
+    return {
+      cacheId,
+      storagePath: '',
+      cloudSaved: false,
+      errorMessage:
+        err instanceof Error ? err.message : 'تعذر حفظ التسجيل الصوتي في السحابة.',
+    };
+  }
+}
+
+/**
+ * Deletes an audio file from IndexedDB, Supabase `audio_cache` table, and `audio-cache` bucket.
+ */
+export async function deleteAudioClipFromCache(
+  uid: string | null | undefined,
+  cacheId: string
+): Promise<boolean> {
+  if (!cacheId) return false;
+
+  try {
+    const database = await openAudioDb();
+    await new Promise<void>((resolve) => {
+      const tx = database.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).delete(cacheId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // Non-fatal
+  }
+
+  if (!uid || !isSupabaseConfigured || !supabase) {
+    return true;
+  }
+
+  try {
+    await withFirebaseTokenRetry(async (client) => {
+      const { data: metaRow } = await client
+        .from('audio_cache')
+        .select('storage_bucket,storage_path')
+        .eq('owner_id', uid)
+        .eq('id', cacheId)
+        .maybeSingle();
+
+      const row = metaRow as
+        | { storage_bucket?: string; storage_path?: string }
+        | null;
+
+      const { error: delRowErr } = await client
+        .from('audio_cache')
+        .delete()
+        .eq('owner_id', uid)
+        .eq('id', cacheId);
+      if (delRowErr) throw delRowErr;
+
+      if (row?.storage_path && !row.storage_path.startsWith('users/')) {
+        const bucket = row.storage_bucket || AUDIO_BUCKET;
+        await client.storage.from(bucket).remove([row.storage_path]);
+      }
+    });
+    return true;
+  } catch (err) {
+    console.warn('Supabase audio clip delete failed:', err);
+    return false;
+  }
+}
+

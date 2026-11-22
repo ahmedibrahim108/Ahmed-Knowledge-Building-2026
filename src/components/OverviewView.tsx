@@ -72,9 +72,10 @@ import {
   resolveCourseStudyStage,
 } from '../data/curriculumData';
 import { OWNER_ADMIN_EMAIL } from '../firebase';
-import { CloudAttachmentItem } from '../services/firestoreSync';
+import { CloudAttachmentItem } from '../services/supabaseSync';
 import {
   SavedAudioClipSummary,
+  deleteAudioClipFromCache,
   listUserAudioClips,
   loadAudioClipById,
 } from '../utils/audioCache';
@@ -472,6 +473,21 @@ export default function OverviewView({
       setPlayingClipId(clip.id);
     } finally {
       setLoadingClipId(null);
+    }
+  };
+
+  const handleDeleteSavedClip = async (clip: SavedAudioClipSummary) => {
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    if (playingClipId === clip.id && dashAudioRef.current) {
+      dashAudioRef.current.pause();
+      setPlayingClipId(null);
+    }
+    const ok = await deleteAudioClipFromCache(user?.uid, clip.id);
+    if (ok) {
+      setSavedAudioClips((prev) => prev.filter((item) => item.id !== clip.id));
     }
   };
 
@@ -1317,26 +1333,41 @@ export default function OverviewView({
                       </p>
                     ) : (
                       <div className="space-y-1">
-                        {savedAudioClips.slice(0, 3).map((clip) => (
-                          <button
+                        {savedAudioClips.slice(0, 6).map((clip) => (
+                          <div
                             key={clip.id}
-                            type="button"
-                            onClick={() => void handleTogglePlaySavedClip(clip)}
-                            className="w-full flex items-center justify-between gap-2 px-2 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[11px] text-slate-800 cursor-pointer"
+                            className="w-full flex items-center justify-between gap-1.5 px-2 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded text-[11px] text-slate-800"
                           >
-                            <span className="truncate font-medium">
-                              {clip.title}
-                            </span>
-                            <span className="shrink-0 text-[#1E3A5F]">
-                              {loadingClipId === clip.id ? (
-                                '...'
-                              ) : playingClipId === clip.id ? (
-                                <Pause className="w-3.5 h-3.5" />
-                              ) : (
-                                <Play className="w-3.5 h-3.5" />
-                              )}
-                            </span>
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleTogglePlaySavedClip(clip)}
+                              className="flex-1 min-w-0 flex items-center justify-between gap-2 text-right cursor-pointer"
+                            >
+                              <span className="truncate font-medium">
+                                {clip.title}
+                              </span>
+                              <span className="shrink-0 text-[#1E3A5F]">
+                                {loadingClipId === clip.id ? (
+                                  '...'
+                                ) : playingClipId === clip.id ? (
+                                  <Pause className="w-3.5 h-3.5" />
+                                ) : (
+                                  <Play className="w-3.5 h-3.5" />
+                                )}
+                              </span>
+                            </button>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteSavedClip(clip)}
+                                title="حذف الملف الصوتي"
+                                aria-label="حذف الملف الصوتي"
+                                className="p-1 text-slate-400 hover:text-red-700 rounded cursor-pointer shrink-0"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
                         ))}
                       </div>
                     )}

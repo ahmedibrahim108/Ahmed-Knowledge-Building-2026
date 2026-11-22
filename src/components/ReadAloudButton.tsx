@@ -342,7 +342,7 @@ export default function ReadAloudButton({
       }
     }
 
-    // 1. Check IndexedDB / Firestore cross-device cache before /api/tts
+    // 1. Check IndexedDB / Supabase cross-device cache before /api/tts
     if (!forceRefresh) {
       const cached = await loadCachedAudioClip(effectiveUid, cleanText, voiceName, speed, {
         entityType,
@@ -429,7 +429,7 @@ export default function ReadAloudButton({
       }
       if (saved.cloudErrorCode === 'PERMISSION') {
         setErrorMsg(
-          'تم حفظ الصوت على هذا الجهاز، لكن تعذّرت المزامنة لقاعدة البيانات بسبب صلاحيات Firestore Rules.'
+          'تم حفظ الصوت على هذا الجهاز، لكن تعذّرت المزامنة مع قاعدة البيانات السحابية (تحقق من إعدادات Supabase وصلاحيات RLS).'
         );
       }
       onAudioSaved?.();

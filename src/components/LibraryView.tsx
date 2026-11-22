@@ -24,7 +24,7 @@ import {
   getTodayDateKey,
 } from '../data/curriculumData';
 import { auth } from '../firebase';
-import { CloudAttachmentItem } from '../services/firestoreSync';
+import { CloudAttachmentItem } from '../services/supabaseSync';
 import {
   downloadResourceAttachmentResult,
   isPdfAttachment,

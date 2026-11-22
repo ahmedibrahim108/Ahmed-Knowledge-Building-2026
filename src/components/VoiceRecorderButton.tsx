@@ -2,12 +2,22 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
+  CloudUpload,
   Loader2,
   Mic,
+  Pause,
+  Play,
   RefreshCw,
   Square,
+  Trash2,
 } from 'lucide-react';
 import { VoiceDialectMode } from '../data/curriculumData';
+import { auth } from '../firebase';
+import {
+  AudioEntityMeta,
+  deleteAudioClipFromCache,
+  saveVoiceRecordingToCache,
+} from '../utils/audioCache';
 
 interface VoiceRecorderButtonProps {
   onTranscript: (text: string) => void;
@@ -15,6 +25,7 @@ interface VoiceRecorderButtonProps {
   disabled?: boolean;
   onRequireAuth?: () => void;
   dialect?: VoiceDialectMode;
+  audioMeta?: AudioEntityMeta;
 }
 
 type RecorderPhase =
@@ -72,6 +83,7 @@ export default function VoiceRecorderButton({
   disabled = false,
   onRequireAuth,
   dialect = 'standard_arabic',
+  audioMeta,
 }: VoiceRecorderButtonProps) {
   const [phase, setPhase] = useState<RecorderPhase>('idle');
   const [seconds, setSeconds] = useState(0);
@@ -79,6 +91,14 @@ export default function VoiceRecorderButton({
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isPermissionError, setIsPermissionError] = useState(false);
+  const [lastClip, setLastClip] = useState<{
+    blob: Blob;
+    mimeType: string;
+    durationSeconds: number;
+    savedCacheId?: string;
+  } | null>(null);
+  const [savingClip, setSavingClip] = useState(false);
+  const [playingPreview, setPlayingPreview] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -88,6 +108,9 @@ export default function VoiceRecorderButton({
   const speechFinalTextRef = useRef<string>('');
   const speechInterimTextRef = useRef<string>('');
   const speechOnlyModeRef = useRef<boolean>(false);
+  const startedAtMsRef = useRef<number>(0);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (phase !== 'recording') {
@@ -109,6 +132,12 @@ export default function VoiceRecorderButton({
         // ignore
       }
       if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+      }
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current);
+      }
     };
   }, []);
 
@@ -278,6 +307,11 @@ export default function VoiceRecorderButton({
     setStatusNotice(null);
     setIsPermissionError(false);
     setLivePreview('');
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      setPlayingPreview(false);
+    }
+    setLastClip(null);
 
     if (!navigator.mediaDevices?.getUserMedia) {
       // Try pure browser SpeechRecognition if MediaDevices missing
@@ -359,6 +393,9 @@ export default function VoiceRecorderButton({
         const actualType = recorder.mimeType || mimeType || 'audio/webm';
         const blob = new Blob(chunksRef.current, { type: actualType });
         chunksRef.current = [];
+        const durationSec = startedAtMsRef.current
+          ? Math.max(1, Math.round((Date.now() - startedAtMsRef.current) / 1000))
+          : seconds;
 
         if (blob.size < 256) {
           if (backupSpeechText) {
@@ -372,6 +409,12 @@ export default function VoiceRecorderButton({
           );
           return;
         }
+
+        setLastClip({
+          blob,
+          mimeType: actualType,
+          durationSeconds: durationSec,
+        });
 
         setPhase('stopped_transcribing');
         try {
@@ -435,6 +478,7 @@ export default function VoiceRecorderButton({
       };
 
       mediaRecorderRef.current = recorder;
+      startedAtMsRef.current = Date.now();
       recorder.start(250);
       // Also run silent browser SpeechRecognition in parallel as resilience backup
       startShadowSpeechRecognition(false);
@@ -473,6 +517,76 @@ export default function VoiceRecorderButton({
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current = null;
     }
+  };
+
+  const handleTogglePlayLastClip = async () => {
+    if (!lastClip) return;
+    if (playingPreview && previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      setPlayingPreview(false);
+      return;
+    }
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+    }
+    const url = URL.createObjectURL(lastClip.blob);
+    previewUrlRef.current = url;
+    const audio = new Audio(url);
+    audio.onended = () => setPlayingPreview(false);
+    previewAudioRef.current = audio;
+    try {
+      await audio.play();
+      setPlayingPreview(true);
+    } catch {
+      setPlayingPreview(false);
+    }
+  };
+
+  const handleSaveLastClipToCloud = async () => {
+    if (!lastClip || savingClip) return;
+    const uid = auth?.currentUser?.uid;
+    if (!uid) {
+      onRequireAuth?.();
+      return;
+    }
+    setSavingClip(true);
+    setErrorMsg(null);
+    try {
+      const stamp = new Date().toLocaleTimeString('ar-EG', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const res = await saveVoiceRecordingToCache(
+        uid,
+        lastClip.blob,
+        lastClip.mimeType,
+        lastClip.durationSeconds,
+        audioMeta?.title ? `تسجيل: ${audioMeta.title}` : `تسجيل صوتي (${stamp})`,
+        audioMeta
+      );
+      if (res.cloudSaved) {
+        setLastClip((prev) =>
+          prev ? { ...prev, savedCacheId: res.cacheId } : prev
+        );
+        setStatusNotice('تم حفظ التسجيل الصوتي في السحابة');
+      } else {
+        setErrorMsg(res.errorMessage || 'تعذر حفظ التسجيل الصوتي في السحابة.');
+      }
+    } finally {
+      setSavingClip(false);
+    }
+  };
+
+  const handleDeleteLastClip = async () => {
+    if (!lastClip) return;
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      setPlayingPreview(false);
+    }
+    if (lastClip.savedCacheId) {
+      await deleteAudioClipFromCache(auth?.currentUser?.uid, lastClip.savedCacheId);
+    }
+    setLastClip(null);
   };
 
   return (
@@ -564,6 +678,54 @@ export default function VoiceRecorderButton({
         <span className="text-[11px] font-medium text-slate-500">
           الحالة: {statusNotice}
         </span>
+      )}
+
+      {lastClip && (phase === 'idle' || phase === 'stopped_done') && (
+        <div className="flex flex-wrap items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px]">
+          <button
+            type="button"
+            onClick={() => void handleTogglePlayLastClip()}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white border border-slate-200 text-slate-800 hover:bg-slate-100 cursor-pointer"
+          >
+            {playingPreview ? (
+              <Pause className="w-3 h-3 text-[#1E3A5F]" aria-hidden="true" />
+            ) : (
+              <Play className="w-3 h-3 text-[#1E3A5F]" aria-hidden="true" />
+            )}
+            <span>{playingPreview ? 'إيقاف' : 'تشغيل التسجيل'}</span>
+          </button>
+
+          {!lastClip.savedCacheId ? (
+            <button
+              type="button"
+              disabled={savingClip}
+              onClick={() => void handleSaveLastClipToCloud()}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-[#1E3A5F] text-white hover:bg-[#162C49] disabled:opacity-50 cursor-pointer"
+            >
+              {savingClip ? (
+                <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+              ) : (
+                <CloudUpload className="w-3 h-3" aria-hidden="true" />
+              )}
+              <span>{savingClip ? 'جاري الحفظ...' : 'حفظ الصوت في السحابة'}</span>
+            </button>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 font-medium">
+              <CheckCircle2 className="w-3 h-3" aria-hidden="true" />
+              <span>محفوظ سحابيًا</span>
+            </span>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void handleDeleteLastClip()}
+            title="حذف التسجيل"
+            aria-label="حذف التسجيل"
+            className="inline-flex items-center p-1 rounded text-slate-400 hover:text-red-700 hover:bg-red-50 cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        </div>
       )}
 
       {errorMsg && (

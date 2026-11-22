@@ -1,29 +1,12 @@
 import mammoth from 'mammoth';
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  serverTimestamp,
-  setDoc,
-  writeBatch,
-} from 'firebase/firestore';
-import {
-  deleteObject,
-  getBlob,
-  getDownloadURL,
-  ref,
-  uploadBytes,
-} from 'firebase/storage';
 import { BookNote } from '../data/curriculumData';
+import { auth } from '../firebase';
 import {
-  OperationType,
-  auth,
-  db,
-  handleFirestoreError,
-  storage,
-} from '../firebase';
+  formatSupabaseErrorMessage,
+  isSupabaseConfigured,
+  supabase,
+  withFirebaseTokenRetry,
+} from '../services/supabaseClient';
 import { ensureRichHtml, richHtmlToPlainText } from './richText';
 
 export interface ParsedImportedDocument {
@@ -45,6 +28,9 @@ export interface BundledAppDocument {
 }
 
 export const BUNDLED_APP_DOCUMENTS: BundledAppDocument[] = [];
+
+const STUDY_FILES_BUCKET = 'study-files';
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
 
 function escapeHtml(text: string): string {
   return text
@@ -221,7 +207,6 @@ export async function parseDocumentFile(
     };
   }
 
-  // Binary PDF or other file formats — attach metadata cleanly
   return {
     title: baseTitle,
     html: `<p><strong>مستند مرفق:</strong> ${escapeHtml(file.name)} (${Math.max(1, Math.round(file.size / 1024))} كيلوبايت)</p>`,
@@ -230,7 +215,7 @@ export async function parseDocumentFile(
   };
 }
 
-// --- Lightweight IndexedDB cache for locally attached files (PDF / Word / Docs) ---
+// --- Lightweight IndexedDB local offline cache ---
 const IDB_NAME = 'mizan_attachments_db';
 const IDB_STORE = 'files';
 
@@ -329,74 +314,42 @@ export interface UploadedAttachmentResult {
   errorMessage?: string;
 }
 
-const MAX_FIRESTORE_CHUNKED_BYTES = 15 * 1024 * 1024; // 15 MB across up to 31 chunks
-const SINGLE_DOC_THRESHOLD_BYTES = 500 * 1024; // ~670 KB base64 (< 900 KB rule)
-const RAW_CHUNK_BYTES = 510 * 1024; // Divisible by 3 -> ~680 KB base64 (< 850 KB chunk rule)
-
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  const step = 0x8000;
-  const parts: string[] = [];
-  for (let i = 0; i < bytes.length; i += step) {
-    const sub = bytes.subarray(i, Math.min(i + step, bytes.length));
-    parts.push(String.fromCharCode(...sub));
-  }
-  return btoa(parts.join(''));
-}
-
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const len = binary.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-function fileToDataUrl(file: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
-async function dataUrlToBlob(
-  dataUrl: string,
-  mimeType?: string
-): Promise<Blob | null> {
-  try {
-    const res = await fetch(dataUrl);
-    const rawBlob = await res.blob();
-    if (mimeType && rawBlob.type !== mimeType) {
-      return new Blob([rawBlob], { type: mimeType });
-    }
-    return rawBlob;
-  } catch {
-    try {
-      const commaIdx = dataUrl.indexOf(',');
-      if (commaIdx === -1) return null;
-      const b64 = dataUrl.slice(commaIdx + 1);
-      const bytes = base64ToUint8Array(b64);
-      const buf = new ArrayBuffer(bytes.byteLength);
-      new Uint8Array(buf).set(bytes);
-      return new Blob([buf], { type: mimeType || 'application/octet-stream' });
-    } catch {
-      return null;
-    }
-  }
+function buildSafeStorageFileName(fileName: string): string {
+  const clean = fileName
+    .replace(/[^a-zA-Z0-9._\-\u0600-\u06FF]/g, '_')
+    .replace(/^_+/, '')
+    .slice(0, 120);
+  // Supabase Storage keys work cleanest with ASCII-safe characters + preserved extension
+  const extMatch = clean.match(/(\.[a-zA-Z0-9]{1,10})$/);
+  const ext = extMatch ? extMatch[1].toLowerCase() : '';
+  const asciiStem = clean
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64);
+  return `${asciiStem || 'attachment'}${ext}`;
 }
 
 export async function uploadResourceAttachment(
   uid: string | undefined,
   resourceId: string,
-  file: File
+  file: File,
+  extractedPreview?: string
 ): Promise<UploadedAttachmentResult> {
   const mimeType = inferMimeTypeFromFileName(file.name, file.type);
 
-  // Always persist locally in IndexedDB for instant offline/in-app viewing
+  // Persist locally in IndexedDB for instant offline viewing on this device
   await saveLocalAttachment(resourceId, file, file.name);
+
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return {
+      mimeType,
+      sizeBytes: file.size,
+      uploadedToCloud: false,
+      errorMessage: 'الحد الأقصى لحجم الملف في التخزين السحابي هو 50 ميجابايت.',
+    };
+  }
 
   const effectiveUid = uid || auth?.currentUser?.uid;
   if (!effectiveUid) {
@@ -405,140 +358,81 @@ export async function uploadResourceAttachment(
       sizeBytes: file.size,
       uploadedToCloud: false,
       errorMessage:
-        'سجّل الدخول أولاً ليتم حفظ الملف في السحابة ومزامنته بين الهاتف واللابتوب.',
+        'سجّل الدخول أولاً ليتم رفع الملف إلى التخزين السحابي (Supabase) ومزامنته بين الهاتف واللابتوب.',
+    };
+  }
+
+  if (!isSupabaseConfigured || !supabase) {
+    return {
+      mimeType,
+      sizeBytes: file.size,
+      uploadedToCloud: false,
+      errorMessage:
+        'تم حفظ الملف محليًا على هذا الجهاز. لم تُضبط إعدادات Supabase السحابية بعد.',
     };
   }
 
   const safeId = resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
-  let storagePath: string | undefined;
-  let downloadUrl: string | undefined;
-  let uploadedToCloud = false;
-  let errorMessage: string | undefined;
+  const safeFileName = buildSafeStorageFileName(file.name);
+  const storagePath = `${effectiveUid}/resources/${safeId}/${safeFileName}`;
 
-  // 1) Try Firebase Storage first (fast CDN + supports files > 15 MB)
-  if (storage) {
-    try {
-      const safeFileName =
-        file.name
-          .replace(/[^a-zA-Z0-9._\-\u0600-\u06FF]/g, '_')
-          .replace(/^_+/, '')
-          .slice(0, 120) || 'attachment';
-      storagePath = `users/${effectiveUid}/resources/${safeId}/${safeFileName}`;
-      const storageRef = ref(storage, storagePath);
-      await uploadBytes(storageRef, file, { contentType: mimeType });
-      downloadUrl = await getDownloadURL(storageRef);
-      uploadedToCloud = true;
-    } catch (err) {
-      console.warn('Cloud Storage upload fallback:', err);
-      storagePath = undefined;
-    }
-  }
+  try {
+    await withFirebaseTokenRetry(async (client) => {
+      const { error: uploadErr } = await client.storage
+        .from(STUDY_FILES_BUCKET)
+        .upload(storagePath, file, {
+          contentType: mimeType,
+          upsert: true,
+        });
+      if (uploadErr) throw uploadErr;
 
-  // 2) Always mirror up to 15 MB into Firestore (`attachments` + optional `chunks`)
-  //    so cross-device download & opening NEVER break from Storage CORS issues.
-  if (db && file.size <= MAX_FIRESTORE_CHUNKED_BYTES) {
-    try {
-      const attachmentDocRef = doc(db, 'users', effectiveUid, 'attachments', safeId);
-
-      if (file.size <= SINGLE_DOC_THRESHOLD_BYTES) {
-        const dataUrl = await fileToDataUrl(file);
-        if (dataUrl.length > 0 && dataUrl.length <= 899_000) {
-          await setDoc(attachmentDocRef, {
-            id: safeId,
-            ownerId: effectiveUid,
-            fileName: file.name.slice(0, 200),
-            mimeType: mimeType.slice(0, 120),
-            sizeBytes: file.size,
-            dataUrl,
-            chunkCount: 1,
-            ...(storagePath ? { storagePath: storagePath.slice(0, 400) } : {}),
-            ...(downloadUrl ? { downloadUrl: downloadUrl.slice(0, 1200) } : {}),
-            updatedAt: serverTimestamp(),
-          });
-          uploadedToCloud = true;
-        }
-      } else {
-        const buffer = await file.arrayBuffer();
-        const totalChunks = Math.max(1, Math.ceil(buffer.byteLength / RAW_CHUNK_BYTES));
-        if (totalChunks <= 40) {
-          // Master Gate rule requires parent attachment doc to exist before creating chunks
-          await setDoc(attachmentDocRef, {
-            id: safeId,
-            ownerId: effectiveUid,
-            fileName: file.name.slice(0, 200),
-            mimeType: mimeType.slice(0, 120),
-            sizeBytes: file.size,
-            dataUrl: '',
-            chunkCount: totalChunks,
-            ...(storagePath ? { storagePath: storagePath.slice(0, 400) } : {}),
-            ...(downloadUrl ? { downloadUrl: downloadUrl.slice(0, 1200) } : {}),
-            updatedAt: serverTimestamp(),
-          });
-
-          const BATCH_SIZE = 4;
-          for (let start = 0; start < totalChunks; start += BATCH_SIZE) {
-            const batch = writeBatch(db);
-            const end = Math.min(start + BATCH_SIZE, totalChunks);
-            for (let idx = start; idx < end; idx++) {
-              const sliceStart = idx * RAW_CHUNK_BYTES;
-              const sliceEnd = Math.min(
-                sliceStart + RAW_CHUNK_BYTES,
-                buffer.byteLength
-              );
-              const bytes = new Uint8Array(buffer.slice(sliceStart, sliceEnd));
-              const b64 = uint8ArrayToBase64(bytes);
-              const chunkId = `chunk_${String(idx).padStart(3, '0')}`;
-              const chunkRef = doc(
-                db,
-                'users',
-                effectiveUid,
-                'attachments',
-                safeId,
-                'chunks',
-                chunkId
-              );
-              batch.set(chunkRef, {
-                id: chunkId,
-                ownerId: effectiveUid,
-                attachmentId: safeId,
-                chunkIndex: idx,
-                data: b64,
-                updatedAt: serverTimestamp(),
-              });
-            }
-            await batch.commit();
-          }
-          uploadedToCloud = true;
-        }
-      }
-    } catch (err) {
+      let signedUrl = '';
       try {
-        handleFirestoreError(
-          err,
-          OperationType.WRITE,
-          `users/${effectiveUid}/attachments/${safeId}`
-        );
+        const { data: signedData } = await client.storage
+          .from(STUDY_FILES_BUCKET)
+          .createSignedUrl(storagePath, 3600);
+        if (signedData?.signedUrl) {
+          signedUrl = signedData.signedUrl;
+        }
       } catch {
-        // Logged via handleFirestoreError; preserve Storage upload status if succeeded
+        // Optional convenience URL; direct download() always works with Firebase JWT
       }
-      if (!uploadedToCloud) {
-        errorMessage =
-          'تعذر رفع الملف إلى قاعدة البيانات السحابية. تحقق من الاتصال بالإنترنت أو صلاحيات الحساب وحاول مجددًا.';
-      }
-    }
-  } else if (!uploadedToCloud && file.size > MAX_FIRESTORE_CHUNKED_BYTES) {
-    errorMessage =
-      'حجم الملف أكبر من 15 ميجابايت وتعذر رفعه إلى Firebase Storage. جرّب ضغط الملف أو تقليل حجمه.';
-  }
 
-  return {
-    storagePath,
-    downloadUrl,
-    mimeType,
-    sizeBytes: file.size,
-    uploadedToCloud,
-    errorMessage,
-  };
+      const { error: metaErr } = await client.from('file_attachments').upsert(
+        {
+          owner_id: effectiveUid,
+          id: safeId,
+          file_name: file.name.slice(0, 240),
+          mime_type: mimeType.slice(0, 120),
+          size_bytes: Math.max(0, Math.round(file.size)),
+          storage_bucket: STUDY_FILES_BUCKET,
+          storage_path: storagePath,
+          download_url: signedUrl,
+          extracted_preview: (extractedPreview || '').slice(0, 8000),
+        },
+        { onConflict: 'owner_id,id' }
+      );
+      if (metaErr) throw metaErr;
+    });
+
+    return {
+      storagePath,
+      mimeType,
+      sizeBytes: file.size,
+      uploadedToCloud: true,
+    };
+  } catch (err) {
+    console.warn('Supabase study file upload failed:', err);
+    return {
+      mimeType,
+      sizeBytes: file.size,
+      uploadedToCloud: false,
+      errorMessage: formatSupabaseErrorMessage(
+        err,
+        'تعذر رفع الملف إلى التخزين السحابي. تم الاحتفاظ به محليًا على هذا الجهاز.'
+      ),
+    };
+  }
 }
 
 export async function getPdfBlobForViewing(options: {
@@ -554,7 +448,7 @@ export async function getPdfBlobForViewing(options: {
     options.mimeType
   );
 
-  // 1) Local IndexedDB cache (same device / previously downloaded)
+  // 1) Local IndexedDB cache (instant open offline/online)
   if (options.resourceId) {
     const local = await getLocalAttachmentBlob(options.resourceId);
     if (local?.blob) {
@@ -568,111 +462,84 @@ export async function getPdfBlobForViewing(options: {
     }
   }
 
-  // 2) Firestore `attachments` (inline dataUrl OR multi-chunk subcollection)
   const effectiveUid = options.uid || auth?.currentUser?.uid;
-  if (db && effectiveUid && options.resourceId) {
+  let resolvedStoragePath = options.storagePath;
+  let resolvedBucket = STUDY_FILES_BUCKET;
+  let resolvedFallbackUrl = options.downloadUrl;
+  let resolvedMime = inferredMime;
+
+  // 2) Lookup metadata row in Postgres `file_attachments` if storagePath missing or to verify bucket
+  if (isSupabaseConfigured && supabase && effectiveUid && options.resourceId) {
     const safeId = options.resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
     try {
-      const snap = await getDoc(
-        doc(db, 'users', effectiveUid, 'attachments', safeId)
+      const { data } = await withFirebaseTokenRetry(async (client) =>
+        client
+          .from('file_attachments')
+          .select('storage_bucket,storage_path,download_url,mime_type,file_name')
+          .eq('owner_id', effectiveUid)
+          .eq('id', safeId)
+          .maybeSingle()
       );
-      if (snap.exists()) {
-        const raw = snap.data() as {
-          dataUrl?: string;
-          chunkCount?: number;
-          fileName?: string;
-          mimeType?: string;
+      if (data) {
+        const row = data as {
+          storage_bucket?: string;
+          storage_path?: string;
+          download_url?: string;
+          mime_type?: string;
+          file_name?: string;
         };
-        const resolvedMime = inferMimeTypeFromFileName(
-          raw.fileName || options.fileName,
-          raw.mimeType || options.mimeType
+        if (row.storage_bucket) resolvedBucket = row.storage_bucket;
+        if (row.storage_path) resolvedStoragePath = row.storage_path;
+        if (row.download_url) resolvedFallbackUrl = row.download_url;
+        resolvedMime = inferMimeTypeFromFileName(
+          row.file_name || options.fileName,
+          row.mime_type || inferredMime
         );
-
-        if (raw.dataUrl) {
-          const blob = await dataUrlToBlob(raw.dataUrl, resolvedMime);
-          if (blob) {
-            await saveLocalAttachment(
-              options.resourceId,
-              blob,
-              raw.fileName || options.fileName
-            );
-            return blob;
-          }
-        } else if ((raw.chunkCount ?? 0) >= 1) {
-          const chunksSnap = await getDocs(
-            collection(db, 'users', effectiveUid, 'attachments', safeId, 'chunks')
-          );
-          if (!chunksSnap.empty) {
-            const orderedChunks = chunksSnap.docs
-              .map(
-                (d) =>
-                  d.data() as {
-                    chunkIndex?: number;
-                    data?: string;
-                  }
-              )
-              .filter((c) => typeof c.data === 'string' && c.data.length > 0)
-              .sort((a, b) => (a.chunkIndex ?? 0) - (b.chunkIndex ?? 0));
-
-            if (orderedChunks.length > 0) {
-              const byteParts: ArrayBuffer[] = orderedChunks.map((c) => {
-                const decoded = base64ToUint8Array(c.data!);
-                const buf = new ArrayBuffer(decoded.byteLength);
-                new Uint8Array(buf).set(decoded);
-                return buf;
-              });
-              const assembled = new Blob(byteParts, { type: resolvedMime });
-              await saveLocalAttachment(
-                options.resourceId,
-                assembled,
-                raw.fileName || options.fileName
-              );
-              return assembled;
-            }
-          }
-        }
       }
     } catch (err) {
-      try {
-        handleFirestoreError(
-          err,
-          OperationType.GET,
-          `users/${effectiveUid}/attachments/${safeId}`
-        );
-      } catch {
-        // Logged via handleFirestoreError; continue to Storage fallback
-      }
+      console.warn('Supabase file_attachments lookup failed:', err);
     }
   }
 
-  // 3) Firebase Storage SDK `getBlob`
-  if (storage && options.storagePath) {
+  // 3) Download directly from private Supabase Storage bucket using authenticated Firebase JWT
+  if (
+    isSupabaseConfigured &&
+    supabase &&
+    resolvedStoragePath &&
+    !resolvedStoragePath.startsWith('users/')
+  ) {
     try {
-      const rawBlob = await getBlob(ref(storage, options.storagePath));
+      const rawBlob = await withFirebaseTokenRetry(async (client) => {
+        const { data, error } = await client.storage
+          .from(resolvedBucket)
+          .download(resolvedStoragePath!);
+        if (error || !data) throw error || new Error('Empty blob');
+        return data;
+      });
       const blob =
-        inferredMime !== 'application/octet-stream' &&
-        rawBlob.type !== inferredMime
-          ? new Blob([rawBlob], { type: inferredMime })
+        resolvedMime !== 'application/octet-stream' &&
+        rawBlob.type !== resolvedMime
+          ? new Blob([rawBlob], { type: resolvedMime })
           : rawBlob;
       if (options.resourceId && blob) {
         await saveLocalAttachment(options.resourceId, blob, options.fileName);
       }
       return blob;
     } catch (err) {
-      console.warn('Failed reading attachment via Storage SDK:', err);
+      console.warn('Supabase Storage download failed:', err);
     }
   }
 
-  // 4) Direct HTTPS downloadUrl fetch fallback
-  if (options.downloadUrl) {
+  // 4) Direct HTTPS downloadUrl fallback (legacy or signed URL)
+  if (resolvedFallbackUrl) {
     try {
-      const res = await fetch(options.downloadUrl);
+      const res = await fetch(resolvedFallbackUrl);
       if (res.ok) {
         const rawBlob = await res.blob();
         const blob =
-          inferredMime !== 'application/octet-stream' &&
-          rawBlob.type !== inferredMime
-            ? new Blob([rawBlob], { type: inferredMime })
+          resolvedMime !== 'application/octet-stream' &&
+          rawBlob.type !== resolvedMime
+            ? new Blob([rawBlob], { type: resolvedMime })
             : rawBlob;
         if (options.resourceId && blob) {
           await saveLocalAttachment(options.resourceId, blob, options.fileName);
@@ -680,7 +547,7 @@ export async function getPdfBlobForViewing(options: {
         return blob;
       }
     } catch (err) {
-      console.warn('Failed fetching attachment URL:', err);
+      console.warn('Fallback downloadUrl fetch failed:', err);
     }
   }
 
@@ -740,7 +607,7 @@ export async function downloadResourceAttachmentResult(options: {
   return {
     ok: false,
     errorMessage:
-      'لم يُعثر على محتوى هذا الملف في السحابة أو على هذا الجهاز. إذا كنت قد رفعته قبل تحديث المزامنة، أعد رفعه مرة واحدة من الجهاز الأصلي ليظهر تلقائيًا على كل أجهزتك.',
+      'لم يُعثر على محتوى هذا الملف في التخزين السحابي أو على هذا الجهاز. إذا كان الملف محفوظًا في Firebase السابق، قم بتشغيل ترحيل البيانات أو أعد رفعه مرة واحدة ليظهر على كل أجهزتك.',
   };
 }
 
@@ -761,26 +628,45 @@ export async function deleteCloudAttachment(
   resourceId?: string,
   storagePath?: string
 ): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) return;
   const effectiveUid = uid || auth?.currentUser?.uid;
-  if (effectiveUid && resourceId && db) {
-    const safeId = resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+  if (!effectiveUid) return;
+
+  let pathToRemove = storagePath;
+  const safeId = resourceId
+    ? resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
+    : undefined;
+
+  if (safeId) {
     try {
-      const chunksSnap = await getDocs(
-        collection(db, 'users', effectiveUid, 'attachments', safeId, 'chunks')
+      const { data } = await withFirebaseTokenRetry(async (client) =>
+        client
+          .from('file_attachments')
+          .select('storage_path')
+          .eq('owner_id', effectiveUid)
+          .eq('id', safeId)
+          .maybeSingle()
       );
-      if (!chunksSnap.empty) {
-        const batch = writeBatch(db);
-        chunksSnap.docs.forEach((d) => batch.delete(d.ref));
-        await batch.commit();
+      if (data && typeof (data as { storage_path?: string }).storage_path === 'string') {
+        pathToRemove = pathToRemove || (data as { storage_path: string }).storage_path;
       }
-      await deleteDoc(doc(db, 'users', effectiveUid, 'attachments', safeId));
+      await withFirebaseTokenRetry(async (client) =>
+        client
+          .from('file_attachments')
+          .delete()
+          .eq('owner_id', effectiveUid)
+          .eq('id', safeId)
+      );
     } catch {
       // Non-fatal cleanup
     }
   }
-  if (storage && storagePath) {
+
+  if (pathToRemove && !pathToRemove.startsWith('users/')) {
     try {
-      await deleteObject(ref(storage, storagePath));
+      await withFirebaseTokenRetry(async (client) =>
+        client.storage.from(STUDY_FILES_BUCKET).remove([pathToRemove!])
+      );
     } catch {
       // Non-fatal cleanup
     }
@@ -836,7 +722,9 @@ export function exportSingleBookNoteAsWord(note: BookNote): void {
     .filter(Boolean)
     .join(' · ');
 
-  const contentHtml = ensureRichHtml(note.content || '<p>لا توجد ملاحظات مسجلة بعد.</p>');
+  const contentHtml = ensureRichHtml(
+    note.content || '<p>لا توجد ملاحظات مسجلة بعد.</p>'
+  );
   const quotesHtml = note.quotes?.trim()
     ? `<h2>اقتباسات وأسئلة للنقاش</h2>${ensureRichHtml(note.quotes)}`
     : '';

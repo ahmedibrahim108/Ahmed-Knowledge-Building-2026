@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   CalendarClock,
@@ -24,7 +24,42 @@ import {
   getTodayDateKey,
   resolveCourseStudyStage,
 } from '../data/curriculumData';
+import { resolveDentalCaseCoverUrl } from '../utils/imageStorage';
 import { ActiveTab } from './Header';
+
+function FocusDentalCoverImg({
+  dc,
+}: {
+  dc: Pick<
+    DentalCase,
+    'title' | 'coverImageUrl' | 'coverStoragePath' | 'coverDataUrl'
+  >;
+}) {
+  const [src, setSrc] = useState(dc.coverDataUrl || dc.coverImageUrl || '');
+  const [retried, setRetried] = useState(false);
+
+  useEffect(() => {
+    setSrc(dc.coverDataUrl || dc.coverImageUrl || '');
+    setRetried(false);
+  }, [dc.coverDataUrl, dc.coverImageUrl, dc.coverStoragePath]);
+
+  if (!src && !dc.coverStoragePath) return null;
+
+  return (
+    <img
+      src={src || undefined}
+      alt=""
+      referrerPolicy="no-referrer"
+      onError={async () => {
+        if (retried || !dc.coverStoragePath) return;
+        setRetried(true);
+        const resolved = await resolveDentalCaseCoverUrl(dc.coverStoragePath);
+        if (resolved?.url) setSrc(resolved.url);
+      }}
+      className="w-12 h-12 rounded-lg object-cover border border-slate-200 shrink-0"
+    />
+  );
+}
 
 interface FocusViewProps {
   canEdit: boolean;
@@ -462,13 +497,7 @@ export default function FocusView({
                   onClick={onOpenDentalCases}
                   className="w-full text-right p-3 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white flex items-center gap-3 transition-colors cursor-pointer"
                 >
-                  {(dc.coverImageUrl || dc.coverDataUrl) && (
-                    <img
-                      src={dc.coverImageUrl || dc.coverDataUrl}
-                      alt=""
-                      className="w-12 h-12 rounded-lg object-cover border border-slate-200 shrink-0"
-                    />
-                  )}
+                  <FocusDentalCoverImg dc={dc} />
                   <div className="min-w-0 flex-1 space-y-0.5">
                     <p className="text-xs font-bold text-slate-900 truncate">
                       {dc.title}

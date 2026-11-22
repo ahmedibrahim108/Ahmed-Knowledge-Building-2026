@@ -8,37 +8,31 @@ import {
   signInWithRedirect,
   signOut,
 } from 'firebase/auth';
-import {
-  Firestore,
-  doc,
-  getDocFromServer,
-  getFirestore,
-} from 'firebase/firestore';
-import { FirebaseStorage, getStorage } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
 
 export const OWNER_ADMIN_EMAIL = 'farrag34567@gmail.com';
 
+export const FIREBASE_PROJECT_INFO = {
+  projectId: firebaseConfig.projectId,
+  firestoreDatabaseId: firebaseConfig.firestoreDatabaseId,
+  storageBucket: firebaseConfig.storageBucket,
+};
+
 let appInstance: FirebaseApp | null = null;
-let dbInstance: Firestore | null = null;
 let authInstance: Auth | null = null;
-let storageInstance: FirebaseStorage | null = null;
 export let firebaseInitError: string | null = null;
 
 try {
   appInstance = initializeApp(firebaseConfig);
-  dbInstance = getFirestore(appInstance, firebaseConfig.firestoreDatabaseId);
   authInstance = getAuth(appInstance);
-  storageInstance = getStorage(appInstance);
 } catch (err) {
   firebaseInitError =
-    err instanceof Error ? err.message : 'تعذر تهيئة الاتصال السحابي.';
-  console.error('Firebase initialization failed:', err);
+    err instanceof Error ? err.message : 'تعذر تهيئة خدمة تسجيل الدخول.';
+  console.error('Firebase Auth initialization failed:', err);
 }
 
-export const db = dbInstance as Firestore;
+export const firebaseApp = appInstance;
 export const auth = authInstance as Auth;
-export const storage = storageInstance as FirebaseStorage;
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
@@ -81,75 +75,4 @@ export async function signInWithGoogle() {
 export async function signOutUser() {
   if (!authInstance) return;
   return signOut(authInstance);
-}
-
-export enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-export interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
-  };
-}
-
-export function handleFirestoreError(
-  error: unknown,
-  operationType: OperationType,
-  path: string | null
-): never {
-  const currentUser = authInstance?.currentUser;
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: currentUser?.uid,
-      email: currentUser?.email,
-      emailVerified: currentUser?.emailVerified,
-      isAnonymous: currentUser?.isAnonymous,
-      tenantId: currentUser?.tenantId,
-      providerInfo:
-        currentUser?.providerData?.map((provider) => ({
-          providerId: provider.providerId,
-          email: provider.email,
-        })) || [],
-    },
-    operationType,
-    path,
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
-
-async function testConnection() {
-  if (!dbInstance) return;
-  try {
-    await getDocFromServer(doc(dbInstance, 'test', 'connection'));
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes('the client is offline')
-    ) {
-      console.error('Please check your Firebase configuration.');
-    }
-  }
-}
-
-if (dbInstance) {
-  void testConnection();
 }

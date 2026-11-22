@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getBlob, getDownloadURL, ref } from 'firebase/storage';
 import {
   Camera,
   CheckCircle2,
@@ -17,8 +16,11 @@ import {
   PersonalCourse,
   getTodayDateKey,
 } from '../data/curriculumData';
-import { storage } from '../firebase';
-import { uploadDentalCaseCover } from '../utils/imageStorage';
+import {
+  deleteDentalCaseCoverStorage,
+  resolveDentalCaseCoverUrl,
+  uploadDentalCaseCover,
+} from '../utils/imageStorage';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
@@ -108,23 +110,15 @@ function DentalCoverImage({
         if (triedStorage) return;
         setTriedStorage(true);
         if (dentalCase.coverStoragePath) {
-          try {
-            const blob = await getBlob(ref(storage, dentalCase.coverStoragePath));
-            if (blob) {
-              setSrc(URL.createObjectURL(blob));
-              return;
-            }
-          } catch {
-            try {
-              const fresh = await getDownloadURL(
-                ref(storage, dentalCase.coverStoragePath)
-              );
-              if (fresh) setSrc(fresh);
-            } catch {
-              // keep empty fallback
-            }
+          const resolved = await resolveDentalCaseCoverUrl(
+            dentalCase.coverStoragePath
+          );
+          if (resolved?.url) {
+            setSrc(resolved.url);
+            return;
           }
-        } else if (dentalCase.coverDataUrl && src !== dentalCase.coverDataUrl) {
+        }
+        if (dentalCase.coverDataUrl && src !== dentalCase.coverDataUrl) {
           setSrc(dentalCase.coverDataUrl);
         }
       }}
@@ -165,6 +159,7 @@ export default function DentalCasesView({
   const [coverStoragePath, setCoverStoragePath] = useState<string>('');
   const [coverDataUrl, setCoverDataUrl] = useState<string>('');
   const [uploadingCover, setUploadingCover] = useState(false);
+  const [coverUploadError, setCoverUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const dentalCourses = useMemo(
@@ -215,6 +210,7 @@ export default function DentalCasesView({
     setCoverImageUrl('');
     setCoverStoragePath('');
     setCoverDataUrl('');
+    setCoverUploadError(null);
   };
 
   const beginEditCase = (dc: DentalCase) => {
@@ -257,6 +253,7 @@ export default function DentalCasesView({
     if (!cleanTitle) return;
 
     setUploadingCover(true);
+    setCoverUploadError(null);
     try {
       const targetId =
         editingCaseId ||
@@ -267,10 +264,18 @@ export default function DentalCasesView({
       let finalDataUrl = coverDataUrl;
 
       if (coverFile) {
+        const previousPath = coverStoragePath;
         const uploaded = await uploadDentalCaseCover(targetId, coverFile, uid);
         finalImageUrl = uploaded.coverImageUrl;
         finalStoragePath = uploaded.coverStoragePath;
         finalDataUrl = uploaded.coverDataUrl;
+        if (
+          previousPath &&
+          finalStoragePath &&
+          previousPath !== finalStoragePath
+        ) {
+          void deleteDentalCaseCoverStorage(previousPath);
+        }
       }
 
       const payload: Omit<DentalCase, 'id'> = {
@@ -294,6 +299,12 @@ export default function DentalCasesView({
 
       resetForm();
       setShowAddForm(false);
+    } catch (err) {
+      setCoverUploadError(
+        err instanceof Error
+          ? err.message
+          : 'تعذر رفع صورة الغلاف إلى التخزين السحابي.'
+      );
     } finally {
       setUploadingCover(false);
     }
@@ -435,6 +446,15 @@ export default function DentalCasesView({
               </button>
             </div>
           </div>
+
+          {coverUploadError && (
+            <div
+              role="alert"
+              className="px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800"
+            >
+              {coverUploadError}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <label className="block text-xs font-medium text-slate-700 sm:col-span-2">

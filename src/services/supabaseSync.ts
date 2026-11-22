@@ -1,0 +1,2249 @@
+import { User } from 'firebase/auth';
+import {
+  BookNote,
+  CalendarCategory,
+  CalendarColor,
+  CalendarEvent,
+  CalendarPreferences,
+  CourseStudyStage,
+  CustomCategory,
+  DEFAULT_CALENDAR_PREFERENCES,
+  DEFAULT_HUB_CATEGORIES,
+  DEFAULT_USER_PREFERENCES,
+  DentalCase,
+  DentalCaseStatus,
+  DomainInfo,
+  LearningHubId,
+  LearningPath,
+  LearningPathStage,
+  LearningPathStatus,
+  MeetingAttendanceStatus,
+  MonthPlan,
+  NoteCategoryType,
+  NoteColorKey,
+  PersonalCourse,
+  PersonalReflection,
+  PracticalProject,
+  ProjectStatus,
+  QuarterInfo,
+  READING_MODES_META,
+  ReadingItemStatus,
+  ReadingItemType,
+  ReadingLibraryItem,
+  ReadingMode,
+  ReflectionMood,
+  SmallTask,
+  StudyHistoryEntry,
+  StudyResource,
+  TaskPriority,
+  ThinkerInfo,
+  UnifiedTask,
+  UnifiedTaskStatus,
+  UserPreferences,
+  WeeklyMeeting,
+  WeeklyMeetingException,
+  WeeklyMeetingFollowUp,
+} from '../data/curriculumData';
+import {
+  formatSupabaseErrorMessage,
+  isSupabaseConfigured,
+  supabase,
+  withFirebaseTokenRetry,
+} from './supabaseClient';
+
+function clip(val: string | undefined | null, max: number): string {
+  return (val ?? '').slice(0, max);
+}
+
+export function sanitizeId(raw: string): string {
+  const cleaned = raw.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return (cleaned || `item_${Date.now()}`).slice(0, 128);
+}
+
+const VALID_HUB_IDS: LearningHubId[] = ['marketing', 'dental_career', 'knowledge'];
+const VALID_READING_MODES: ReadingMode[] = READING_MODES_META.map((m) => m.id);
+const VALID_STUDY_STAGES: CourseStudyStage[] = [
+  'focus_now',
+  'in_progress',
+  'scheduled_later',
+  'deferred',
+  'heard_before',
+  'completed',
+];
+const VALID_NOTE_COLORS: NoteColorKey[] = [
+  'default',
+  'navy',
+  'emerald',
+  'amber',
+  'rose',
+  'violet',
+];
+
+function sanitizeCourseStudyStage(
+  raw: unknown,
+  completed?: boolean
+): CourseStudyStage {
+  if (VALID_STUDY_STAGES.includes(raw as CourseStudyStage)) {
+    return raw as CourseStudyStage;
+  }
+  return completed ? 'completed' : 'in_progress';
+}
+
+function sanitizeNoteColor(raw: unknown): NoteColorKey {
+  return VALID_NOTE_COLORS.includes(raw as NoteColorKey)
+    ? (raw as NoteColorKey)
+    : 'default';
+}
+
+function sanitizeHubId(raw: unknown): LearningHubId {
+  if (raw === 'marketing' || raw === 'dental_career' || raw === 'knowledge') {
+    return raw;
+  }
+  return 'knowledge';
+}
+
+function sanitizeReadingModes(raw: unknown): ReadingMode[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((v): v is ReadingMode =>
+      VALID_READING_MODES.includes(v as ReadingMode)
+    )
+    .slice(0, 5);
+}
+
+function sanitizeLearningMethods(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((v) => clip(typeof v === 'string' ? v.trim() : '', 80))
+    .filter(Boolean)
+    .slice(0, 15);
+}
+
+function sanitizeDateKeyOrEmpty(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : '';
+}
+
+function sanitizeTimeSlotOrEmpty(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  return /^\d{1,2}:\d{2}$/.test(trimmed) ? trimmed : '';
+}
+
+function sanitizeCalendarPrefs(raw?: Partial<CalendarPreferences>): CalendarPreferences {
+  const defaultView =
+    raw?.defaultView === 'day' ||
+    raw?.defaultView === 'week' ||
+    raw?.defaultView === 'month' ||
+    raw?.defaultView === 'year'
+      ? raw.defaultView
+      : DEFAULT_CALENDAR_PREFERENCES.defaultView;
+  const density =
+    raw?.density === 'compact' || raw?.density === 'expanded'
+      ? raw.density
+      : DEFAULT_CALENDAR_PREFERENCES.density;
+  const weekStartDay =
+    raw?.weekStartDay === 0 || raw?.weekStartDay === 1 || raw?.weekStartDay === 6
+      ? raw.weekStartDay
+      : DEFAULT_CALENDAR_PREFERENCES.weekStartDay;
+  const filterHub =
+    raw &&
+    (raw.filterHub === 'all' ||
+      VALID_HUB_IDS.includes(raw.filterHub as LearningHubId))
+      ? (raw.filterHub as LearningHubId | 'all')
+      : 'all';
+  const filterPriority =
+    raw?.filterPriority === 'low' ||
+    raw?.filterPriority === 'medium' ||
+    raw?.filterPriority === 'high'
+      ? raw.filterPriority
+      : 'all';
+  const filterStatus =
+    raw?.filterStatus === 'pending' || raw?.filterStatus === 'done'
+      ? raw.filterStatus
+      : 'all';
+
+  return {
+    defaultView,
+    density,
+    showCompleted: raw?.showCompleted !== false,
+    showWeekends: raw?.showWeekends !== false,
+    weekStartDay,
+    filterHub,
+    filterPriority,
+    filterStatus,
+  };
+}
+
+function sanitizeResourceList(items: StudyResource[]): StudyResource[] {
+  return (items || []).slice(0, 40).map((r) => ({
+    id: clip(r.id || `res-${Date.now()}`, 128),
+    title: clip(r.title || 'مصدر دراسي', 300),
+    type: r.type || 'كتاب',
+    note: clip(r.note || '', 600),
+    searchQuery: clip(r.searchQuery || r.title || '', 300),
+    ...(r.externalUrl ? { externalUrl: clip(r.externalUrl, 800) } : {}),
+    ...(r.attachmentName ? { attachmentName: clip(r.attachmentName, 200) } : {}),
+    ...(r.extractedPreview
+      ? { extractedPreview: clip(r.extractedPreview, 8000) }
+      : {}),
+    ...(r.storagePath ? { storagePath: clip(r.storagePath, 400) } : {}),
+    ...(r.downloadUrl ? { downloadUrl: clip(r.downloadUrl, 1200) } : {}),
+    ...(r.mimeType ? { mimeType: clip(r.mimeType, 120) } : {}),
+    ...(typeof r.sizeBytes === 'number' && r.sizeBytes >= 0
+      ? { sizeBytes: Math.round(r.sizeBytes) }
+      : {}),
+    custom: Boolean(r.custom),
+  }));
+}
+
+// ============================================================================
+// Payload Builders (TypeScript Domain Model -> PostgreSQL Row)
+// ============================================================================
+
+export function buildQuarterRow(uid: string, q: QuarterInfo) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(q.id),
+    number: Math.max(1, Math.min(20, Math.round(q.number))),
+    title: clip(q.title || `المرحلة ${q.number}`, 200),
+    subtitle: clip(q.subtitle || '', 300),
+  };
+}
+
+export function buildMonthRow(uid: string, m: MonthPlan) {
+  const docId = sanitizeId(m.docId || `month-${m.id}`);
+  return {
+    owner_id: uid,
+    doc_id: docId,
+    month_number: Math.max(1, Math.min(60, Math.round(m.id))),
+    hub_id: sanitizeHubId(m.hubId),
+    quarter: Math.max(1, Math.min(20, Math.round(m.quarter))),
+    quarter_title: clip(m.quarterTitle, 200),
+    theme: clip(m.theme, 250),
+    foundational: {
+      title: clip(m.foundational?.title, 300),
+      author: clip(m.foundational?.author, 200),
+      format: clip(m.foundational?.format || 'كتاب', 80),
+      domainId: sanitizeId(m.foundational?.domainId || 'islamic_thought'),
+      pace: clip(m.foundational?.pace, 120),
+      focus: clip(m.foundational?.focus, 400),
+    },
+    exploratory: {
+      title: clip(m.exploratory?.title, 300),
+      author: clip(m.exploratory?.author, 200),
+      format: clip(m.exploratory?.format || 'كتاب', 80),
+      domainId: sanitizeId(m.exploratory?.domainId || 'philosophy_logic'),
+      pace: clip(m.exploratory?.pace, 120),
+      focus: clip(m.exploratory?.focus, 400),
+    },
+    course_id: Math.max(0, Math.round(m.courseId || 0)),
+    discussion_prompt: clip(m.discussionPrompt, 500),
+    application_task: clip(m.applicationTask, 500),
+    activities: {
+      reading: Boolean(m.activities?.reading),
+      listening: Boolean(m.activities?.listening),
+      summarizing: Boolean(m.activities?.summarizing),
+      discussing: Boolean(m.activities?.discussing),
+    },
+    status: m.status,
+    notes: clip(m.notes, 20000),
+    tasks: (m.tasks || []).slice(0, 60).map((t) => ({
+      id: clip(t.id, 128),
+      text: clip(t.text, 500),
+      track: t.track,
+      done: Boolean(t.done),
+      custom: Boolean(t.custom),
+    })),
+    resources: sanitizeResourceList(m.resources || []),
+    reading_modes: sanitizeReadingModes(m.readingModes),
+    learning_methods: sanitizeLearningMethods(m.learningMethods),
+    review_count: Math.max(0, Math.min(999, Math.round(m.reviewCount ?? 0))),
+    listen_count: Math.max(0, Math.min(999, Math.round(m.listenCount ?? 0))),
+    repetition_stage: Math.max(0, Math.min(10, Math.round(m.repetitionStage ?? 0))),
+    next_review_date_key: sanitizeDateKeyOrEmpty(m.nextReviewDateKey),
+    last_reviewed_date_key: sanitizeDateKeyOrEmpty(m.lastReviewedDateKey),
+  };
+}
+
+export function buildDomainRow(uid: string, d: DomainInfo, order: number) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(d.id),
+    sort_order: Math.max(0, Math.min(200, Math.round(d.order ?? order))),
+    hub_id: sanitizeHubId(d.hubId),
+    title: clip(d.title, 200),
+    subtitle: clip(d.subtitle, 200),
+    purpose: clip(d.purpose, 1000),
+    thinkers: (d.thinkers || []).slice(0, 30).map((t) => ({
+      name: clip(t.name, 160),
+      role: clip(t.role, 200),
+      keyWorks: (t.keyWorks || []).slice(0, 12).map((w) => clip(w, 200)),
+      contribution: clip(t.contribution, 600),
+    })),
+  };
+}
+
+export function buildCourseRow(uid: string, c: PersonalCourse) {
+  const docId = sanitizeId(c.docId || `course-${c.id}`);
+  const studyStage = sanitizeCourseStudyStage(c.studyStage, c.completed);
+  return {
+    owner_id: uid,
+    doc_id: docId,
+    course_number: Math.max(1, Math.min(999, Math.round(c.id))),
+    hub_id: sanitizeHubId(c.hubId),
+    title: clip(c.title, 300),
+    category: clip(c.category, 160),
+    study_stage: studyStage,
+    scheduled_period: clip(c.scheduledPeriod, 120),
+    instructor: clip(c.instructor, 160),
+    platform: clip(c.platform, 160),
+    duration_label: clip(c.durationLabel, 120),
+    start_date: clip(c.startDate, 60),
+    target_date: clip(c.targetDate, 60),
+    progress_pct: Math.max(0, Math.min(100, Math.round(c.progressPct ?? 0))),
+    notes: clip(c.notes, 20000),
+    linked_months: (c.linkedMonths || [])
+      .slice(0, 24)
+      .map((n) => Math.max(1, Math.min(60, Math.round(n)))),
+    complementary_book: clip(c.complementaryBook, 300),
+    book_author: clip(c.bookAuthor, 200),
+    application_milestone: clip(c.applicationMilestone, 600),
+    completed: studyStage === 'completed' ? true : Boolean(c.completed),
+    resources: sanitizeResourceList(c.resources || []),
+    tasks: (c.tasks || []).slice(0, 80).map((t) => ({
+      id: clip(t.id, 128),
+      text: clip(t.text, 500),
+      track: t.track,
+      done: Boolean(t.done),
+      custom: Boolean(t.custom),
+    })),
+    reading_modes: sanitizeReadingModes(c.readingModes),
+    learning_methods: sanitizeLearningMethods(c.learningMethods),
+    review_count: Math.max(0, Math.min(999, Math.round(c.reviewCount ?? 0))),
+    listen_count: Math.max(0, Math.min(999, Math.round(c.listenCount ?? 0))),
+    repetition_stage: Math.max(0, Math.min(10, Math.round(c.repetitionStage ?? 0))),
+    next_review_date_key: sanitizeDateKeyOrEmpty(c.nextReviewDateKey),
+    last_reviewed_date_key: sanitizeDateKeyOrEmpty(c.lastReviewedDateKey),
+  };
+}
+
+export function buildBookNoteRow(uid: string, bn: BookNote) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(bn.id),
+    hub_id: sanitizeHubId(bn.hubId),
+    note_type: bn.noteType || 'book',
+    note_color: sanitizeNoteColor(bn.noteColor),
+    book_title: clip(bn.bookTitle, 300),
+    author: clip(bn.author, 200),
+    course_id: Math.max(0, Math.round(bn.courseId ?? 0)),
+    course_title: clip(bn.courseTitle, 250),
+    lecture_title: clip(bn.lectureTitle, 250),
+    category_label: clip(bn.categoryLabel, 120),
+    progress_marker: clip(bn.progressMarker, 120),
+    content: clip(bn.content, 200000),
+    quotes: clip(bn.quotes, 60000),
+    updated_at_label: clip(bn.updatedAt, 100),
+    reading_modes: sanitizeReadingModes(bn.readingModes),
+    learning_methods: sanitizeLearningMethods(bn.learningMethods),
+    review_count: Math.max(0, Math.min(999, Math.round(bn.reviewCount ?? 0))),
+    listen_count: Math.max(0, Math.min(999, Math.round(bn.listenCount ?? 0))),
+    repetition_stage: Math.max(0, Math.min(10, Math.round(bn.repetitionStage ?? 0))),
+    next_review_date_key: sanitizeDateKeyOrEmpty(bn.nextReviewDateKey),
+    last_reviewed_date_key: sanitizeDateKeyOrEmpty(bn.lastReviewedDateKey),
+  };
+}
+
+export function buildCustomCategoryRow(uid: string, cat: CustomCategory) {
+  const hubId: LearningHubId | 'all' =
+    cat.hubId === 'marketing' ||
+    cat.hubId === 'dental_career' ||
+    cat.hubId === 'knowledge'
+      ? cat.hubId
+      : 'all';
+  return {
+    owner_id: uid,
+    id: sanitizeId(cat.id),
+    hub_id: hubId,
+    title: clip(cat.title, 160),
+    description: clip(cat.description, 400),
+    color: cat.color,
+    created_at_label: clip(cat.createdAtLabel, 80),
+  };
+}
+
+export function buildHistoryRow(uid: string, entry: StudyHistoryEntry) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(entry.id),
+    action_type: entry.actionType,
+    title: clip(entry.title, 250),
+    detail: clip(entry.detail, 400),
+    target_tab: entry.targetTab,
+    target_note_id: clip(entry.targetNoteId, 128),
+    target_month_id: entry.targetMonthId ?? 0,
+    target_course_id: entry.targetCourseId ?? 0,
+    timestamp_label: clip(entry.timestampLabel, 80),
+    created_at_ms: Math.round(entry.createdAtMs),
+  };
+}
+
+export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
+  const rawCats = prefs.hubCategories ?? DEFAULT_HUB_CATEGORIES;
+  const cleanHubCategories: Record<LearningHubId, string[]> = {
+    marketing: (rawCats.marketing ?? DEFAULT_HUB_CATEGORIES.marketing)
+      .map((s) => clip(s.trim(), 120))
+      .filter(Boolean)
+      .slice(0, 30),
+    dental_career: (rawCats.dental_career ?? DEFAULT_HUB_CATEGORIES.dental_career)
+      .map((s) => clip(s.trim(), 120))
+      .filter(Boolean)
+      .slice(0, 30),
+    knowledge: (rawCats.knowledge ?? DEFAULT_HUB_CATEGORIES.knowledge)
+      .map((s) => clip(s.trim(), 120))
+      .filter(Boolean)
+      .slice(0, 30),
+  };
+
+  return {
+    owner_id: uid,
+    id: 'settings',
+    note_font_size: prefs.noteFontSize,
+    note_highlight_color: prefs.noteHighlightColor,
+    note_paper_tone: prefs.notePaperTone,
+    note_margin: prefs.noteMargin ?? 'normal',
+    note_width: prefs.noteWidth ?? 'focused',
+    note_border: prefs.noteBorder ?? 'subtle',
+    auto_add_timestamp_on_voice: Boolean(prefs.autoAddTimestampOnVoice),
+    voice_dialect: prefs.voiceDialect,
+    voice_insert_mode: prefs.voiceInsertMode,
+    read_aloud_voice: prefs.readAloudVoice,
+    read_aloud_speed: prefs.readAloudSpeed,
+    show_excel_export: prefs.showExcelExport !== false,
+    hub_categories: cleanHubCategories,
+    calendar_prefs: sanitizeCalendarPrefs(prefs.calendarPrefs),
+  };
+}
+
+export function buildReflectionRow(uid: string, r: PersonalReflection) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(r.id),
+    title: clip(r.title, 200),
+    content: clip(r.content, 20000),
+    mood_tag: r.moodTag,
+    pinned: Boolean(r.pinned),
+    created_at_label: clip(r.createdAtLabel, 80),
+    created_at_ms: Math.round(r.createdAtMs),
+  };
+}
+
+export function buildCalendarEventRow(uid: string, ev: CalendarEvent) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(ev.id),
+    date_key: clip(ev.dateKey, 20),
+    time_slot: clip(ev.timeSlot, 20),
+    end_time: sanitizeTimeSlotOrEmpty(ev.endTime),
+    duration_minutes:
+      typeof ev.durationMinutes === 'number' && ev.durationMinutes > 0
+        ? Math.min(720, Math.round(ev.durationMinutes))
+        : null,
+    title: clip(ev.title, 240),
+    notes: clip(ev.notes, 3000),
+    category: ev.category,
+    color: ev.color,
+    done: Boolean(ev.done),
+    linked_task_text: clip(ev.linkedTaskText, 240),
+    linked_task_id: ev.linkedTaskId ? clip(ev.linkedTaskId, 128) : null,
+  };
+}
+
+export function buildLearningPathRow(uid: string, path: LearningPath) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(path.id),
+    title: clip(path.title, 240),
+    description: clip(path.description, 2000),
+    hub_id: sanitizeHubId(path.hubId),
+    category_label: clip(path.categoryLabel, 140),
+    objectives: clip(path.objectives, 2000),
+    current_level: clip(path.currentLevel, 160),
+    target_level: clip(path.targetLevel, 160),
+    start_date: clip(path.startDate, 40),
+    expected_completion_date: clip(path.expectedCompletionDate, 40),
+    progress_pct: Math.max(0, Math.min(100, Math.round(path.progressPct ?? 0))),
+    status: path.status,
+    stages: (path.stages || []).slice(0, 50).map((s) => ({
+      id: clip(s.id, 128),
+      title: clip(s.title, 300),
+      done: Boolean(s.done),
+      notes: clip(s.notes, 600),
+    })),
+    linked_course_ids: (path.linkedCourseIds || [])
+      .slice(0, 30)
+      .map((n) => Math.max(1, Math.min(999, Math.round(n)))),
+    reading_modes: sanitizeReadingModes(path.readingModes),
+    learning_methods: sanitizeLearningMethods(path.learningMethods),
+    review_count: Math.max(0, Math.min(999, Math.round(path.reviewCount ?? 0))),
+    listen_count: Math.max(0, Math.min(999, Math.round(path.listenCount ?? 0))),
+  };
+}
+
+export function buildReadingItemRow(uid: string, item: ReadingLibraryItem) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(item.id),
+    title: clip(item.title, 300),
+    author: clip(item.author, 200),
+    hub_id: sanitizeHubId(item.hubId),
+    category_label: clip(item.categoryLabel, 140),
+    item_type: item.itemType,
+    status: item.status,
+    current_page: Math.max(0, Math.min(99999, Math.round(item.currentPage ?? 0))),
+    total_pages: Math.max(0, Math.min(99999, Math.round(item.totalPages ?? 0))),
+    takeaways: clip(item.takeaways, 20000),
+    attachment_name: clip(item.attachmentName, 240),
+    attachment_resource_id: clip(item.attachmentResourceId, 160),
+    storage_bucket: 'study-files',
+    storage_path: clip(item.storagePath, 400),
+    download_url: clip(item.downloadUrl, 1200),
+    external_url: clip(item.externalUrl, 800),
+    reading_modes: sanitizeReadingModes(item.readingModes),
+    learning_methods: sanitizeLearningMethods(item.learningMethods),
+    review_count: Math.max(0, Math.min(999, Math.round(item.reviewCount ?? 0))),
+    listen_count: Math.max(0, Math.min(999, Math.round(item.listenCount ?? 0))),
+    repetition_stage: Math.max(0, Math.min(10, Math.round(item.repetitionStage ?? 0))),
+    next_review_date_key: sanitizeDateKeyOrEmpty(item.nextReviewDateKey),
+    last_reviewed_date_key: sanitizeDateKeyOrEmpty(item.lastReviewedDateKey),
+    updated_at_label: clip(item.updatedAtLabel, 100),
+  };
+}
+
+export function buildPracticalProjectRow(uid: string, proj: PracticalProject) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(proj.id),
+    title: clip(proj.title, 260),
+    description: clip(proj.description, 2000),
+    hub_id: sanitizeHubId(proj.hubId),
+    category_label: clip(proj.categoryLabel, 140),
+    objectives: clip(proj.objectives, 2000),
+    status: proj.status,
+    progress_pct: Math.max(0, Math.min(100, Math.round(proj.progressPct ?? 0))),
+    deliverables: clip(proj.deliverables, 2000),
+    start_date: clip(proj.startDate, 40),
+    target_date: clip(proj.targetDate, 40),
+    linked_course_id: Math.max(0, Math.round(proj.linkedCourseId ?? 0)),
+    notes: clip(proj.notes, 8000),
+  };
+}
+
+export function buildUnifiedTaskRow(uid: string, task: UnifiedTask) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(task.id),
+    title: clip(task.title, 300),
+    description: clip(task.description, 2000),
+    hub_id: sanitizeHubId(task.hubId),
+    category_label: clip(task.categoryLabel, 140),
+    priority: task.priority,
+    status: task.status,
+    due_date: clip(task.dueDate, 40),
+    scheduled_date: sanitizeDateKeyOrEmpty(task.scheduledDate ?? task.dueDate),
+    start_time: sanitizeTimeSlotOrEmpty(task.startTime),
+    end_time: sanitizeTimeSlotOrEmpty(task.endTime),
+    duration_minutes:
+      typeof task.durationMinutes === 'number' && task.durationMinutes > 0
+        ? Math.min(720, Math.round(task.durationMinutes))
+        : null,
+    deadline: sanitizeDateKeyOrEmpty(task.deadline),
+    project_id: clip(task.projectId, 160),
+    linked_label: clip(task.linkedLabel, 200),
+  };
+}
+
+export function buildWeeklyMeetingRow(uid: string, mtg: WeeklyMeeting) {
+  const attendanceEntries = Object.entries(mtg.attendanceByDate || {}).slice(0, 120);
+  const cleanAttendance: Record<string, MeetingAttendanceStatus> = {};
+  for (const [k, v] of attendanceEntries) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(k)) {
+      cleanAttendance[k] =
+        v === 'attended' || v === 'missed' || v === 'excused' ? v : 'pending';
+    }
+  }
+  const notesEntries = Object.entries(mtg.notesByDate || {}).slice(0, 120);
+  const cleanNotes: Record<string, string> = {};
+  for (const [k, v] of notesEntries) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(k) && typeof v === 'string') {
+      cleanNotes[k] = clip(v, 3000);
+    }
+  }
+  const exEntries = Object.entries(mtg.exceptions || {}).slice(0, 120);
+  const cleanExceptions: Record<string, WeeklyMeetingException> = {};
+  for (const [k, v] of exEntries) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(k) && v && typeof v === 'object') {
+      cleanExceptions[k] = {
+        ...(v.cancelled ? { cancelled: true } : {}),
+        ...(v.movedDateKey && /^\d{4}-\d{2}-\d{2}$/.test(v.movedDateKey)
+          ? { movedDateKey: v.movedDateKey }
+          : {}),
+        ...(v.startTime ? { startTime: sanitizeTimeSlotOrEmpty(v.startTime) } : {}),
+        ...(v.endTime ? { endTime: sanitizeTimeSlotOrEmpty(v.endTime) } : {}),
+        ...(typeof v.durationMinutes === 'number' && v.durationMinutes > 0
+          ? { durationMinutes: Math.min(720, Math.round(v.durationMinutes)) }
+          : {}),
+        ...(v.title ? { title: clip(v.title, 200) } : {}),
+      };
+    }
+  }
+
+  return {
+    owner_id: uid,
+    id: sanitizeId(mtg.id),
+    title: clip(mtg.title, 260),
+    description: clip(mtg.description, 2000),
+    hub_id: sanitizeHubId(mtg.hubId),
+    start_date: sanitizeDateKeyOrEmpty(mtg.startDate),
+    day_of_week: Math.max(0, Math.min(6, Math.round(mtg.dayOfWeek ?? 6))),
+    start_time: sanitizeTimeSlotOrEmpty(mtg.startTime) || '18:00',
+    end_time: sanitizeTimeSlotOrEmpty(mtg.endTime) || '19:00',
+    duration_minutes: Math.max(15, Math.min(720, Math.round(mtg.durationMinutes ?? 60))),
+    is_recurring_weekly: Boolean(mtg.isRecurringWeekly),
+    recurrence_end_date: sanitizeDateKeyOrEmpty(mtg.recurrenceEndDate),
+    color: mtg.color,
+    status: mtg.status,
+    completed_dates: (mtg.completedDates || [])
+      .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+      .slice(0, 120),
+    attendance_by_date: cleanAttendance,
+    notes_by_date: cleanNotes,
+    follow_ups: (mtg.followUps || []).slice(0, 80).map((f) => ({
+      id: clip(f.id, 128),
+      text: clip(f.text, 500),
+      done: Boolean(f.done),
+      ...(f.occurrenceDate && /^\d{4}-\d{2}-\d{2}$/.test(f.occurrenceDate)
+        ? { occurrenceDate: f.occurrenceDate }
+        : {}),
+      ...(f.linkedTaskId ? { linkedTaskId: clip(f.linkedTaskId, 128) } : {}),
+    })),
+    linked_task_ids: (mtg.linkedTaskIds || []).slice(0, 80).map((s) => clip(s, 128)),
+    exceptions: cleanExceptions,
+  };
+}
+
+export function buildDentalCaseRow(uid: string, dc: DentalCase) {
+  const status: DentalCaseStatus =
+    dc.status === 'follow_up' || dc.status === 'completed'
+      ? dc.status
+      : 'in_progress';
+  return {
+    owner_id: uid,
+    id: sanitizeId(dc.id),
+    title: clip(dc.title, 260),
+    specialty: clip(dc.specialty, 160),
+    patient_summary: clip(dc.patientSummary, 3000),
+    procedure_details: clip(dc.procedureDetails, 12000),
+    case_date: sanitizeDateKeyOrEmpty(dc.caseDate),
+    status,
+    cover_image_url: clip(dc.coverImageUrl, 1200),
+    cover_storage_bucket: 'user-images',
+    cover_storage_path: clip(dc.coverStoragePath, 400),
+    cover_data_url: clip(dc.coverDataUrl, 40000),
+    linked_course_id: Math.max(0, Math.round(dc.linkedCourseId ?? 0)),
+    updated_at_label: clip(dc.updatedAtLabel, 100),
+  };
+}
+
+// ============================================================================
+// Row Mappers (PostgreSQL Row -> TypeScript Domain Model)
+// ============================================================================
+
+function mapQuarterRow(raw: Record<string, unknown>): QuarterInfo {
+  return {
+    id: String(raw.id),
+    number: Number(raw.number ?? 1),
+    title: String(raw.title ?? ''),
+    subtitle: String(raw.subtitle ?? ''),
+  };
+}
+
+function mapDomainRow(raw: Record<string, unknown>): DomainInfo {
+  return {
+    id: String(raw.id),
+    order: Number(raw.sort_order ?? 0),
+    hubId: sanitizeHubId(raw.hub_id),
+    title: String(raw.title ?? ''),
+    subtitle: String(raw.subtitle ?? ''),
+    purpose: String(raw.purpose ?? ''),
+    thinkers: Array.isArray(raw.thinkers) ? (raw.thinkers as ThinkerInfo[]) : [],
+  };
+}
+
+function mapMonthRow(raw: Record<string, unknown>): MonthPlan {
+  return {
+    id: Number(raw.month_number ?? 1),
+    docId: String(raw.doc_id ?? ''),
+    hubId: sanitizeHubId(raw.hub_id),
+    quarter: Number(raw.quarter ?? 1),
+    quarterTitle: String(raw.quarter_title ?? ''),
+    theme: String(raw.theme ?? ''),
+    foundational: (raw.foundational as MonthPlan['foundational']) || {
+      title: '',
+      author: '',
+      format: 'كتاب',
+      domainId: 'islamic_thought',
+      pace: '',
+      focus: '',
+    },
+    exploratory: (raw.exploratory as MonthPlan['exploratory']) || {
+      title: '',
+      author: '',
+      format: 'كتاب',
+      domainId: 'philosophy_logic',
+      pace: '',
+      focus: '',
+    },
+    courseId: Number(raw.course_id ?? 0),
+    discussionPrompt: String(raw.discussion_prompt ?? ''),
+    applicationTask: String(raw.application_task ?? ''),
+    activities: (raw.activities as MonthPlan['activities']) || {
+      reading: false,
+      listening: false,
+      summarizing: false,
+      discussing: false,
+    },
+    status: (raw.status as MonthPlan['status']) || 'not_started',
+    notes: String(raw.notes ?? ''),
+    tasks: Array.isArray(raw.tasks) ? (raw.tasks as SmallTask[]) : [],
+    resources: Array.isArray(raw.resources) ? (raw.resources as StudyResource[]) : [],
+    readingModes: sanitizeReadingModes(raw.reading_modes),
+    learningMethods: sanitizeLearningMethods(raw.learning_methods),
+    reviewCount: Number(raw.review_count ?? 0),
+    listenCount: Number(raw.listen_count ?? 0),
+    repetitionStage: Number(raw.repetition_stage ?? 0),
+    nextReviewDateKey: String(raw.next_review_date_key ?? ''),
+    lastReviewedDateKey: String(raw.last_reviewed_date_key ?? ''),
+  };
+}
+
+function mapCourseRow(raw: Record<string, unknown>): PersonalCourse {
+  const completed = Boolean(raw.completed);
+  return {
+    id: Number(raw.course_number ?? 1),
+    docId: String(raw.doc_id ?? ''),
+    hubId: sanitizeHubId(raw.hub_id),
+    title: String(raw.title ?? ''),
+    category: String(raw.category ?? ''),
+    studyStage: sanitizeCourseStudyStage(raw.study_stage, completed),
+    scheduledPeriod: String(raw.scheduled_period ?? ''),
+    instructor: String(raw.instructor ?? ''),
+    platform: String(raw.platform ?? ''),
+    durationLabel: String(raw.duration_label ?? ''),
+    startDate: String(raw.start_date ?? ''),
+    targetDate: String(raw.target_date ?? ''),
+    progressPct: Number(raw.progress_pct ?? 0),
+    notes: String(raw.notes ?? ''),
+    linkedMonths: Array.isArray(raw.linked_months)
+      ? (raw.linked_months as number[])
+      : [],
+    complementaryBook: String(raw.complementary_book ?? ''),
+    bookAuthor: String(raw.book_author ?? ''),
+    applicationMilestone: String(raw.application_milestone ?? ''),
+    completed,
+    resources: Array.isArray(raw.resources) ? (raw.resources as StudyResource[]) : [],
+    tasks: Array.isArray(raw.tasks) ? (raw.tasks as SmallTask[]) : [],
+    readingModes: sanitizeReadingModes(raw.reading_modes),
+    learningMethods: sanitizeLearningMethods(raw.learning_methods),
+    reviewCount: Number(raw.review_count ?? 0),
+    listenCount: Number(raw.listen_count ?? 0),
+    repetitionStage: Number(raw.repetition_stage ?? 0),
+    nextReviewDateKey: String(raw.next_review_date_key ?? ''),
+    lastReviewedDateKey: String(raw.last_reviewed_date_key ?? ''),
+  };
+}
+
+function mapBookNoteRow(raw: Record<string, unknown>): BookNote {
+  const ntRaw = raw.note_type;
+  const noteType: NoteCategoryType =
+    ntRaw === 'course_lecture' || ntRaw === 'general' ? ntRaw : 'book';
+  return {
+    id: String(raw.id),
+    hubId: sanitizeHubId(raw.hub_id),
+    noteType,
+    noteColor: sanitizeNoteColor(raw.note_color),
+    bookTitle: String(raw.book_title ?? ''),
+    author: String(raw.author ?? ''),
+    courseId: Number(raw.course_id ?? 0),
+    courseTitle: String(raw.course_title ?? ''),
+    lectureTitle: String(raw.lecture_title ?? ''),
+    categoryLabel: String(raw.category_label ?? ''),
+    progressMarker: String(raw.progress_marker ?? ''),
+    content: String(raw.content ?? ''),
+    quotes: String(raw.quotes ?? ''),
+    updatedAt: String(raw.updated_at_label ?? ''),
+    readingModes: sanitizeReadingModes(raw.reading_modes),
+    learningMethods: sanitizeLearningMethods(raw.learning_methods),
+    reviewCount: Number(raw.review_count ?? 0),
+    listenCount: Number(raw.listen_count ?? 0),
+    repetitionStage: Number(raw.repetition_stage ?? 0),
+    nextReviewDateKey: String(raw.next_review_date_key ?? ''),
+    lastReviewedDateKey: String(raw.last_reviewed_date_key ?? ''),
+  };
+}
+
+function mapCustomCategoryRow(raw: Record<string, unknown>): CustomCategory {
+  const hubRaw = raw.hub_id;
+  const hubId: LearningHubId | 'all' =
+    hubRaw === 'marketing' || hubRaw === 'dental_career' || hubRaw === 'knowledge'
+      ? hubRaw
+      : 'all';
+  return {
+    id: String(raw.id),
+    hubId,
+    title: String(raw.title ?? ''),
+    description: String(raw.description ?? ''),
+    color: (raw.color as CustomCategory['color']) || 'navy',
+    createdAtLabel: String(raw.created_at_label ?? ''),
+  };
+}
+
+function mapHistoryRow(raw: Record<string, unknown>): StudyHistoryEntry {
+  return {
+    id: String(raw.id),
+    actionType: (raw.action_type as StudyHistoryEntry['actionType']) || 'note',
+    title: String(raw.title ?? ''),
+    detail: String(raw.detail ?? ''),
+    targetTab: (raw.target_tab as StudyHistoryEntry['targetTab']) || 'overview',
+    targetNoteId: raw.target_note_id ? String(raw.target_note_id) : undefined,
+    targetMonthId: raw.target_month_id ? Number(raw.target_month_id) : undefined,
+    targetCourseId: raw.target_course_id ? Number(raw.target_course_id) : undefined,
+    timestampLabel: String(raw.timestamp_label ?? ''),
+    createdAtMs: Number(raw.created_at_ms ?? 0),
+  };
+}
+
+function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
+  const storedCats =
+    raw.hub_categories && typeof raw.hub_categories === 'object'
+      ? (raw.hub_categories as Partial<Record<LearningHubId, string[]>>)
+      : {};
+  const storedCal =
+    raw.calendar_prefs && typeof raw.calendar_prefs === 'object'
+      ? (raw.calendar_prefs as Partial<CalendarPreferences>)
+      : undefined;
+
+  return {
+    noteFontSize:
+      (raw.note_font_size as UserPreferences['noteFontSize']) ||
+      DEFAULT_USER_PREFERENCES.noteFontSize,
+    noteHighlightColor:
+      (raw.note_highlight_color as UserPreferences['noteHighlightColor']) ||
+      DEFAULT_USER_PREFERENCES.noteHighlightColor,
+    notePaperTone:
+      (raw.note_paper_tone as UserPreferences['notePaperTone']) ||
+      DEFAULT_USER_PREFERENCES.notePaperTone,
+    noteMargin:
+      (raw.note_margin as UserPreferences['noteMargin']) ||
+      DEFAULT_USER_PREFERENCES.noteMargin,
+    noteWidth:
+      (raw.note_width as UserPreferences['noteWidth']) ||
+      DEFAULT_USER_PREFERENCES.noteWidth,
+    noteBorder:
+      (raw.note_border as UserPreferences['noteBorder']) ||
+      DEFAULT_USER_PREFERENCES.noteBorder,
+    autoAddTimestampOnVoice: Boolean(raw.auto_add_timestamp_on_voice),
+    voiceDialect:
+      (raw.voice_dialect as UserPreferences['voiceDialect']) ||
+      DEFAULT_USER_PREFERENCES.voiceDialect,
+    voiceInsertMode:
+      (raw.voice_insert_mode as UserPreferences['voiceInsertMode']) ||
+      DEFAULT_USER_PREFERENCES.voiceInsertMode,
+    readAloudVoice:
+      (raw.read_aloud_voice as UserPreferences['readAloudVoice']) ||
+      DEFAULT_USER_PREFERENCES.readAloudVoice,
+    readAloudSpeed:
+      (raw.read_aloud_speed as UserPreferences['readAloudSpeed']) ||
+      DEFAULT_USER_PREFERENCES.readAloudSpeed,
+    showExcelExport: raw.show_excel_export !== false,
+    hubCategories: {
+      marketing:
+        Array.isArray(storedCats.marketing) && storedCats.marketing.length > 0
+          ? storedCats.marketing
+          : DEFAULT_HUB_CATEGORIES.marketing,
+      dental_career:
+        Array.isArray(storedCats.dental_career) &&
+        storedCats.dental_career.length > 0
+          ? storedCats.dental_career
+          : DEFAULT_HUB_CATEGORIES.dental_career,
+      knowledge:
+        Array.isArray(storedCats.knowledge) && storedCats.knowledge.length > 0
+          ? storedCats.knowledge
+          : DEFAULT_HUB_CATEGORIES.knowledge,
+    },
+    calendarPrefs: sanitizeCalendarPrefs(storedCal),
+  };
+}
+
+function mapReflectionRow(raw: Record<string, unknown>): PersonalReflection {
+  const moodRaw = String(raw.mood_tag ?? 'تأمل');
+  const moodTag: ReflectionMood =
+    moodRaw === 'فكرة' || moodRaw === 'امتنان' || moodRaw === 'هدف'
+      ? moodRaw
+      : 'تأمل';
+  return {
+    id: String(raw.id),
+    title: String(raw.title ?? ''),
+    content: String(raw.content ?? ''),
+    moodTag,
+    pinned: Boolean(raw.pinned),
+    createdAtLabel: String(raw.created_at_label ?? ''),
+    createdAtMs: Number(raw.created_at_ms ?? 0),
+  };
+}
+
+function mapCalendarEventRow(raw: Record<string, unknown>): CalendarEvent {
+  const catRaw = String(raw.category ?? 'شخصي');
+  const category: CalendarCategory =
+    catRaw === 'دراسة' ||
+    catRaw === 'موعد' ||
+    catRaw === 'مراجعة' ||
+    catRaw === 'قراءة'
+      ? catRaw
+      : 'شخصي';
+  const colRaw = String(raw.color ?? 'navy');
+  const color: CalendarColor =
+    colRaw === 'emerald' || colRaw === 'amber' || colRaw === 'rose'
+      ? colRaw
+      : 'navy';
+  return {
+    id: String(raw.id),
+    dateKey: String(raw.date_key ?? ''),
+    timeSlot: String(raw.time_slot ?? ''),
+    endTime: raw.end_time ? String(raw.end_time) : '',
+    durationMinutes:
+      typeof raw.duration_minutes === 'number' ? raw.duration_minutes : undefined,
+    title: String(raw.title ?? ''),
+    notes: String(raw.notes ?? ''),
+    category,
+    color,
+    done: Boolean(raw.done),
+    linkedTaskText: String(raw.linked_task_text ?? ''),
+    linkedTaskId: raw.linked_task_id ? String(raw.linked_task_id) : undefined,
+  };
+}
+
+function mapLearningPathRow(raw: Record<string, unknown>): LearningPath {
+  return {
+    id: String(raw.id),
+    title: String(raw.title ?? ''),
+    description: String(raw.description ?? ''),
+    hubId: sanitizeHubId(raw.hub_id),
+    categoryLabel: String(raw.category_label ?? ''),
+    objectives: String(raw.objectives ?? ''),
+    currentLevel: String(raw.current_level ?? ''),
+    targetLevel: String(raw.target_level ?? ''),
+    startDate: String(raw.start_date ?? ''),
+    expectedCompletionDate: String(raw.expected_completion_date ?? ''),
+    progressPct: Number(raw.progress_pct ?? 0),
+    status:
+      raw.status === 'in_progress' || raw.status === 'completed'
+        ? (raw.status as LearningPathStatus)
+        : 'planned',
+    stages: Array.isArray(raw.stages) ? (raw.stages as LearningPathStage[]) : [],
+    linkedCourseIds: Array.isArray(raw.linked_course_ids)
+      ? (raw.linked_course_ids as number[])
+      : [],
+    readingModes: sanitizeReadingModes(raw.reading_modes),
+    learningMethods: sanitizeLearningMethods(raw.learning_methods),
+    reviewCount: Number(raw.review_count ?? 0),
+    listenCount: Number(raw.listen_count ?? 0),
+  };
+}
+
+function mapReadingItemRow(raw: Record<string, unknown>): ReadingLibraryItem {
+  return {
+    id: String(raw.id),
+    title: String(raw.title ?? ''),
+    author: String(raw.author ?? ''),
+    hubId: sanitizeHubId(raw.hub_id),
+    categoryLabel: String(raw.category_label ?? ''),
+    itemType: (raw.item_type as ReadingItemType) || 'كتاب',
+    status:
+      raw.status === 'reading' || raw.status === 'completed'
+        ? (raw.status as ReadingItemStatus)
+        : 'to_read',
+    currentPage: Number(raw.current_page ?? 0),
+    totalPages: Number(raw.total_pages ?? 0),
+    takeaways: String(raw.takeaways ?? ''),
+    attachmentName: raw.attachment_name ? String(raw.attachment_name) : undefined,
+    attachmentResourceId: raw.attachment_resource_id
+      ? String(raw.attachment_resource_id)
+      : undefined,
+    storagePath: raw.storage_path ? String(raw.storage_path) : undefined,
+    downloadUrl: raw.download_url ? String(raw.download_url) : undefined,
+    externalUrl: raw.external_url ? String(raw.external_url) : undefined,
+    readingModes: sanitizeReadingModes(raw.reading_modes),
+    learningMethods: sanitizeLearningMethods(raw.learning_methods),
+    reviewCount: Number(raw.review_count ?? 0),
+    listenCount: Number(raw.listen_count ?? 0),
+    repetitionStage: Number(raw.repetition_stage ?? 0),
+    nextReviewDateKey: String(raw.next_review_date_key ?? ''),
+    lastReviewedDateKey: String(raw.last_reviewed_date_key ?? ''),
+    updatedAtLabel: String(raw.updated_at_label ?? ''),
+  };
+}
+
+function mapPracticalProjectRow(raw: Record<string, unknown>): PracticalProject {
+  return {
+    id: String(raw.id),
+    title: String(raw.title ?? ''),
+    description: String(raw.description ?? ''),
+    hubId: sanitizeHubId(raw.hub_id),
+    categoryLabel: String(raw.category_label ?? ''),
+    objectives: String(raw.objectives ?? ''),
+    status:
+      raw.status === 'in_progress' || raw.status === 'completed'
+        ? (raw.status as ProjectStatus)
+        : 'planned',
+    progressPct: Number(raw.progress_pct ?? 0),
+    deliverables: String(raw.deliverables ?? ''),
+    startDate: String(raw.start_date ?? ''),
+    targetDate: String(raw.target_date ?? ''),
+    linkedCourseId:
+      typeof raw.linked_course_id === 'number' && raw.linked_course_id > 0
+        ? raw.linked_course_id
+        : undefined,
+    notes: String(raw.notes ?? ''),
+  };
+}
+
+function mapUnifiedTaskRow(raw: Record<string, unknown>): UnifiedTask {
+  return {
+    id: String(raw.id),
+    title: String(raw.title ?? ''),
+    description: String(raw.description ?? ''),
+    hubId: sanitizeHubId(raw.hub_id),
+    categoryLabel: String(raw.category_label ?? ''),
+    priority:
+      raw.priority === 'low' || raw.priority === 'high'
+        ? (raw.priority as TaskPriority)
+        : 'medium',
+    status:
+      raw.status === 'in_progress' || raw.status === 'done'
+        ? (raw.status as UnifiedTaskStatus)
+        : 'todo',
+    dueDate: String(raw.due_date ?? ''),
+    scheduledDate: raw.scheduled_date ? String(raw.scheduled_date) : '',
+    startTime: raw.start_time ? String(raw.start_time) : '',
+    endTime: raw.end_time ? String(raw.end_time) : '',
+    durationMinutes:
+      typeof raw.duration_minutes === 'number' && raw.duration_minutes > 0
+        ? raw.duration_minutes
+        : undefined,
+    deadline: raw.deadline ? String(raw.deadline) : '',
+    projectId: raw.project_id ? String(raw.project_id) : '',
+    linkedLabel: raw.linked_label ? String(raw.linked_label) : undefined,
+  };
+}
+
+function mapWeeklyMeetingRow(raw: Record<string, unknown>): WeeklyMeeting {
+  const colRaw = String(raw.color ?? 'navy');
+  const color: CalendarColor =
+    colRaw === 'emerald' || colRaw === 'amber' || colRaw === 'rose'
+      ? colRaw
+      : 'navy';
+  const status: WeeklyMeeting['status'] =
+    raw.status === 'completed' || raw.status === 'cancelled'
+      ? raw.status
+      : 'scheduled';
+  return {
+    id: String(raw.id),
+    title: String(raw.title ?? ''),
+    description: String(raw.description ?? ''),
+    hubId: sanitizeHubId(raw.hub_id),
+    startDate: String(raw.start_date ?? ''),
+    dayOfWeek: Number(raw.day_of_week ?? 6),
+    startTime: String(raw.start_time ?? '18:00'),
+    endTime: String(raw.end_time ?? '19:00'),
+    durationMinutes: Number(raw.duration_minutes ?? 60),
+    isRecurringWeekly: Boolean(raw.is_recurring_weekly),
+    recurrenceEndDate: String(raw.recurrence_end_date ?? ''),
+    color,
+    status,
+    completedDates: Array.isArray(raw.completed_dates)
+      ? (raw.completed_dates as string[])
+      : [],
+    attendanceByDate:
+      raw.attendance_by_date && typeof raw.attendance_by_date === 'object'
+        ? (raw.attendance_by_date as Record<string, MeetingAttendanceStatus>)
+        : {},
+    notesByDate:
+      raw.notes_by_date && typeof raw.notes_by_date === 'object'
+        ? (raw.notes_by_date as Record<string, string>)
+        : {},
+    followUps: Array.isArray(raw.follow_ups)
+      ? (raw.follow_ups as WeeklyMeetingFollowUp[])
+      : [],
+    linkedTaskIds: Array.isArray(raw.linked_task_ids)
+      ? (raw.linked_task_ids as string[])
+      : [],
+    exceptions:
+      raw.exceptions && typeof raw.exceptions === 'object'
+        ? (raw.exceptions as Record<string, WeeklyMeetingException>)
+        : {},
+  };
+}
+
+function mapDentalCaseRow(raw: Record<string, unknown>): DentalCase {
+  const status: DentalCaseStatus =
+    raw.status === 'follow_up' || raw.status === 'completed'
+      ? raw.status
+      : 'in_progress';
+  return {
+    id: String(raw.id),
+    title: String(raw.title ?? ''),
+    specialty: String(raw.specialty ?? ''),
+    patientSummary: String(raw.patient_summary ?? ''),
+    procedureDetails: String(raw.procedure_details ?? ''),
+    caseDate: String(raw.case_date ?? ''),
+    status,
+    coverImageUrl: raw.cover_image_url ? String(raw.cover_image_url) : undefined,
+    coverStoragePath: raw.cover_storage_path
+      ? String(raw.cover_storage_path)
+      : undefined,
+    coverDataUrl: raw.cover_data_url ? String(raw.cover_data_url) : undefined,
+    linkedCourseId:
+      typeof raw.linked_course_id === 'number' && raw.linked_course_id > 0
+        ? raw.linked_course_id
+        : undefined,
+    updatedAtLabel: raw.updated_at_label
+      ? String(raw.updated_at_label)
+      : undefined,
+  };
+}
+
+// ============================================================================
+// Initial User Profile & Seed (Idempotent, Non-Overwriting, Concurrency-Safe)
+// ============================================================================
+
+export interface UserProfileRecord {
+  uid: string;
+  display_name: string;
+  email: string;
+  photo_url: string;
+  role: 'user' | 'admin';
+  approval_status: 'pending' | 'approved' | 'rejected' | 'suspended';
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface DetailedSupabaseError extends Error {
+  code?: string;
+  details?: string;
+  hint?: string;
+}
+
+function createDetailedSupabaseError(
+  context: string,
+  err: unknown
+): DetailedSupabaseError {
+  const e =
+    err && typeof err === 'object'
+      ? (err as { code?: string; message?: string; details?: string; hint?: string })
+      : { message: String(err) };
+  const codePart = e.code ? `[${e.code}] ` : '';
+  const msgPart = e.message || formatSupabaseErrorMessage(err);
+  const extraPart = e.details || e.hint ? ` (${e.details || e.hint})` : '';
+  const detailed = new Error(
+    `${context}: ${codePart}${msgPart}${extraPart}`
+  ) as DetailedSupabaseError;
+  detailed.code = e.code;
+  detailed.details = e.details;
+  detailed.hint = e.hint;
+  return detailed;
+}
+
+const inFlightProfilePromises = new Map<string, Promise<UserProfileRecord>>();
+const inFlightSeedPromises = new Map<string, Promise<UserProfileRecord>>();
+
+/**
+ * Ensures the signed-in Firebase user has exactly one row in public.user_profiles.
+ * - Strictly keyed by verified Firebase UID (user.uid).
+ * - Deduplicates concurrent login calls via in-flight promise lock per UID.
+ * - Never overwrites existing profile fields, role, or approval_status on repeat logins.
+ * - Always creates new profiles with role='user' and approval_status='pending'
+ *   (no automatic admin escalation or platform approval).
+ * - Verifies row creation via read-back SELECT and throws actual DB errors if any step fails.
+ */
+export async function ensureUserProfileExists(
+  user: User
+): Promise<UserProfileRecord> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase client is not configured.');
+  }
+  if (!user?.uid) {
+    throw new Error('Missing authenticated Firebase UID.');
+  }
+
+  const existingPromise = inFlightProfilePromises.get(user.uid);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const run = withFirebaseTokenRetry(async (client): Promise<UserProfileRecord> => {
+    const profileColumns =
+      'uid, display_name, email, photo_url, role, approval_status, created_at, updated_at';
+
+    // 1. Read existing profile without overwriting anything
+    const { data: existingRows, error: selectErr } = await client
+      .from('user_profiles')
+      .select(profileColumns)
+      .eq('uid', user.uid);
+
+    if (selectErr) {
+      throw createDetailedSupabaseError(
+        'Failed to query existing user_profiles row',
+        selectErr
+      );
+    }
+
+    if (existingRows && existingRows.length > 1) {
+      throw new Error(
+        `DUPLICATE_PROFILE_ROWS: Expected 1 user_profiles row for UID ${user.uid}, found ${existingRows.length}.`
+      );
+    }
+
+    if (existingRows && existingRows.length === 1) {
+      const existing = existingRows[0] as UserProfileRecord;
+      if (existing.uid !== user.uid) {
+        throw new Error(
+          `PROFILE_UID_MISMATCH: Expected UID ${user.uid}, got ${existing.uid}.`
+        );
+      }
+      return existing;
+    }
+
+    // 2. Insert new profile idempotently (ON CONFLICT (uid) DO NOTHING)
+    const newProfilePayload = {
+      uid: user.uid,
+      display_name: clip(user.displayName || 'مستخدم ميزان المعرفة', 120),
+      email: clip(user.email || '', 200),
+      photo_url: clip(user.photoURL || '', 600),
+      role: 'user' as const,
+      approval_status: 'pending' as const,
+    };
+
+    const { error: insertErr } = await client
+      .from('user_profiles')
+      .upsert(newProfilePayload, {
+        onConflict: 'uid',
+        ignoreDuplicates: true,
+      });
+
+    if (insertErr) {
+      throw createDetailedSupabaseError(
+        'Failed to create user_profiles row',
+        insertErr
+      );
+    }
+
+    // 3. Verify creation by reading back the row with the Firebase JWT
+    const { data: verifiedRows, error: verifyErr } = await client
+      .from('user_profiles')
+      .select(profileColumns)
+      .eq('uid', user.uid);
+
+    if (verifyErr) {
+      throw createDetailedSupabaseError(
+        'Profile insert completed but verification SELECT failed',
+        verifyErr
+      );
+    }
+
+    if (!verifiedRows || verifiedRows.length === 0) {
+      const err = new Error(
+        'PROFILE_ROW_MISSING_AFTER_INSERT: Profile insert reported success, but SELECT returned 0 rows. Check user_profiles RLS SELECT/INSERT policies and public.firebase_uid().'
+      ) as DetailedSupabaseError;
+      err.code = 'PROFILE_ROW_MISSING';
+      throw err;
+    }
+
+    if (verifiedRows.length > 1) {
+      throw new Error(
+        `DUPLICATE_PROFILE_ROWS: Expected 1 user_profiles row for UID ${user.uid}, found ${verifiedRows.length}.`
+      );
+    }
+
+    const verified = verifiedRows[0] as UserProfileRecord;
+    if (verified.uid !== user.uid) {
+      throw new Error(
+        `PROFILE_UID_MISMATCH: Expected UID ${user.uid}, got ${verified.uid}.`
+      );
+    }
+
+    return verified;
+  }).finally(() => {
+    inFlightProfilePromises.delete(user.uid);
+  });
+
+  inFlightProfilePromises.set(user.uid, run);
+  return run;
+}
+
+export async function ensureUserDocumentAndSeed(
+  user: User,
+  seedData: {
+    quarters: QuarterInfo[];
+    months: MonthPlan[];
+    domains: DomainInfo[];
+    courses: PersonalCourse[];
+    bookNotes: BookNote[];
+    customCategories: CustomCategory[];
+    history: StudyHistoryEntry[];
+    preferences?: UserPreferences;
+  }
+): Promise<UserProfileRecord | null> {
+  if (!isSupabaseConfigured || !supabase) return null;
+
+  const existingSeedPromise = inFlightSeedPromises.get(user.uid);
+  if (existingSeedPromise) {
+    return existingSeedPromise;
+  }
+
+  const run = (async (): Promise<UserProfileRecord> => {
+    // Always wait for profile creation & verification before seeding child tables
+    const profile = await ensureUserProfileExists(user);
+
+    await withFirebaseTokenRetry(async (client) => {
+      const { data: existingMonths, error: monthsCheckErr } = await client
+        .from('months')
+        .select('doc_id')
+        .eq('owner_id', user.uid)
+        .limit(1);
+
+      if (monthsCheckErr) {
+        throw createDetailedSupabaseError(
+          'Failed to check workspace months seed state',
+          monthsCheckErr
+        );
+      }
+
+      if (!existingMonths || existingMonths.length === 0) {
+        const seedResults = await Promise.all([
+          seedData.quarters.length > 0
+            ? client
+                .from('quarters')
+                .upsert(
+                  seedData.quarters.map((q) => buildQuarterRow(user.uid, q)),
+                  { onConflict: 'owner_id,id' }
+                )
+            : Promise.resolve({ error: null }),
+          seedData.months.length > 0
+            ? client
+                .from('months')
+                .upsert(
+                  seedData.months.map((m) => buildMonthRow(user.uid, m)),
+                  { onConflict: 'owner_id,doc_id' }
+                )
+            : Promise.resolve({ error: null }),
+          seedData.domains.length > 0
+            ? client
+                .from('domains')
+                .upsert(
+                  seedData.domains.map((d, idx) =>
+                    buildDomainRow(user.uid, d, idx)
+                  ),
+                  { onConflict: 'owner_id,id' }
+                )
+            : Promise.resolve({ error: null }),
+          seedData.courses.length > 0
+            ? client
+                .from('courses')
+                .upsert(
+                  seedData.courses.map((c) => buildCourseRow(user.uid, c)),
+                  { onConflict: 'owner_id,doc_id' }
+                )
+            : Promise.resolve({ error: null }),
+          seedData.bookNotes.length > 0
+            ? client
+                .from('book_notes')
+                .upsert(
+                  seedData.bookNotes.map((bn) => buildBookNoteRow(user.uid, bn)),
+                  { onConflict: 'owner_id,id' }
+                )
+            : Promise.resolve({ error: null }),
+          seedData.customCategories.length > 0
+            ? client
+                .from('custom_categories')
+                .upsert(
+                  seedData.customCategories.map((cat) =>
+                    buildCustomCategoryRow(user.uid, cat)
+                  ),
+                  { onConflict: 'owner_id,id' }
+                )
+            : Promise.resolve({ error: null }),
+          seedData.history.length > 0
+            ? client
+                .from('study_history')
+                .upsert(
+                  seedData.history
+                    .slice(0, 25)
+                    .map((h) => buildHistoryRow(user.uid, h)),
+                  { onConflict: 'owner_id,id' }
+                )
+            : Promise.resolve({ error: null }),
+          client
+            .from('user_preferences')
+            .upsert(
+              buildUserPreferencesRow(
+                user.uid,
+                seedData.preferences ?? DEFAULT_USER_PREFERENCES
+              ),
+              { onConflict: 'owner_id,id' }
+            ),
+        ]);
+
+        const firstSeedErr = seedResults.find((r) => r.error)?.error;
+        if (firstSeedErr) {
+          throw createDetailedSupabaseError(
+            'Failed to seed initial workspace data',
+            firstSeedErr
+          );
+        }
+      } else {
+        const [{ data: existingCats }, { data: existingPrefs }] =
+          await Promise.all([
+            client
+              .from('custom_categories')
+              .select('id')
+              .eq('owner_id', user.uid)
+              .limit(1),
+            client
+              .from('user_preferences')
+              .select('id')
+              .eq('owner_id', user.uid)
+              .eq('id', 'settings')
+              .maybeSingle(),
+          ]);
+
+        if (
+          (!existingCats || existingCats.length === 0) &&
+          seedData.customCategories.length > 0
+        ) {
+          const { error: catErr } = await client
+            .from('custom_categories')
+            .upsert(
+              seedData.customCategories.map((cat) =>
+                buildCustomCategoryRow(user.uid, cat)
+              ),
+              { onConflict: 'owner_id,id' }
+            );
+          if (catErr) {
+            throw createDetailedSupabaseError(
+              'Failed to seed default categories',
+              catErr
+            );
+          }
+        }
+
+        if (!existingPrefs) {
+          const { error: prefErr } = await client
+            .from('user_preferences')
+            .upsert(
+              buildUserPreferencesRow(
+                user.uid,
+                seedData.preferences ?? DEFAULT_USER_PREFERENCES
+              ),
+              { onConflict: 'owner_id,id' }
+            );
+          if (prefErr) {
+            throw createDetailedSupabaseError(
+              'Failed to seed default preferences',
+              prefErr
+            );
+          }
+        }
+      }
+    });
+
+    return profile;
+  })().finally(() => {
+    inFlightSeedPromises.delete(user.uid);
+  });
+
+  inFlightSeedPromises.set(user.uid, run);
+  return run;
+}
+
+// ============================================================================
+// Workspace Subscriptions (Initial Fetch + Supabase Realtime Changes)
+// ============================================================================
+
+export interface WorkspaceCallbacks {
+  onQuarters?: (items: QuarterInfo[]) => void;
+  onMonths?: (items: MonthPlan[]) => void;
+  onDomains?: (items: DomainInfo[]) => void;
+  onCourses?: (items: PersonalCourse[]) => void;
+  onBookNotes?: (items: BookNote[]) => void;
+  onCustomCategories?: (items: CustomCategory[]) => void;
+  onHistory?: (items: StudyHistoryEntry[]) => void;
+  onPreferences?: (prefs: UserPreferences) => void;
+  onReflections?: (items: PersonalReflection[]) => void;
+  onCalendarEvents?: (items: CalendarEvent[]) => void;
+  onLearningPaths?: (items: LearningPath[]) => void;
+  onReadingItems?: (items: ReadingLibraryItem[]) => void;
+  onProjects?: (items: PracticalProject[]) => void;
+  onUnifiedTasks?: (items: UnifiedTask[]) => void;
+  onDentalCases?: (items: DentalCase[]) => void;
+  onWeeklyMeetings?: (items: WeeklyMeeting[]) => void;
+  onError?: (message: string) => void;
+}
+
+export function subscribeUserWorkspace(
+  uid: string,
+  callbacks: WorkspaceCallbacks
+): () => void {
+  if (!isSupabaseConfigured || !supabase) {
+    return () => {};
+  }
+
+  let disposed = false;
+
+  const fetchQuarters = async () => {
+    if (!callbacks.onQuarters || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c.from('quarters').select('*').eq('owner_id', uid).order('number', { ascending: true })
+    );
+    if (error) {
+      console.warn('Supabase quarters load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onQuarters((data || []).map((r) => mapQuarterRow(r as Record<string, unknown>)));
+    }
+  };
+
+  const fetchMonths = async () => {
+    if (!callbacks.onMonths || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c.from('months').select('*').eq('owner_id', uid).order('month_number', { ascending: true })
+    );
+    if (error) {
+      console.warn('Supabase months load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onMonths((data || []).map((r) => mapMonthRow(r as Record<string, unknown>)));
+    }
+  };
+
+  const fetchDomains = async () => {
+    if (!callbacks.onDomains || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c.from('domains').select('*').eq('owner_id', uid).order('sort_order', { ascending: true })
+    );
+    if (error) {
+      console.warn('Supabase domains load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onDomains((data || []).map((r) => mapDomainRow(r as Record<string, unknown>)));
+    }
+  };
+
+  const fetchCourses = async () => {
+    if (!callbacks.onCourses || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c.from('courses').select('*').eq('owner_id', uid).order('course_number', { ascending: true })
+    );
+    if (error) {
+      console.warn('Supabase courses load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onCourses((data || []).map((r) => mapCourseRow(r as Record<string, unknown>)));
+    }
+  };
+
+  const fetchBookNotes = async () => {
+    if (!callbacks.onBookNotes || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c.from('book_notes').select('*').eq('owner_id', uid).order('updated_at', { ascending: false })
+    );
+    if (error) {
+      console.warn('Supabase book_notes load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onBookNotes((data || []).map((r) => mapBookNoteRow(r as Record<string, unknown>)));
+    }
+  };
+
+  const fetchCustomCategories = async () => {
+    if (!callbacks.onCustomCategories || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c.from('custom_categories').select('*').eq('owner_id', uid)
+    );
+    if (error) {
+      console.warn('Supabase custom_categories load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onCustomCategories(
+        (data || []).map((r) => mapCustomCategoryRow(r as Record<string, unknown>))
+      );
+    }
+  };
+
+  const fetchHistory = async () => {
+    if (!callbacks.onHistory || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('study_history')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('created_at_ms', { ascending: false })
+        .limit(40)
+    );
+    if (error) {
+      console.warn('Supabase study_history load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onHistory((data || []).map((r) => mapHistoryRow(r as Record<string, unknown>)));
+    }
+  };
+
+  const fetchPreferences = async () => {
+    if (!callbacks.onPreferences || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('user_preferences')
+        .select('*')
+        .eq('owner_id', uid)
+        .eq('id', 'settings')
+        .maybeSingle()
+    );
+    if (error) {
+      console.warn('Supabase user_preferences load error:', error);
+      return;
+    }
+    if (!disposed && data) {
+      callbacks.onPreferences(mapPreferencesRow(data as Record<string, unknown>));
+    }
+  };
+
+  const fetchReflections = async () => {
+    if (!callbacks.onReflections || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('reflections')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('pinned', { ascending: false })
+        .order('created_at_ms', { ascending: false })
+    );
+    if (error) {
+      console.warn('Supabase reflections load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onReflections(
+        (data || []).map((r) => mapReflectionRow(r as Record<string, unknown>))
+      );
+    }
+  };
+
+  const fetchCalendarEvents = async () => {
+    if (!callbacks.onCalendarEvents || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('calendar_events')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('date_key', { ascending: true })
+        .order('time_slot', { ascending: true })
+    );
+    if (error) {
+      console.warn('Supabase calendar_events load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onCalendarEvents(
+        (data || []).map((r) => mapCalendarEventRow(r as Record<string, unknown>))
+      );
+    }
+  };
+
+  const fetchLearningPaths = async () => {
+    if (!callbacks.onLearningPaths || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c.from('learning_paths').select('*').eq('owner_id', uid)
+    );
+    if (error) {
+      console.warn('Supabase learning_paths load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onLearningPaths(
+        (data || []).map((r) => mapLearningPathRow(r as Record<string, unknown>))
+      );
+    }
+  };
+
+  const fetchReadingItems = async () => {
+    if (!callbacks.onReadingItems || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c.from('reading_items').select('*').eq('owner_id', uid)
+    );
+    if (error) {
+      console.warn('Supabase reading_items load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onReadingItems(
+        (data || []).map((r) => mapReadingItemRow(r as Record<string, unknown>))
+      );
+    }
+  };
+
+  const fetchProjects = async () => {
+    if (!callbacks.onProjects || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c.from('practical_projects').select('*').eq('owner_id', uid)
+    );
+    if (error) {
+      console.warn('Supabase practical_projects load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onProjects(
+        (data || []).map((r) => mapPracticalProjectRow(r as Record<string, unknown>))
+      );
+    }
+  };
+
+  const fetchUnifiedTasks = async () => {
+    if (!callbacks.onUnifiedTasks || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c.from('unified_tasks').select('*').eq('owner_id', uid)
+    );
+    if (error) {
+      console.warn('Supabase unified_tasks load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onUnifiedTasks(
+        (data || []).map((r) => mapUnifiedTaskRow(r as Record<string, unknown>))
+      );
+    }
+  };
+
+  const fetchWeeklyMeetings = async () => {
+    if (!callbacks.onWeeklyMeetings || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('weekly_meetings')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('start_date', { ascending: true })
+    );
+    if (error) {
+      console.warn('Supabase weekly_meetings load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onWeeklyMeetings(
+        (data || []).map((r) => mapWeeklyMeetingRow(r as Record<string, unknown>))
+      );
+    }
+  };
+
+  const fetchDentalCases = async () => {
+    if (!callbacks.onDentalCases || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('dental_cases')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('case_date', { ascending: false })
+    );
+    if (error) {
+      console.warn('Supabase dental_cases load error:', error);
+      return;
+    }
+    if (!disposed) {
+      callbacks.onDentalCases(
+        (data || []).map((r) => mapDentalCaseRow(r as Record<string, unknown>))
+      );
+    }
+  };
+
+  const fetchAll = async () => {
+    await Promise.allSettled([
+      fetchQuarters(),
+      fetchMonths(),
+      fetchDomains(),
+      fetchCourses(),
+      fetchBookNotes(),
+      fetchCustomCategories(),
+      fetchHistory(),
+      fetchPreferences(),
+      fetchReflections(),
+      fetchCalendarEvents(),
+      fetchLearningPaths(),
+      fetchReadingItems(),
+      fetchProjects(),
+      fetchUnifiedTasks(),
+      fetchWeeklyMeetings(),
+      fetchDentalCases(),
+    ]);
+  };
+
+  void fetchAll();
+
+  const tableRefetchers: Record<string, () => Promise<void>> = {
+    quarters: fetchQuarters,
+    months: fetchMonths,
+    domains: fetchDomains,
+    courses: fetchCourses,
+    book_notes: fetchBookNotes,
+    custom_categories: fetchCustomCategories,
+    study_history: fetchHistory,
+    user_preferences: fetchPreferences,
+    reflections: fetchReflections,
+    calendar_events: fetchCalendarEvents,
+    learning_paths: fetchLearningPaths,
+    reading_items: fetchReadingItems,
+    practical_projects: fetchProjects,
+    unified_tasks: fetchUnifiedTasks,
+    weekly_meetings: fetchWeeklyMeetings,
+    dental_cases: fetchDentalCases,
+  };
+
+  const channel = supabase
+    .channel(`workspace_${uid}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        filter: `owner_id=eq.${uid}`,
+      },
+      (payload) => {
+        if (disposed) return;
+        const fn = tableRefetchers[payload.table];
+        if (fn) void fn();
+      }
+    )
+    .subscribe();
+
+  const onVisible = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      void fetchAll();
+    }
+  };
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisible);
+  }
+
+  return () => {
+    disposed = true;
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisible);
+    }
+    if (supabase) {
+      void supabase.removeChannel(channel);
+    }
+  };
+}
+
+// ============================================================================
+// CRUD Operations
+// ============================================================================
+
+type ConnectedSupabaseClient = NonNullable<typeof supabase>;
+
+async function runWrite(
+  op: (client: ConnectedSupabaseClient) => PromiseLike<{ error: unknown }>
+): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) return;
+  await withFirebaseTokenRetry(async (client) => {
+    const { error } = await op(client);
+    if (error) {
+      const msg = formatSupabaseErrorMessage(error);
+      console.error('Supabase write error:', error);
+      throw new Error(msg);
+    }
+  });
+}
+
+export async function saveQuarterDoc(uid: string, q: QuarterInfo): Promise<void> {
+  const row = buildQuarterRow(uid, q);
+  await runWrite((c) =>
+    c.from('quarters').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteQuarterDoc(uid: string, quarterId: string): Promise<void> {
+  const id = sanitizeId(quarterId);
+  await runWrite((c) =>
+    c.from('quarters').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function saveMonthDoc(uid: string, m: MonthPlan): Promise<void> {
+  const row = buildMonthRow(uid, m);
+  await runWrite((c) =>
+    c.from('months').upsert(row, { onConflict: 'owner_id,doc_id' })
+  );
+}
+
+export async function deleteMonthDoc(uid: string, docId: string): Promise<void> {
+  const id = sanitizeId(docId);
+  await runWrite((c) =>
+    c.from('months').delete().eq('owner_id', uid).eq('doc_id', id)
+  );
+}
+
+export async function saveDomainDoc(
+  uid: string,
+  d: DomainInfo,
+  order: number
+): Promise<void> {
+  const row = buildDomainRow(uid, d, order);
+  await runWrite((c) =>
+    c.from('domains').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteDomainDoc(uid: string, domainId: string): Promise<void> {
+  const id = sanitizeId(domainId);
+  await runWrite((c) =>
+    c.from('domains').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function saveCourseDoc(uid: string, cItem: PersonalCourse): Promise<void> {
+  const row = buildCourseRow(uid, cItem);
+  await runWrite((c) =>
+    c.from('courses').upsert(row, { onConflict: 'owner_id,doc_id' })
+  );
+}
+
+export async function deleteCourseDoc(uid: string, docId: string): Promise<void> {
+  const id = sanitizeId(docId);
+  await runWrite((c) =>
+    c.from('courses').delete().eq('owner_id', uid).eq('doc_id', id)
+  );
+}
+
+export async function saveBookNoteDoc(uid: string, bn: BookNote): Promise<void> {
+  const row = buildBookNoteRow(uid, bn);
+  await runWrite((c) =>
+    c.from('book_notes').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteBookNoteDoc(uid: string, noteId: string): Promise<void> {
+  const id = sanitizeId(noteId);
+  await runWrite((c) =>
+    c.from('book_notes').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function saveCustomCategoryDoc(
+  uid: string,
+  cat: CustomCategory
+): Promise<void> {
+  const row = buildCustomCategoryRow(uid, cat);
+  await runWrite((c) =>
+    c.from('custom_categories').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteCustomCategoryDoc(
+  uid: string,
+  categoryId: string
+): Promise<void> {
+  const id = sanitizeId(categoryId);
+  await runWrite((c) =>
+    c.from('custom_categories').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function saveHistoryEntryDoc(
+  uid: string,
+  entry: StudyHistoryEntry
+): Promise<void> {
+  const row = buildHistoryRow(uid, entry);
+  await runWrite((c) =>
+    c.from('study_history').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteHistoryEntryDoc(
+  uid: string,
+  entryId: string
+): Promise<void> {
+  const id = sanitizeId(entryId);
+  await runWrite((c) =>
+    c.from('study_history').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function saveUserPreferencesDoc(
+  uid: string,
+  prefs: UserPreferences
+): Promise<void> {
+  const row = buildUserPreferencesRow(uid, prefs);
+  await runWrite((c) =>
+    c.from('user_preferences').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function saveReflectionDoc(
+  uid: string,
+  reflection: PersonalReflection
+): Promise<void> {
+  const row = buildReflectionRow(uid, reflection);
+  await runWrite((c) =>
+    c.from('reflections').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteReflectionDoc(
+  uid: string,
+  reflectionId: string
+): Promise<void> {
+  const id = sanitizeId(reflectionId);
+  await runWrite((c) =>
+    c.from('reflections').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function saveCalendarEventDoc(
+  uid: string,
+  event: CalendarEvent
+): Promise<void> {
+  const row = buildCalendarEventRow(uid, event);
+  await runWrite((c) =>
+    c.from('calendar_events').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteCalendarEventDoc(
+  uid: string,
+  eventId: string
+): Promise<void> {
+  const id = sanitizeId(eventId);
+  await runWrite((c) =>
+    c.from('calendar_events').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function saveLearningPathDoc(
+  uid: string,
+  pathItem: LearningPath
+): Promise<void> {
+  const row = buildLearningPathRow(uid, pathItem);
+  await runWrite((c) =>
+    c.from('learning_paths').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteLearningPathDoc(
+  uid: string,
+  pathId: string
+): Promise<void> {
+  const id = sanitizeId(pathId);
+  await runWrite((c) =>
+    c.from('learning_paths').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function saveReadingItemDoc(
+  uid: string,
+  item: ReadingLibraryItem
+): Promise<void> {
+  const row = buildReadingItemRow(uid, item);
+  await runWrite((c) =>
+    c.from('reading_items').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteReadingItemDoc(
+  uid: string,
+  itemId: string
+): Promise<void> {
+  const id = sanitizeId(itemId);
+  await runWrite((c) =>
+    c.from('reading_items').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function savePracticalProjectDoc(
+  uid: string,
+  proj: PracticalProject
+): Promise<void> {
+  const row = buildPracticalProjectRow(uid, proj);
+  await runWrite((c) =>
+    c.from('practical_projects').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deletePracticalProjectDoc(
+  uid: string,
+  projectId: string
+): Promise<void> {
+  const id = sanitizeId(projectId);
+  await runWrite((c) =>
+    c.from('practical_projects').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function saveUnifiedTaskDoc(
+  uid: string,
+  task: UnifiedTask
+): Promise<void> {
+  const row = buildUnifiedTaskRow(uid, task);
+  await runWrite((c) =>
+    c.from('unified_tasks').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteUnifiedTaskDoc(
+  uid: string,
+  taskId: string
+): Promise<void> {
+  const id = sanitizeId(taskId);
+  await runWrite((c) =>
+    c.from('unified_tasks').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function saveDentalCaseDoc(
+  uid: string,
+  dentalCase: DentalCase
+): Promise<void> {
+  const row = buildDentalCaseRow(uid, dentalCase);
+  await runWrite((c) =>
+    c.from('dental_cases').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteDentalCaseDoc(
+  uid: string,
+  caseId: string
+): Promise<void> {
+  const id = sanitizeId(caseId);
+  await runWrite((c) =>
+    c.from('dental_cases').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+export async function saveWeeklyMeetingDoc(
+  uid: string,
+  meeting: WeeklyMeeting
+): Promise<void> {
+  const row = buildWeeklyMeetingRow(uid, meeting);
+  await runWrite((c) =>
+    c.from('weekly_meetings').upsert(row, { onConflict: 'owner_id,id' })
+  );
+}
+
+export async function deleteWeeklyMeetingDoc(
+  uid: string,
+  meetingId: string
+): Promise<void> {
+  const id = sanitizeId(meetingId);
+  await runWrite((c) =>
+    c.from('weekly_meetings').delete().eq('owner_id', uid).eq('id', id)
+  );
+}
+
+// ============================================================================
+// Cloud File Attachments Metadata Subscription
+// ============================================================================
+
+export interface CloudAttachmentItem {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storagePath?: string;
+  updatedAtMs: number;
+}
+
+export function subscribeCloudAttachments(
+  uid: string,
+  onData: (items: CloudAttachmentItem[]) => void
+): () => void {
+  if (!isSupabaseConfigured || !supabase) {
+    onData([]);
+    return () => {};
+  }
+
+  let disposed = false;
+
+  const fetchAttachments = async () => {
+    if (disposed) return;
+    try {
+      const { data, error } = await withFirebaseTokenRetry(async (c) =>
+        c
+          .from('file_attachments')
+          .select('id,file_name,mime_type,size_bytes,storage_path,updated_at')
+          .eq('owner_id', uid)
+          .order('updated_at', { ascending: false })
+      );
+      if (error || disposed) {
+        if (error) console.warn('Could not fetch file_attachments:', error);
+        return;
+      }
+      const mapped: CloudAttachmentItem[] = (data || []).map((row) => {
+        const r = row as Record<string, unknown>;
+        const updatedStr = typeof r.updated_at === 'string' ? r.updated_at : '';
+        const ms = updatedStr ? Date.parse(updatedStr) : 0;
+        return {
+          id: String(r.id),
+          fileName: String(r.file_name || 'مستند مرفق'),
+          mimeType: String(r.mime_type || 'application/pdf'),
+          sizeBytes: Number(r.size_bytes ?? 0),
+          storagePath: r.storage_path ? String(r.storage_path) : undefined,
+          updatedAtMs: Number.isFinite(ms) ? ms : 0,
+        };
+      });
+      onData(mapped);
+    } catch (err) {
+      console.warn('Could not subscribe to user file_attachments:', err);
+      if (!disposed) onData([]);
+    }
+  };
+
+  void fetchAttachments();
+
+  const channel = supabase
+    .channel(`file_attachments_${uid}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'file_attachments',
+        filter: `owner_id=eq.${uid}`,
+      },
+      () => {
+        if (!disposed) void fetchAttachments();
+      }
+    )
+    .subscribe();
+
+  return () => {
+    disposed = true;
+    if (supabase) {
+      void supabase.removeChannel(channel);
+    }
+  };
+}
