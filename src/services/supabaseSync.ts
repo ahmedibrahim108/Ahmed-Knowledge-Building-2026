@@ -130,6 +130,27 @@ function sanitizeTimeSlotOrEmpty(raw: unknown): string {
   return /^\d{1,2}:\d{2}$/.test(trimmed) ? trimmed : '';
 }
 
+function pickEnum<T extends string>(
+  raw: unknown,
+  allowed: readonly T[],
+  fallback: T
+): T {
+  return allowed.includes(raw as T) ? (raw as T) : fallback;
+}
+
+function parsePositiveInt(raw: unknown, docIdHint?: string, prefix?: string): number {
+  const num = Number(raw);
+  if (Number.isFinite(num) && num > 0) return Math.round(num);
+  if (typeof docIdHint === 'string' && prefix) {
+    const match = docIdHint.match(new RegExp(`^${prefix}-(\\d+)`));
+    if (match) {
+      const parsed = Number(match[1]);
+      if (Number.isFinite(parsed) && parsed > 0) return Math.round(parsed);
+    }
+  }
+  return 1;
+}
+
 function sanitizeCalendarPrefs(raw?: Partial<CalendarPreferences>): CalendarPreferences {
   const defaultView =
     raw?.defaultView === 'day' ||
@@ -202,23 +223,30 @@ function sanitizeResourceList(items: StudyResource[]): StudyResource[] {
 // ============================================================================
 
 export function buildQuarterRow(uid: string, q: QuarterInfo) {
+  const rawNum = Number(q.number);
+  const safeNumber =
+    Number.isFinite(rawNum) && rawNum > 0 ? Math.min(999, Math.round(rawNum)) : 1;
   return {
     owner_id: uid,
-    id: sanitizeId(q.id),
-    number: Math.max(1, Math.min(20, Math.round(q.number))),
-    title: clip(q.title || `المرحلة ${q.number}`, 200),
+    id: sanitizeId(q.id || `quarter-${safeNumber}`),
+    number: safeNumber,
+    title: clip(q.title || `المرحلة ${safeNumber}`, 200),
     subtitle: clip(q.subtitle || '', 300),
   };
 }
 
 export function buildMonthRow(uid: string, m: MonthPlan) {
-  const docId = sanitizeId(m.docId || `month-${m.id}`);
+  const docId = sanitizeId(m.docId || `month-${m.id ?? 1}`);
+  const monthNumber = parsePositiveInt(m.id, docId, 'month');
+  const rawQuarter = Number(m.quarter);
+  const safeQuarter =
+    Number.isFinite(rawQuarter) && rawQuarter > 0 ? Math.min(99, Math.round(rawQuarter)) : 1;
   return {
     owner_id: uid,
     doc_id: docId,
-    month_number: Math.max(1, Math.min(60, Math.round(m.id))),
+    month_number: Math.min(999, monthNumber),
     hub_id: sanitizeHubId(m.hubId),
-    quarter: Math.max(1, Math.min(20, Math.round(m.quarter))),
+    quarter: safeQuarter,
     quarter_title: clip(m.quarterTitle, 200),
     theme: clip(m.theme, 250),
     foundational: {
@@ -237,119 +265,127 @@ export function buildMonthRow(uid: string, m: MonthPlan) {
       pace: clip(m.exploratory?.pace, 120),
       focus: clip(m.exploratory?.focus, 400),
     },
-    course_id: Math.max(0, Math.round(m.courseId || 0)),
-    discussion_prompt: clip(m.discussionPrompt, 500),
-    application_task: clip(m.applicationTask, 500),
+    course_id: Math.max(0, Math.round(Number(m.courseId) || 0)),
+    discussion_prompt: clip(m.discussionPrompt, 1000),
+    application_task: clip(m.applicationTask, 1000),
     activities: {
       reading: Boolean(m.activities?.reading),
       listening: Boolean(m.activities?.listening),
       summarizing: Boolean(m.activities?.summarizing),
       discussing: Boolean(m.activities?.discussing),
     },
-    status: m.status,
+    status: pickEnum(m.status, ['not_started', 'in_progress', 'completed'] as const, 'not_started'),
     notes: clip(m.notes, 20000),
-    tasks: (m.tasks || []).slice(0, 60).map((t) => ({
+    tasks: (Array.isArray(m.tasks) ? m.tasks : []).slice(0, 60).map((t) => ({
       id: clip(t.id, 128),
       text: clip(t.text, 500),
-      track: t.track,
+      track: t.track || 'foundational',
       done: Boolean(t.done),
       custom: Boolean(t.custom),
     })),
-    resources: sanitizeResourceList(m.resources || []),
+    resources: sanitizeResourceList(Array.isArray(m.resources) ? m.resources : []),
     reading_modes: sanitizeReadingModes(m.readingModes),
     learning_methods: sanitizeLearningMethods(m.learningMethods),
-    review_count: Math.max(0, Math.min(999, Math.round(m.reviewCount ?? 0))),
-    listen_count: Math.max(0, Math.min(999, Math.round(m.listenCount ?? 0))),
-    repetition_stage: Math.max(0, Math.min(10, Math.round(m.repetitionStage ?? 0))),
+    review_count: Math.max(0, Math.min(999, Math.round(Number(m.reviewCount) || 0))),
+    listen_count: Math.max(0, Math.min(999, Math.round(Number(m.listenCount) || 0))),
+    repetition_stage: Math.max(0, Math.min(10, Math.round(Number(m.repetitionStage) || 0))),
     next_review_date_key: sanitizeDateKeyOrEmpty(m.nextReviewDateKey),
     last_reviewed_date_key: sanitizeDateKeyOrEmpty(m.lastReviewedDateKey),
   };
 }
 
 export function buildDomainRow(uid: string, d: DomainInfo, order: number) {
+  const rawOrder = Number(d.order ?? order);
   return {
     owner_id: uid,
-    id: sanitizeId(d.id),
-    sort_order: Math.max(0, Math.min(200, Math.round(d.order ?? order))),
+    id: sanitizeId(d.id || `domain_${order}`),
+    sort_order: Number.isFinite(rawOrder) ? Math.max(0, Math.min(999, Math.round(rawOrder))) : order,
     hub_id: sanitizeHubId(d.hubId),
     title: clip(d.title, 200),
-    subtitle: clip(d.subtitle, 200),
+    subtitle: clip(d.subtitle, 300),
     purpose: clip(d.purpose, 1000),
-    thinkers: (d.thinkers || []).slice(0, 30).map((t) => ({
+    thinkers: (Array.isArray(d.thinkers) ? d.thinkers : []).slice(0, 30).map((t) => ({
       name: clip(t.name, 160),
       role: clip(t.role, 200),
-      keyWorks: (t.keyWorks || []).slice(0, 12).map((w) => clip(w, 200)),
+      keyWorks: (Array.isArray(t.keyWorks) ? t.keyWorks : []).slice(0, 12).map((w) => clip(w, 200)),
       contribution: clip(t.contribution, 600),
     })),
   };
 }
 
 export function buildCourseRow(uid: string, c: PersonalCourse) {
-  const docId = sanitizeId(c.docId || `course-${c.id}`);
+  const docId = sanitizeId(c.docId || `course-${c.id ?? Date.now()}`);
+  const courseNumber = parsePositiveInt(c.id, docId, 'course');
   const studyStage = sanitizeCourseStudyStage(c.studyStage, c.completed);
   return {
     owner_id: uid,
     doc_id: docId,
-    course_number: Math.max(1, Math.min(999, Math.round(c.id))),
+    course_number: courseNumber,
     hub_id: sanitizeHubId(c.hubId),
     title: clip(c.title, 300),
     category: clip(c.category, 160),
     study_stage: studyStage,
     scheduled_period: clip(c.scheduledPeriod, 120),
-    instructor: clip(c.instructor, 160),
-    platform: clip(c.platform, 160),
+    instructor: clip(c.instructor, 200),
+    platform: clip(c.platform, 200),
     duration_label: clip(c.durationLabel, 120),
     start_date: clip(c.startDate, 60),
     target_date: clip(c.targetDate, 60),
-    progress_pct: Math.max(0, Math.min(100, Math.round(c.progressPct ?? 0))),
+    progress_pct: Math.max(0, Math.min(100, Math.round(Number(c.progressPct) || 0))),
     notes: clip(c.notes, 20000),
-    linked_months: (c.linkedMonths || [])
-      .slice(0, 24)
-      .map((n) => Math.max(1, Math.min(60, Math.round(n)))),
+    linked_months: (Array.isArray(c.linkedMonths) ? c.linkedMonths : [])
+      .map((n) => Math.round(Number(n)))
+      .filter((n) => Number.isFinite(n) && n >= 1 && n <= 999)
+      .slice(0, 24),
     complementary_book: clip(c.complementaryBook, 300),
-    book_author: clip(c.bookAuthor, 200),
-    application_milestone: clip(c.applicationMilestone, 600),
+    book_author: clip(c.bookAuthor, 250),
+    application_milestone: clip(c.applicationMilestone, 1000),
     completed: studyStage === 'completed' ? true : Boolean(c.completed),
-    resources: sanitizeResourceList(c.resources || []),
-    tasks: (c.tasks || []).slice(0, 80).map((t) => ({
+    resources: sanitizeResourceList(Array.isArray(c.resources) ? c.resources : []),
+    tasks: (Array.isArray(c.tasks) ? c.tasks : []).slice(0, 80).map((t) => ({
       id: clip(t.id, 128),
       text: clip(t.text, 500),
-      track: t.track,
+      track: t.track || 'action',
       done: Boolean(t.done),
       custom: Boolean(t.custom),
     })),
     reading_modes: sanitizeReadingModes(c.readingModes),
     learning_methods: sanitizeLearningMethods(c.learningMethods),
-    review_count: Math.max(0, Math.min(999, Math.round(c.reviewCount ?? 0))),
-    listen_count: Math.max(0, Math.min(999, Math.round(c.listenCount ?? 0))),
-    repetition_stage: Math.max(0, Math.min(10, Math.round(c.repetitionStage ?? 0))),
+    review_count: Math.max(0, Math.min(999, Math.round(Number(c.reviewCount) || 0))),
+    listen_count: Math.max(0, Math.min(999, Math.round(Number(c.listenCount) || 0))),
+    repetition_stage: Math.max(0, Math.min(10, Math.round(Number(c.repetitionStage) || 0))),
     next_review_date_key: sanitizeDateKeyOrEmpty(c.nextReviewDateKey),
     last_reviewed_date_key: sanitizeDateKeyOrEmpty(c.lastReviewedDateKey),
   };
 }
 
 export function buildBookNoteRow(uid: string, bn: BookNote) {
+  const noteType: NoteCategoryType = pickEnum(
+    bn.noteType,
+    ['book', 'course_lecture', 'general'] as const,
+    'book'
+  );
   return {
     owner_id: uid,
     id: sanitizeId(bn.id),
     hub_id: sanitizeHubId(bn.hubId),
-    note_type: bn.noteType || 'book',
+    note_type: noteType,
     note_color: sanitizeNoteColor(bn.noteColor),
     book_title: clip(bn.bookTitle, 300),
     author: clip(bn.author, 200),
-    course_id: Math.max(0, Math.round(bn.courseId ?? 0)),
+    course_id: Math.max(0, Math.round(Number(bn.courseId) || 0)),
     course_title: clip(bn.courseTitle, 250),
     lecture_title: clip(bn.lectureTitle, 250),
     category_label: clip(bn.categoryLabel, 120),
-    progress_marker: clip(bn.progressMarker, 120),
+    progress_marker: clip(bn.progressMarker, 200),
     content: clip(bn.content, 200000),
     quotes: clip(bn.quotes, 60000),
     updated_at_label: clip(bn.updatedAt, 100),
     reading_modes: sanitizeReadingModes(bn.readingModes),
     learning_methods: sanitizeLearningMethods(bn.learningMethods),
-    review_count: Math.max(0, Math.min(999, Math.round(bn.reviewCount ?? 0))),
-    listen_count: Math.max(0, Math.min(999, Math.round(bn.listenCount ?? 0))),
-    repetition_stage: Math.max(0, Math.min(10, Math.round(bn.repetitionStage ?? 0))),
+    review_count: Math.max(0, Math.min(999, Math.round(Number(bn.reviewCount) || 0))),
+    listen_count: Math.max(0, Math.min(999, Math.round(Number(bn.listenCount) || 0))),
+    repetition_stage: Math.max(0, Math.min(10, Math.round(Number(bn.repetitionStage) || 0))),
     next_review_date_key: sanitizeDateKeyOrEmpty(bn.nextReviewDateKey),
     last_reviewed_date_key: sanitizeDateKeyOrEmpty(bn.lastReviewedDateKey),
   };
@@ -368,40 +404,45 @@ export function buildCustomCategoryRow(uid: string, cat: CustomCategory) {
     hub_id: hubId,
     title: clip(cat.title, 160),
     description: clip(cat.description, 400),
-    color: cat.color,
+    color: pickEnum(cat.color, ['navy', 'emerald', 'amber', 'slate'] as const, 'navy'),
     created_at_label: clip(cat.createdAtLabel, 80),
   };
 }
 
 export function buildHistoryRow(uid: string, entry: StudyHistoryEntry) {
+  const rawMs = Number(entry.createdAtMs);
   return {
     owner_id: uid,
     id: sanitizeId(entry.id),
-    action_type: entry.actionType,
+    action_type: pickEnum(
+      entry.actionType,
+      ['note', 'voice', 'task', 'course', 'domain', 'month'] as const,
+      'note'
+    ),
     title: clip(entry.title, 250),
     detail: clip(entry.detail, 400),
-    target_tab: entry.targetTab,
+    target_tab: clip(entry.targetTab || 'overview', 60),
     target_note_id: clip(entry.targetNoteId, 128),
-    target_month_id: entry.targetMonthId ?? 0,
-    target_course_id: entry.targetCourseId ?? 0,
+    target_month_id: Math.max(0, Math.round(Number(entry.targetMonthId) || 0)),
+    target_course_id: Math.max(0, Math.round(Number(entry.targetCourseId) || 0)),
     timestamp_label: clip(entry.timestampLabel, 80),
-    created_at_ms: Math.round(entry.createdAtMs),
+    created_at_ms: Number.isFinite(rawMs) ? Math.round(rawMs) : 0,
   };
 }
 
 export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
   const rawCats = prefs.hubCategories ?? DEFAULT_HUB_CATEGORIES;
   const cleanHubCategories: Record<LearningHubId, string[]> = {
-    marketing: (rawCats.marketing ?? DEFAULT_HUB_CATEGORIES.marketing)
-      .map((s) => clip(s.trim(), 120))
+    marketing: (Array.isArray(rawCats.marketing) ? rawCats.marketing : DEFAULT_HUB_CATEGORIES.marketing)
+      .map((s) => clip(String(s).trim(), 120))
       .filter(Boolean)
       .slice(0, 30),
-    dental_career: (rawCats.dental_career ?? DEFAULT_HUB_CATEGORIES.dental_career)
-      .map((s) => clip(s.trim(), 120))
+    dental_career: (Array.isArray(rawCats.dental_career) ? rawCats.dental_career : DEFAULT_HUB_CATEGORIES.dental_career)
+      .map((s) => clip(String(s).trim(), 120))
       .filter(Boolean)
       .slice(0, 30),
-    knowledge: (rawCats.knowledge ?? DEFAULT_HUB_CATEGORIES.knowledge)
-      .map((s) => clip(s.trim(), 120))
+    knowledge: (Array.isArray(rawCats.knowledge) ? rawCats.knowledge : DEFAULT_HUB_CATEGORIES.knowledge)
+      .map((s) => clip(String(s).trim(), 120))
       .filter(Boolean)
       .slice(0, 30),
   };
@@ -409,17 +450,17 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
   return {
     owner_id: uid,
     id: 'settings',
-    note_font_size: prefs.noteFontSize,
-    note_highlight_color: prefs.noteHighlightColor,
-    note_paper_tone: prefs.notePaperTone,
-    note_margin: prefs.noteMargin ?? 'normal',
-    note_width: prefs.noteWidth ?? 'focused',
-    note_border: prefs.noteBorder ?? 'subtle',
+    note_font_size: pickEnum(prefs.noteFontSize, ['sm', 'base', 'lg'] as const, DEFAULT_USER_PREFERENCES.noteFontSize),
+    note_highlight_color: pickEnum(prefs.noteHighlightColor, ['amber', 'emerald', 'sky', 'rose'] as const, DEFAULT_USER_PREFERENCES.noteHighlightColor),
+    note_paper_tone: pickEnum(prefs.notePaperTone, ['clean', 'warm', 'slate'] as const, DEFAULT_USER_PREFERENCES.notePaperTone),
+    note_margin: pickEnum(prefs.noteMargin, ['compact', 'normal', 'wide', 'spacious'] as const, 'normal'),
+    note_width: pickEnum(prefs.noteWidth, ['focused', 'balanced', 'full'] as const, 'focused'),
+    note_border: pickEnum(prefs.noteBorder, ['none', 'subtle', 'medium', 'framed'] as const, 'subtle'),
     auto_add_timestamp_on_voice: Boolean(prefs.autoAddTimestampOnVoice),
-    voice_dialect: prefs.voiceDialect,
-    voice_insert_mode: prefs.voiceInsertMode,
-    read_aloud_voice: prefs.readAloudVoice,
-    read_aloud_speed: prefs.readAloudSpeed,
+    voice_dialect: pickEnum(prefs.voiceDialect, ['standard_arabic', 'egyptian_arabic', 'bilingual'] as const, DEFAULT_USER_PREFERENCES.voiceDialect),
+    voice_insert_mode: pickEnum(prefs.voiceInsertMode, ['append_paragraph', 'append_bullet', 'append_quote'] as const, DEFAULT_USER_PREFERENCES.voiceInsertMode),
+    read_aloud_voice: pickEnum(prefs.readAloudVoice, ['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr'] as const, DEFAULT_USER_PREFERENCES.readAloudVoice),
+    read_aloud_speed: pickEnum(prefs.readAloudSpeed, ['normal', 'calm'] as const, DEFAULT_USER_PREFERENCES.readAloudSpeed),
     show_excel_export: prefs.showExcelExport !== false,
     hub_categories: cleanHubCategories,
     calendar_prefs: sanitizeCalendarPrefs(prefs.calendarPrefs),
@@ -427,15 +468,16 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
 }
 
 export function buildReflectionRow(uid: string, r: PersonalReflection) {
+  const rawMs = Number(r.createdAtMs);
   return {
     owner_id: uid,
     id: sanitizeId(r.id),
     title: clip(r.title, 200),
     content: clip(r.content, 20000),
-    mood_tag: r.moodTag,
+    mood_tag: pickEnum(r.moodTag, ['تأمل', 'فكرة', 'امتنان', 'هدف'] as const, 'تأمل'),
     pinned: Boolean(r.pinned),
     created_at_label: clip(r.createdAtLabel, 80),
-    created_at_ms: Math.round(r.createdAtMs),
+    created_at_ms: Number.isFinite(rawMs) ? Math.round(rawMs) : 0,
   };
 }
 
@@ -452,8 +494,8 @@ export function buildCalendarEventRow(uid: string, ev: CalendarEvent) {
         : null,
     title: clip(ev.title, 240),
     notes: clip(ev.notes, 3000),
-    category: ev.category,
-    color: ev.color,
+    category: pickEnum(ev.category, ['شخصي', 'دراسة', 'موعد', 'مراجعة', 'قراءة'] as const, 'شخصي'),
+    color: pickEnum(ev.color, ['navy', 'emerald', 'amber', 'rose'] as const, 'navy'),
     done: Boolean(ev.done),
     linked_task_text: clip(ev.linkedTaskText, 240),
     linked_task_id: ev.linkedTaskId ? clip(ev.linkedTaskId, 128) : null,
@@ -473,21 +515,22 @@ export function buildLearningPathRow(uid: string, path: LearningPath) {
     target_level: clip(path.targetLevel, 160),
     start_date: clip(path.startDate, 40),
     expected_completion_date: clip(path.expectedCompletionDate, 40),
-    progress_pct: Math.max(0, Math.min(100, Math.round(path.progressPct ?? 0))),
-    status: path.status,
-    stages: (path.stages || []).slice(0, 50).map((s) => ({
+    progress_pct: Math.max(0, Math.min(100, Math.round(Number(path.progressPct) || 0))),
+    status: pickEnum(path.status, ['planned', 'in_progress', 'completed'] as const, 'planned'),
+    stages: (Array.isArray(path.stages) ? path.stages : []).slice(0, 50).map((s) => ({
       id: clip(s.id, 128),
       title: clip(s.title, 300),
       done: Boolean(s.done),
       notes: clip(s.notes, 600),
     })),
-    linked_course_ids: (path.linkedCourseIds || [])
-      .slice(0, 30)
-      .map((n) => Math.max(1, Math.min(999, Math.round(n)))),
+    linked_course_ids: (Array.isArray(path.linkedCourseIds) ? path.linkedCourseIds : [])
+      .map((n) => Math.round(Number(n)))
+      .filter((n) => Number.isFinite(n) && n >= 1)
+      .slice(0, 30),
     reading_modes: sanitizeReadingModes(path.readingModes),
     learning_methods: sanitizeLearningMethods(path.learningMethods),
-    review_count: Math.max(0, Math.min(999, Math.round(path.reviewCount ?? 0))),
-    listen_count: Math.max(0, Math.min(999, Math.round(path.listenCount ?? 0))),
+    review_count: Math.max(0, Math.min(999, Math.round(Number(path.reviewCount) || 0))),
+    listen_count: Math.max(0, Math.min(999, Math.round(Number(path.listenCount) || 0))),
   };
 }
 
@@ -499,10 +542,10 @@ export function buildReadingItemRow(uid: string, item: ReadingLibraryItem) {
     author: clip(item.author, 200),
     hub_id: sanitizeHubId(item.hubId),
     category_label: clip(item.categoryLabel, 140),
-    item_type: item.itemType,
-    status: item.status,
-    current_page: Math.max(0, Math.min(99999, Math.round(item.currentPage ?? 0))),
-    total_pages: Math.max(0, Math.min(99999, Math.round(item.totalPages ?? 0))),
+    item_type: clip(item.itemType || 'كتاب', 80),
+    status: pickEnum(item.status, ['to_read', 'reading', 'completed'] as const, 'to_read'),
+    current_page: Math.max(0, Math.min(99999, Math.round(Number(item.currentPage) || 0))),
+    total_pages: Math.max(0, Math.min(99999, Math.round(Number(item.totalPages) || 0))),
     takeaways: clip(item.takeaways, 20000),
     attachment_name: clip(item.attachmentName, 240),
     attachment_resource_id: clip(item.attachmentResourceId, 160),
@@ -512,9 +555,9 @@ export function buildReadingItemRow(uid: string, item: ReadingLibraryItem) {
     external_url: clip(item.externalUrl, 800),
     reading_modes: sanitizeReadingModes(item.readingModes),
     learning_methods: sanitizeLearningMethods(item.learningMethods),
-    review_count: Math.max(0, Math.min(999, Math.round(item.reviewCount ?? 0))),
-    listen_count: Math.max(0, Math.min(999, Math.round(item.listenCount ?? 0))),
-    repetition_stage: Math.max(0, Math.min(10, Math.round(item.repetitionStage ?? 0))),
+    review_count: Math.max(0, Math.min(999, Math.round(Number(item.reviewCount) || 0))),
+    listen_count: Math.max(0, Math.min(999, Math.round(Number(item.listenCount) || 0))),
+    repetition_stage: Math.max(0, Math.min(10, Math.round(Number(item.repetitionStage) || 0))),
     next_review_date_key: sanitizeDateKeyOrEmpty(item.nextReviewDateKey),
     last_reviewed_date_key: sanitizeDateKeyOrEmpty(item.lastReviewedDateKey),
     updated_at_label: clip(item.updatedAtLabel, 100),
@@ -530,12 +573,12 @@ export function buildPracticalProjectRow(uid: string, proj: PracticalProject) {
     hub_id: sanitizeHubId(proj.hubId),
     category_label: clip(proj.categoryLabel, 140),
     objectives: clip(proj.objectives, 2000),
-    status: proj.status,
-    progress_pct: Math.max(0, Math.min(100, Math.round(proj.progressPct ?? 0))),
+    status: pickEnum(proj.status, ['planned', 'in_progress', 'completed'] as const, 'planned'),
+    progress_pct: Math.max(0, Math.min(100, Math.round(Number(proj.progressPct) || 0))),
     deliverables: clip(proj.deliverables, 2000),
     start_date: clip(proj.startDate, 40),
     target_date: clip(proj.targetDate, 40),
-    linked_course_id: Math.max(0, Math.round(proj.linkedCourseId ?? 0)),
+    linked_course_id: Math.max(0, Math.round(Number(proj.linkedCourseId) || 0)),
     notes: clip(proj.notes, 8000),
   };
 }
@@ -548,8 +591,8 @@ export function buildUnifiedTaskRow(uid: string, task: UnifiedTask) {
     description: clip(task.description, 2000),
     hub_id: sanitizeHubId(task.hubId),
     category_label: clip(task.categoryLabel, 140),
-    priority: task.priority,
-    status: task.status,
+    priority: pickEnum(task.priority, ['low', 'medium', 'high'] as const, 'medium'),
+    status: pickEnum(task.status, ['todo', 'in_progress', 'done'] as const, 'todo'),
     due_date: clip(task.dueDate, 40),
     scheduled_date: sanitizeDateKeyOrEmpty(task.scheduledDate ?? task.dueDate),
     start_time: sanitizeTimeSlotOrEmpty(task.startTime),
@@ -606,20 +649,20 @@ export function buildWeeklyMeetingRow(uid: string, mtg: WeeklyMeeting) {
     description: clip(mtg.description, 2000),
     hub_id: sanitizeHubId(mtg.hubId),
     start_date: sanitizeDateKeyOrEmpty(mtg.startDate),
-    day_of_week: Math.max(0, Math.min(6, Math.round(mtg.dayOfWeek ?? 6))),
+    day_of_week: Math.max(0, Math.min(6, Math.round(Number(mtg.dayOfWeek) || 6))),
     start_time: sanitizeTimeSlotOrEmpty(mtg.startTime) || '18:00',
     end_time: sanitizeTimeSlotOrEmpty(mtg.endTime) || '19:00',
-    duration_minutes: Math.max(15, Math.min(720, Math.round(mtg.durationMinutes ?? 60))),
+    duration_minutes: Math.max(15, Math.min(720, Math.round(Number(mtg.durationMinutes) || 60))),
     is_recurring_weekly: Boolean(mtg.isRecurringWeekly),
     recurrence_end_date: sanitizeDateKeyOrEmpty(mtg.recurrenceEndDate),
-    color: mtg.color,
-    status: mtg.status,
-    completed_dates: (mtg.completedDates || [])
+    color: pickEnum(mtg.color, ['navy', 'emerald', 'amber', 'rose'] as const, 'navy'),
+    status: pickEnum(mtg.status, ['scheduled', 'completed', 'cancelled'] as const, 'scheduled'),
+    completed_dates: (Array.isArray(mtg.completedDates) ? mtg.completedDates : [])
       .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
       .slice(0, 120),
     attendance_by_date: cleanAttendance,
     notes_by_date: cleanNotes,
-    follow_ups: (mtg.followUps || []).slice(0, 80).map((f) => ({
+    follow_ups: (Array.isArray(mtg.followUps) ? mtg.followUps : []).slice(0, 80).map((f) => ({
       id: clip(f.id, 128),
       text: clip(f.text, 500),
       done: Boolean(f.done),
@@ -628,7 +671,7 @@ export function buildWeeklyMeetingRow(uid: string, mtg: WeeklyMeeting) {
         : {}),
       ...(f.linkedTaskId ? { linkedTaskId: clip(f.linkedTaskId, 128) } : {}),
     })),
-    linked_task_ids: (mtg.linkedTaskIds || []).slice(0, 80).map((s) => clip(s, 128)),
+    linked_task_ids: (Array.isArray(mtg.linkedTaskIds) ? mtg.linkedTaskIds : []).slice(0, 80).map((s) => clip(s, 128)),
     exceptions: cleanExceptions,
   };
 }
@@ -1497,6 +1540,7 @@ export interface WorkspaceCallbacks {
   onDentalCases?: (items: DentalCase[]) => void;
   onWeeklyMeetings?: (items: WeeklyMeeting[]) => void;
   onError?: (message: string) => void;
+  onRefreshReady?: (refreshFn: () => Promise<void>) => void;
 }
 
 export function subscribeUserWorkspace(
@@ -1800,6 +1844,7 @@ export function subscribeUserWorkspace(
     ]);
   };
 
+  callbacks.onRefreshReady?.(fetchAll);
   void fetchAll();
 
   const tableRefetchers: Record<string, () => Promise<void>> = {

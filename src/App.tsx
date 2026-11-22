@@ -4,7 +4,7 @@
  */
 
 import { User, onAuthStateChanged } from 'firebase/auth';
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
@@ -306,6 +306,7 @@ export default function App() {
   const [supabaseTestResult, setSupabaseTestResult] =
     useState<SupabaseConnectionTestResult | null>(null);
   const [supabaseTesting, setSupabaseTesting] = useState(false);
+  const workspaceRefreshRef = useRef<(() => Promise<void>) | null>(null);
 
   const runSupabaseConnectionTest = async (options?: {
     ensureProfileForUser?: User | null;
@@ -616,6 +617,9 @@ export default function App() {
             },
             onWeeklyMeetings: (items) => {
               setWeeklyMeetings(items);
+            },
+            onRefreshReady: (refreshFn) => {
+              workspaceRefreshRef.current = refreshFn;
             },
           });
         } catch (err) {
@@ -2273,6 +2277,7 @@ export default function App() {
         libraryCount={readingItems.length}
         tasksCount={unifiedTasks.length}
         notesCount={bookNotes.length}
+        onOpenMigration={() => setMigrationModalOpen(true)}
       />
 
       {/* Read-Only Guest Mode Banner */}
@@ -2929,8 +2934,9 @@ export default function App() {
         }
         onClose={() => setMigrationModalOpen(false)}
         onMigrationComplete={() => {
+          void workspaceRefreshRef.current?.();
           setExportNotice(
-            'تم إتمام الترحيل إلى Supabase بنجاح — جارٍ تحديث مساحة العمل تلقائيًا.'
+            'تم إتمام الترحيل إلى Supabase بنجاح — تم تحديث مساحة العمل تلقائيًا.'
           );
           window.setTimeout(() => setExportNotice(null), 6000);
         }}

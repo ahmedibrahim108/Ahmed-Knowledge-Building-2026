@@ -3,6 +3,7 @@ import { User } from 'firebase/auth';
 import {
   ChevronDown,
   Cloud,
+  Database,
   LayoutDashboard,
   LogIn,
   LogOut,
@@ -38,6 +39,7 @@ interface HeaderProps {
   libraryCount?: number;
   tasksCount?: number;
   notesCount: number;
+  onOpenMigration?: () => void;
 }
 
 export default function Header({
@@ -55,6 +57,7 @@ export default function Header({
   libraryCount = 0,
   tasksCount = 0,
   notesCount,
+  onOpenMigration,
 }: HeaderProps) {
   const navItems: Array<{ id: ActiveTab; label: string }> = [
     { id: 'overview', label: 'لوحة المتابعة' },
@@ -215,6 +218,19 @@ export default function Header({
                       <NotebookPen className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
                       <span>دفتر التلخيص والنوتس</span>
                     </button>
+                    {onOpenMigration && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          onOpenMigration();
+                        }}
+                        className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <Database className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                        <span>إعدادات الترحيل (Firestore ← Supabase)</span>
+                      </button>
+                    )}
                   </div>
 
                   <div className="pt-1 border-t border-slate-100">
