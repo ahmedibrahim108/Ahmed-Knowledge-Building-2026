@@ -1,23 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
   Cloud,
   Crop,
   Download,
+  Home,
   ImagePlus,
   Images,
   Maximize2,
   Minimize2,
+  RotateCcw,
   Search,
   Trash2,
   X,
 } from 'lucide-react';
 import {
+  DEFAULT_DASHBOARD_HERO_FRAME,
   DEFAULT_IMAGE_FRAME_SPEC,
+  HERO_IMAGE_PATH,
   ImageDisplaySize,
   ImageFrameSpec,
+  UserPreferences,
   sanitizeImageFrameSpec,
 } from '../data/curriculumData';
 import { auth } from '../firebase';
@@ -54,12 +60,16 @@ interface PhotoGalleryViewProps {
   uid?: string;
   canEdit: boolean;
   onRequireAuth: () => void;
+  preferences?: UserPreferences;
+  onUpdatePreferences?: (updates: Partial<UserPreferences>) => void;
 }
 
 function PhotoGalleryViewInner({
   uid: propUid,
   canEdit,
   onRequireAuth,
+  preferences,
+  onUpdatePreferences,
 }: PhotoGalleryViewProps) {
   const [authUid, setAuthUid] = useState<string | undefined>(
     () => auth?.currentUser?.uid
@@ -78,6 +88,7 @@ function PhotoGalleryViewInner({
   const [editingFrameImg, setEditingFrameImg] = useState<GalleryImageItem | null>(
     null
   );
+  const [editingHeroFrameOpen, setEditingHeroFrameOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [confirmDeleteImg, setConfirmDeleteImg] =
     useState<GalleryImageItem | null>(null);
@@ -247,6 +258,83 @@ function PhotoGalleryViewInner({
       ? filteredImages[lightboxIndex]
       : null;
 
+  const activeHeroUrl = preferences?.dashboardHeroImageUrl || HERO_IMAGE_PATH;
+  const activeHeroStoragePath = preferences?.dashboardHeroImageStoragePath || '';
+  const activeHeroFrame = sanitizeImageFrameSpec(
+    preferences?.dashboardHeroImageFrame,
+    DEFAULT_DASHBOARD_HERO_FRAME
+  );
+
+  const isHeroImg = (img: GalleryImageItem) =>
+    Boolean(
+      (activeHeroStoragePath &&
+        img.storagePath &&
+        img.storagePath === activeHeroStoragePath) ||
+        (preferences?.dashboardHeroImageUrl &&
+          img.url &&
+          img.url === preferences.dashboardHeroImageUrl)
+    );
+
+  const activeHeroMatchedItem = images.find(isHeroImg);
+  const isCustomHeroActive =
+    Boolean(activeHeroStoragePath) ||
+    Boolean(
+      preferences?.dashboardHeroImageUrl &&
+        preferences.dashboardHeroImageUrl !== HERO_IMAGE_PATH
+    );
+  const hasCustomHeroFrame =
+    Boolean(activeHeroFrame.customHeightPx) ||
+    activeHeroFrame.aspect !== 'auto' ||
+    activeHeroFrame.zoom !== 1 ||
+    activeHeroFrame.offsetX !== 50 ||
+    activeHeroFrame.offsetY !== 50 ||
+    activeHeroFrame.fitMode !== 'cover';
+
+  const handleToggleHomepageImage = (img: GalleryImageItem) => {
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    if (!onUpdatePreferences) return;
+    if (isHeroImg(img)) {
+      onUpdatePreferences({
+        dashboardHeroImageUrl: HERO_IMAGE_PATH,
+        dashboardHeroImageStoragePath: '',
+        dashboardHeroImageFrame: DEFAULT_DASHBOARD_HERO_FRAME,
+      });
+      return;
+    }
+    const baseFrame = sanitizeImageFrameSpec(
+      img.frameConfig,
+      DEFAULT_DASHBOARD_HERO_FRAME
+    );
+    onUpdatePreferences({
+      dashboardHeroImageUrl: img.url || HERO_IMAGE_PATH,
+      dashboardHeroImageStoragePath: img.storagePath || '',
+      dashboardHeroImageFrame: {
+        ...DEFAULT_DASHBOARD_HERO_FRAME,
+        fitMode: baseFrame.fitMode,
+        zoom: baseFrame.zoom,
+        offsetX: baseFrame.offsetX,
+        offsetY: baseFrame.offsetY,
+        aspect: 'auto',
+        customHeightPx: undefined,
+      },
+    });
+  };
+
+  const handleResetHomepageImage = () => {
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    onUpdatePreferences?.({
+      dashboardHeroImageUrl: HERO_IMAGE_PATH,
+      dashboardHeroImageStoragePath: '',
+      dashboardHeroImageFrame: DEFAULT_DASHBOARD_HERO_FRAME,
+    });
+  };
+
   return (
     <div
       className="space-y-5"
@@ -380,6 +468,99 @@ function PhotoGalleryViewInner({
         </p>
       )}
 
+      {/* Homepage Image Settings Panel (Managed cleanly from Photo Gallery) */}
+      {canEdit && onUpdatePreferences && (
+        <section className="bg-white border border-slate-200 rounded-xl p-3.5 sm:p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-16 h-12 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 shrink-0">
+              <FramedImage
+                srcUrl={activeHeroUrl}
+                storagePath={activeHeroStoragePath || undefined}
+                frame={{
+                  ...activeHeroFrame,
+                  aspect: '4:3',
+                  customHeightPx: 48,
+                }}
+                alt="صورة الصفحة الرئيسية الحالية"
+                mode="card"
+              />
+            </div>
+            <div className="min-w-0 space-y-0.5">
+              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-slate-900">
+                <Home className="w-4 h-4 text-[#1E3A5F] shrink-0" aria-hidden="true" />
+                <span className="truncate">إعدادات صورة الصفحة الرئيسية (الهوم بيج)</span>
+              </div>
+              <p className="text-[11px] text-slate-500 truncate">
+                {activeHeroMatchedItem
+                  ? `المعروض حاليًا: ${activeHeroMatchedItem.caption || activeHeroMatchedItem.name}`
+                  : isCustomHeroActive
+                  ? 'المعروض حاليًا: صورة مخصّصة من المعرض'
+                  : 'المعروض حاليًا: الصورة الافتراضية للمنصة — اضغط «عرض في الهوم بيج» على أي صورة بالأسفل للتبديل.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-[11px] shrink-0">
+            <div className="inline-flex items-center gap-1 bg-[#F7F8FA] border border-slate-200 rounded-lg p-0.5">
+              {[
+                { label: 'تلقائي', px: undefined as number | undefined },
+                { label: 'صغير', px: 210 },
+                { label: 'متوسط', px: 300 },
+                { label: 'كبير', px: 400 },
+              ].map((sz) => {
+                const isSelected =
+                  sz.px === undefined
+                    ? !activeHeroFrame.customHeightPx && activeHeroFrame.aspect === 'auto'
+                    : typeof activeHeroFrame.customHeightPx === 'number' &&
+                      Math.abs(activeHeroFrame.customHeightPx - sz.px) <= 25;
+                return (
+                  <button
+                    key={sz.label}
+                    type="button"
+                    onClick={() =>
+                      onUpdatePreferences({
+                        dashboardHeroImageFrame: {
+                          ...activeHeroFrame,
+                          aspect: 'auto',
+                          customHeightPx: sz.px,
+                        },
+                      })
+                    }
+                    className={`px-2.5 py-1.5 rounded-md font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#1E3A5F] text-white'
+                        : 'text-slate-600 hover:bg-slate-200/70'
+                    }`}
+                  >
+                    {sz.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setEditingHeroFrameOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 font-semibold text-[#1E3A5F] bg-[#F7F8FA] hover:bg-slate-200/70 border border-slate-200 rounded-lg whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+            >
+              <Crop className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>تعديل حجم وقص صورة الهوم بيج</span>
+            </button>
+
+            {(isCustomHeroActive || hasCustomHeroFrame) && (
+              <button
+                type="button"
+                onClick={handleResetHomepageImage}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 font-medium text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>استعادة الافتراضية</span>
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* Gallery Grid */}
       {filteredImages.length === 0 ? (
         <div
@@ -430,6 +611,12 @@ function PhotoGalleryViewInner({
                       className="absolute top-2 right-2 p-1 rounded-md bg-white/85 text-emerald-700 border border-slate-200/70"
                     >
                       <Cloud className="w-3 h-3" aria-hidden="true" />
+                    </span>
+                  )}
+                  {isHeroImg(img) && (
+                    <span className="absolute top-2 left-2 inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-md bg-[#1E3A5F] text-white shadow-xs">
+                      <Home className="w-3 h-3" aria-hidden="true" />
+                      <span>في الهوم بيج</span>
                     </span>
                   )}
                   <span className="absolute bottom-2 right-2 px-1.5 py-0.5 text-[10px] font-semibold rounded bg-slate-900/65 text-white tabular-nums opacity-0 group-hover:opacity-100 transition-opacity">
@@ -489,6 +676,32 @@ function PhotoGalleryViewInner({
                     </div>
                   )}
                 </div>
+
+                {canEdit && onUpdatePreferences && (
+                  <div className="px-2.5 py-1.5 border-t border-slate-100 bg-[#F7F8FA]/80">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleHomepageImage(img)}
+                      className={`w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 min-h-[34px] text-[11px] font-semibold rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
+                        isHeroImg(img)
+                          ? 'bg-[#1E3A5F] text-white border-[#1E3A5F] hover:bg-[#162C49]'
+                          : 'bg-white text-[#1E3A5F] border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {isHeroImg(img) ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                          <span className="truncate">معروضة في الهوم بيج</span>
+                        </>
+                      ) : (
+                        <>
+                          <Home className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                          <span className="truncate">عرض في الهوم بيج</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
               </article>
             );
           })}
@@ -517,7 +730,30 @@ function PhotoGalleryViewInner({
                   {activeLightbox.sizeKb}KB
                 </p>
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                {canEdit && onUpdatePreferences && (
+                  <button
+                    type="button"
+                    onClick={() => handleToggleHomepageImage(activeLightbox)}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border whitespace-nowrap cursor-pointer ${
+                      isHeroImg(activeLightbox)
+                        ? 'bg-[#1E3A5F] text-white border-[#1E3A5F] hover:bg-[#162C49]'
+                        : 'bg-white text-[#1E3A5F] border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {isHeroImg(activeLightbox) ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>معروضة في الهوم بيج</span>
+                      </>
+                    ) : (
+                      <>
+                        <Home className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>عرض في الهوم بيج</span>
+                      </>
+                    )}
+                  </button>
+                )}
                 {canEdit && (
                   <button
                     type="button"
@@ -634,7 +870,7 @@ function PhotoGalleryViewInner({
         </div>
       )}
 
-      {/* Resize & Frame Editor Modal */}
+      {/* Resize & Frame Editor Modal (Gallery Image) */}
       {editingFrameImg && (
         <ImageFrameEditorModal
           open={Boolean(editingFrameImg)}
@@ -645,6 +881,24 @@ function PhotoGalleryViewInner({
           defaultFrame={DEFAULT_IMAGE_FRAME_SPEC}
           onSave={(nextFrame) => void handleUpdateFrame(editingFrameImg, nextFrame)}
           onClose={() => setEditingFrameImg(null)}
+        />
+      )}
+
+      {/* Resize & Frame Editor Modal (Homepage Hero Image Settings) */}
+      {editingHeroFrameOpen && onUpdatePreferences && (
+        <ImageFrameEditorModal
+          open={editingHeroFrameOpen}
+          srcUrl={activeHeroUrl}
+          storagePath={activeHeroStoragePath || undefined}
+          title="إعدادات حجم وقص صورة الصفحة الرئيسية (الهوم بيج)"
+          initialFrame={activeHeroFrame}
+          defaultFrame={DEFAULT_DASHBOARD_HERO_FRAME}
+          onSave={(nextFrame) => {
+            onUpdatePreferences({
+              dashboardHeroImageFrame: nextFrame,
+            });
+          }}
+          onClose={() => setEditingHeroFrameOpen(false)}
         />
       )}
 

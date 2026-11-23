@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
   Briefcase,
   Calendar,
   CheckCircle2,
@@ -11,16 +13,19 @@ import {
   Columns3,
   Compass,
   Edit3,
+  GripVertical,
   LayoutGrid,
   Link2,
   List,
   ListTodo,
   Plus,
+  RotateCcw,
   Square,
   Trash2,
   X,
 } from 'lucide-react';
 import {
+  DEFAULT_TASK_STATUS_ORDER,
   LEARNING_HUBS,
   LearningHubId,
   LearningPath,
@@ -35,6 +40,7 @@ import {
   computeEndTimeFromMinutes,
   getHubMeta,
   getTodayDateKey,
+  sanitizeTaskStatusOrder,
 } from '../data/curriculumData';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
@@ -65,6 +71,8 @@ interface TasksProjectsViewProps {
   onOpenCourse: (courseId: number) => void;
   onOpenPath?: (pathId: string) => void;
   onOpenCalendar?: () => void;
+  statusOrder?: UnifiedTaskStatus[];
+  onChangeStatusOrder?: (order: UnifiedTaskStatus[]) => void;
 }
 
 const PRIORITY_AR: Record<TaskPriority, string> = {
@@ -73,17 +81,43 @@ const PRIORITY_AR: Record<TaskPriority, string> = {
   low: 'منخفضة',
 };
 
+const PRIORITY_SORT_WEIGHT: Record<TaskPriority, number> = {
+  high: 0,
+  medium: 1,
+  low: 2,
+};
+
 const TASK_STATUS_AR: Record<UnifiedTaskStatus, string> = {
-  todo: 'قيد الانتظار',
   in_progress: 'قيد التنفيذ',
-  done: 'مكتملة',
+  todo: 'قيد الانتظار',
+  done: 'مكتمل',
+};
+
+const TASK_STATUS_ACCENT: Record<UnifiedTaskStatus, string> = {
+  in_progress: 'text-[#1E3A5F]',
+  todo: 'text-slate-800',
+  done: 'text-emerald-800',
 };
 
 const PROJECT_STATUS_AR: Record<ProjectStatus, string> = {
-  planned: 'مخطط له',
-  in_progress: 'جاري التنفيذ',
-  completed: 'منجز',
+  in_progress: 'قيد التنفيذ',
+  planned: 'قيد الانتظار',
+  completed: 'مكتمل',
 };
+
+const STATUS_TO_PROJECT_STATUS: Record<UnifiedTaskStatus, ProjectStatus> = {
+  in_progress: 'in_progress',
+  todo: 'planned',
+  done: 'completed',
+};
+
+const PROJECT_STATUS_TO_UNIFIED: Record<ProjectStatus, UnifiedTaskStatus> = {
+  in_progress: 'in_progress',
+  planned: 'todo',
+  completed: 'done',
+};
+
+const LOCAL_STATUS_ORDER_KEY = 'mizan_task_status_order_v1';
 
 export default function TasksProjectsView({
   canEdit,
@@ -110,14 +144,208 @@ export default function TasksProjectsView({
   onOpenCourse,
   onOpenPath,
   onOpenCalendar,
+  statusOrder: propStatusOrder,
+  onChangeStatusOrder,
 }: TasksProjectsViewProps) {
   const todayKey = useMemo(() => getTodayDateKey(), []);
   const [subTab, setSubTab] = useState<'tasks' | 'projects'>('tasks');
   const [tasksLayout, setTasksLayout] = useState<'board' | 'grid' | 'compact'>('board');
+  const [projectsLayout, setProjectsLayout] = useState<'board' | 'grid'>('board');
   const [showLinkedChecklist, setShowLinkedChecklist] = useState(false);
   const [statusFilter, setStatusFilter] = useState<
     UnifiedTaskStatus | 'all' | 'unscheduled' | 'scheduled' | 'overdue'
   >('all');
+
+  const [statusOrder, setStatusOrder] = useState<UnifiedTaskStatus[]>(() => {
+    if (propStatusOrder && propStatusOrder.length === 3) {
+      return sanitizeTaskStatusOrder(propStatusOrder);
+    }
+    try {
+      const saved =
+        typeof window !== 'undefined'
+          ? window.localStorage.getItem(LOCAL_STATUS_ORDER_KEY)
+          : null;
+      if (saved) return sanitizeTaskStatusOrder(JSON.parse(saved));
+    } catch {
+      // ignore storage errors
+    }
+    return [...DEFAULT_TASK_STATUS_ORDER];
+  });
+
+  useEffect(() => {
+    if (propStatusOrder && propStatusOrder.length === 3) {
+      setStatusOrder(sanitizeTaskStatusOrder(propStatusOrder));
+    }
+  }, [propStatusOrder]);
+
+  const applyStatusOrder = (next: UnifiedTaskStatus[]) => {
+    const clean = sanitizeTaskStatusOrder(next);
+    setStatusOrder(clean);
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(LOCAL_STATUS_ORDER_KEY, JSON.stringify(clean));
+      }
+    } catch {
+      // ignore storage errors
+    }
+    onChangeStatusOrder?.(clean);
+  };
+
+  const moveStatusOrder = (status: UnifiedTaskStatus, delta: -1 | 1) => {
+    const idx = statusOrder.indexOf(status);
+    if (idx === -1) return;
+    const targetIdx = idx + delta;
+    if (targetIdx < 0 || targetIdx >= statusOrder.length) return;
+    const next = [...statusOrder];
+    const [removed] = next.splice(idx, 1);
+    next.splice(targetIdx, 0, removed);
+    applyStatusOrder(next);
+  };
+
+  const swapStatusOrder = (
+    sourceStatus: UnifiedTaskStatus,
+    targetStatus: UnifiedTaskStatus
+  ) => {
+    if (sourceStatus === targetStatus) return;
+    const next = [...statusOrder];
+    const fromIdx = next.indexOf(sourceStatus);
+    const toIdx = next.indexOf(targetStatus);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [removed] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, removed);
+    applyStatusOrder(next);
+  };
+
+  // Drag & Drop State (HTML5 + Touch/Pointer)
+  const [draggingStatusChip, setDraggingStatusChip] =
+    useState<UnifiedTaskStatus | null>(null);
+  const [draggedItem, setDraggedItem] = useState<{
+    kind: 'task' | 'project';
+    id: string;
+    title: string;
+    currentStatus: UnifiedTaskStatus;
+  } | null>(null);
+  const [hoverDropStatus, setHoverDropStatus] =
+    useState<UnifiedTaskStatus | null>(null);
+  const [pointerGhost, setPointerGhost] = useState<{
+    title: string;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  const dragSessionRef = useRef<{
+    kind: 'task' | 'project';
+    id: string;
+    title: string;
+    currentStatus: UnifiedTaskStatus;
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null>(null);
+
+  const hoverDropStatusRef = useRef<UnifiedTaskStatus | null>(null);
+  hoverDropStatusRef.current = hoverDropStatus;
+  const updateTaskRef = useRef(onUpdateUnifiedTask);
+  updateTaskRef.current = onUpdateUnifiedTask;
+  const updateProjectRef = useRef(onUpdateProject);
+  updateProjectRef.current = onUpdateProject;
+
+  useEffect(() => {
+    const handlePointerMove = (e: PointerEvent) => {
+      const sess = dragSessionRef.current;
+      if (!sess) return;
+      const dist = Math.hypot(e.clientX - sess.startX, e.clientY - sess.startY);
+      if (!sess.active && dist < 8) return;
+      if (!sess.active) {
+        sess.active = true;
+        setDraggedItem({
+          kind: sess.kind,
+          id: sess.id,
+          title: sess.title,
+          currentStatus: sess.currentStatus,
+        });
+      }
+      setPointerGhost({ title: sess.title, x: e.clientX, y: e.clientY });
+
+      const attr =
+        sess.kind === 'task'
+          ? 'data-drop-task-status'
+          : 'data-drop-project-status';
+      const els = document.elementsFromPoint(e.clientX, e.clientY);
+      let found: UnifiedTaskStatus | null = null;
+      for (const el of els) {
+        const dropEl = (el as HTMLElement).closest?.(`[${attr}]`);
+        if (dropEl) {
+          const val = dropEl.getAttribute(attr);
+          if (val === 'todo' || val === 'in_progress' || val === 'done') {
+            found = val;
+            break;
+          }
+        }
+      }
+      if (hoverDropStatusRef.current !== found) {
+        hoverDropStatusRef.current = found;
+        setHoverDropStatus(found);
+      }
+    };
+
+    const handlePointerUp = () => {
+      const sess = dragSessionRef.current;
+      if (!sess) return;
+      const wasActive = sess.active;
+      const dropTarget = hoverDropStatusRef.current;
+      dragSessionRef.current = null;
+      if (wasActive && dropTarget && dropTarget !== sess.currentStatus) {
+        if (sess.kind === 'task') {
+          updateTaskRef.current(sess.id, { status: dropTarget });
+        } else {
+          const nextProjStatus = STATUS_TO_PROJECT_STATUS[dropTarget];
+          updateProjectRef.current(sess.id, {
+            status: nextProjStatus,
+            progressPct:
+              nextProjStatus === 'completed'
+                ? 100
+                : nextProjStatus === 'in_progress'
+                ? 50
+                : 0,
+          });
+        }
+      }
+      hoverDropStatusRef.current = null;
+      setDraggedItem(null);
+      setHoverDropStatus(null);
+      setPointerGhost(null);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: true });
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, []);
+
+  const startPointerDrag = (
+    e: React.PointerEvent,
+    payload: {
+      kind: 'task' | 'project';
+      id: string;
+      title: string;
+      currentStatus: UnifiedTaskStatus;
+    }
+  ) => {
+    if (!canEdit) return;
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    e.stopPropagation();
+    dragSessionRef.current = {
+      ...payload,
+      startX: e.clientX,
+      startY: e.clientY,
+      active: false,
+    };
+  };
 
   const [taskModalState, setTaskModalState] = useState<{
     open: boolean;
@@ -201,7 +429,7 @@ export default function TasksProjectsView({
   };
 
   const filteredTasks = useMemo(() => {
-    return unifiedTasks.filter((t) => {
+    const list = unifiedTasks.filter((t) => {
       if (activeHubFilter !== 'all' && t.hubId !== activeHubFilter) return false;
       if (statusFilter === 'unscheduled') return !t.scheduledDate && t.status !== 'done';
       if (statusFilter === 'scheduled') return Boolean(t.scheduledDate) && t.status !== 'done';
@@ -209,8 +437,19 @@ export default function TasksProjectsView({
       if (statusFilter !== 'all' && t.status !== statusFilter) return false;
       return true;
     });
+    return list.slice().sort((a, b) => {
+      const sa = statusOrder.indexOf(a.status);
+      const sb = statusOrder.indexOf(b.status);
+      if (sa !== sb) return sa - sb;
+      const pa = PRIORITY_SORT_WEIGHT[a.priority];
+      const pb = PRIORITY_SORT_WEIGHT[b.priority];
+      if (pa !== pb) return pa - pb;
+      return (a.scheduledDate || '9999-99-99').localeCompare(
+        b.scheduledDate || '9999-99-99'
+      );
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unifiedTasks, activeHubFilter, statusFilter, todayKey]);
+  }, [unifiedTasks, activeHubFilter, statusFilter, todayKey, statusOrder]);
 
   const unscheduledCount = useMemo(
     () => unifiedTasks.filter((t) => !t.scheduledDate && t.status !== 'done').length,
@@ -218,9 +457,16 @@ export default function TasksProjectsView({
   );
 
   const filteredProjects = useMemo(() => {
-    if (activeHubFilter === 'all') return projects;
-    return projects.filter((p) => p.hubId === activeHubFilter);
-  }, [projects, activeHubFilter]);
+    const list =
+      activeHubFilter === 'all'
+        ? projects
+        : projects.filter((p) => p.hubId === activeHubFilter);
+    return list.slice().sort((a, b) => {
+      const sa = statusOrder.indexOf(PROJECT_STATUS_TO_UNIFIED[a.status]);
+      const sb = statusOrder.indexOf(PROJECT_STATUS_TO_UNIFIED[b.status]);
+      return sa - sb;
+    });
+  }, [projects, activeHubFilter, statusOrder]);
 
   const aggregatedCourseTasks = useMemo(() => {
     const out: Array<{ course: PersonalCourse; id: string; text: string; done: boolean }> = [];
@@ -344,10 +590,39 @@ export default function TasksProjectsView({
     setShowAddProject(false);
   };
 
+  const handleTaskDropOnStatus = (targetStatus: UnifiedTaskStatus) => {
+    if (!canEdit || !draggedItem || draggedItem.kind !== 'task') return;
+    if (draggedItem.currentStatus !== targetStatus) {
+      onUpdateUnifiedTask(draggedItem.id, { status: targetStatus });
+    }
+    setDraggedItem(null);
+    setHoverDropStatus(null);
+  };
+
+  const handleProjectDropOnStatus = (targetStatus: UnifiedTaskStatus) => {
+    if (!canEdit || !draggedItem || draggedItem.kind !== 'project') return;
+    if (draggedItem.currentStatus !== targetStatus) {
+      const nextProjStatus = STATUS_TO_PROJECT_STATUS[targetStatus];
+      onUpdateProject(draggedItem.id, {
+        status: nextProjStatus,
+        progressPct:
+          nextProjStatus === 'completed'
+            ? 100
+            : nextProjStatus === 'in_progress'
+            ? 50
+            : 0,
+      });
+    }
+    setDraggedItem(null);
+    setHoverDropStatus(null);
+  };
+
   const renderTaskCard = (t: UnifiedTask, compact = false) => {
     const hubMeta = getHubMeta(t.hubId);
     const overdue = isTaskOverdue(t);
     const contextBadge = resolveTaskContextBadge(t);
+    const isDraggingThis =
+      draggedItem?.kind === 'task' && draggedItem.id === t.id;
     const priorityBorder =
       t.priority === 'high'
         ? 'border-rose-200/90'
@@ -358,25 +633,63 @@ export default function TasksProjectsView({
     return (
       <article
         key={t.id}
+        draggable={canEdit}
+        onDragStart={(e) => {
+          if (!canEdit) return;
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', t.id);
+          setDraggedItem({
+            kind: 'task',
+            id: t.id,
+            title: t.title,
+            currentStatus: t.status,
+          });
+        }}
+        onDragEnd={() => {
+          setDraggedItem(null);
+          setHoverDropStatus(null);
+        }}
         className={`bg-white border ${priorityBorder} hover:border-[#1E3A5F]/40 rounded-xl ${
           compact ? 'p-3' : 'p-3.5'
-        } flex flex-col justify-between gap-2.5 transition-colors`}
+        } flex flex-col justify-between gap-2.5 transition-all ${
+          isDraggingThis ? 'opacity-45 ring-2 ring-[#1E3A5F]/40' : ''
+        }`}
       >
-        <div className="flex items-start gap-2.5 min-w-0">
+        <div className="flex items-start gap-2 min-w-0">
+          {canEdit && (
+            <button
+              type="button"
+              onPointerDown={(e) =>
+                startPointerDrag(e, {
+                  kind: 'task',
+                  id: t.id,
+                  title: t.title,
+                  currentStatus: t.status,
+                })
+              }
+              title="اسحب وأفلت لتغيير الحالة"
+              aria-label="سحب المهمة لتغيير الحالة"
+              className="mt-0.5 p-0.5 text-slate-300 hover:text-[#1E3A5F] touch-none cursor-grab active:cursor-grabbing shrink-0"
+            >
+              <GripVertical className="w-4 h-4" aria-hidden="true" />
+            </button>
+          )}
+
           <button
             type="button"
             disabled={!canEdit}
             onClick={() =>
               onUpdateUnifiedTask(t.id, {
-                status: t.status === 'done' ? 'todo' : 'done',
+                status: t.status === 'done' ? 'in_progress' : 'done',
               })
             }
+            title={t.status === 'done' ? 'إرجاع لقيد التنفيذ' : 'تفعيل كمكتمل'}
             className="mt-0.5 cursor-pointer disabled:opacity-60 shrink-0"
           >
             {t.status === 'done' ? (
               <CheckSquare className="w-4 h-4 text-emerald-700" aria-hidden="true" />
             ) : (
-              <Square className="w-4 h-4 text-slate-400" aria-hidden="true" />
+              <Square className="w-4 h-4 text-slate-400 hover:text-emerald-700" aria-hidden="true" />
             )}
           </button>
 
@@ -425,22 +738,41 @@ export default function TasksProjectsView({
         </div>
 
         {canEdit && (
-          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5">
-            <select
-              value={t.status}
-              onChange={(e) =>
-                onUpdateUnifiedTask(t.id, {
-                  status: e.target.value as UnifiedTaskStatus,
-                })
-              }
-              className="px-2 py-1 text-[11px] bg-[#F7F8FA] border border-slate-200 rounded-md cursor-pointer"
+          <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-1.5">
+            {/* Quick 1-Tap Status Switcher (Follows user's Priority Order, with 1-tap مكتمل toggle) */}
+            <div
+              role="group"
+              aria-label="تغيير حالة المهمة"
+              className="inline-flex items-center gap-0.5 p-0.5 bg-[#F7F8FA] border border-slate-200 rounded-lg"
             >
-              <option value="todo">قيد الانتظار</option>
-              <option value="in_progress">قيد التنفيذ</option>
-              <option value="done">مكتملة</option>
-            </select>
+              {statusOrder.map((st) => {
+                const active = t.status === st;
+                const activeClass =
+                  st === 'done'
+                    ? 'bg-emerald-700 text-white font-semibold'
+                    : st === 'in_progress'
+                    ? 'bg-[#1E3A5F] text-white font-semibold'
+                    : 'bg-slate-800 text-white font-semibold';
+                return (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => onUpdateUnifiedTask(t.id, { status: st })}
+                    className={`px-2 py-1 text-[10px] sm:text-[11px] rounded-md whitespace-nowrap transition-colors cursor-pointer ${
+                      active
+                        ? activeClass
+                        : st === 'done'
+                        ? 'text-emerald-800 hover:bg-emerald-50'
+                        : 'text-slate-600 hover:bg-slate-200/70'
+                    }`}
+                  >
+                    {TASK_STATUS_AR[st]}
+                  </button>
+                );
+              })}
+            </div>
 
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="flex items-center gap-1 shrink-0 mr-auto">
               <button
                 type="button"
                 onClick={() =>
@@ -449,7 +781,7 @@ export default function TasksProjectsView({
                     initialTask: t,
                   })
                 }
-                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#1E3A5F] bg-[#F7F8FA] hover:bg-slate-200 rounded-md cursor-pointer"
+                className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#1E3A5F] bg-[#F7F8FA] hover:bg-slate-200 rounded-md whitespace-nowrap cursor-pointer"
                 aria-label="تعديل وجدولة المهمة"
               >
                 <Edit3 className="w-3 h-3" aria-hidden="true" />
@@ -473,31 +805,17 @@ export default function TasksProjectsView({
   const effectiveLayout =
     statusFilter === 'all' ? tasksLayout : tasksLayout === 'board' ? 'grid' : tasksLayout;
 
-  const boardColumns: Array<{
-    status: UnifiedTaskStatus;
-    title: string;
-    accent: string;
-    items: UnifiedTask[];
-  }> = [
-    {
-      status: 'todo',
-      title: 'قيد الانتظار',
-      accent: 'text-slate-800',
-      items: filteredTasks.filter((t) => t.status === 'todo'),
-    },
-    {
-      status: 'in_progress',
-      title: 'قيد التنفيذ',
-      accent: 'text-[#1E3A5F]',
-      items: filteredTasks.filter((t) => t.status === 'in_progress'),
-    },
-    {
-      status: 'done',
-      title: 'مكتملة',
-      accent: 'text-emerald-800',
-      items: filteredTasks.filter((t) => t.status === 'done'),
-    },
-  ];
+  const boardColumns = useMemo(
+    () =>
+      statusOrder.map((st, idx) => ({
+        status: st,
+        priorityIndex: idx + 1,
+        title: TASK_STATUS_AR[st],
+        accent: TASK_STATUS_ACCENT[st],
+        items: filteredTasks.filter((t) => t.status === st),
+      })),
+    [statusOrder, filteredTasks]
+  );
 
   const linkedCourseDone = aggregatedCourseTasks.filter((t) => t.done).length;
   const linkedPathDone = aggregatedPathStages.filter((s) => s.done).length;
@@ -583,6 +901,91 @@ export default function TasksProjectsView({
         ))}
       </div>
 
+      {/* Status Priority Order Controls (Shared for Tasks & Projects) */}
+      <div className="bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
+            ترتيب أولوية الحالات:
+          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {statusOrder.map((st, idx) => (
+              <div
+                key={st}
+                draggable={canEdit}
+                onDragStart={(e) => {
+                  if (!canEdit) return;
+                  e.dataTransfer.effectAllowed = 'move';
+                  setDraggingStatusChip(st);
+                }}
+                onDragOver={(e) => {
+                  if (!draggingStatusChip || draggingStatusChip === st) return;
+                  e.preventDefault();
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (draggingStatusChip && draggingStatusChip !== st) {
+                    swapStatusOrder(draggingStatusChip, st);
+                  }
+                  setDraggingStatusChip(null);
+                }}
+                onDragEnd={() => setDraggingStatusChip(null)}
+                className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-lg border bg-[#F7F8FA] transition-colors ${
+                  draggingStatusChip === st
+                    ? 'border-[#1E3A5F] bg-[#1E3A5F]/10 opacity-70'
+                    : 'border-slate-200'
+                } ${canEdit ? 'cursor-grab active:cursor-grabbing' : ''}`}
+              >
+                <span className="font-bold text-[#1E3A5F] tabular-nums">
+                  {idx + 1}.
+                </span>
+                <span className={`font-semibold ${TASK_STATUS_ACCENT[st]}`}>
+                  {TASK_STATUS_AR[st]}
+                </span>
+                {canEdit && (
+                  <div className="inline-flex items-center gap-0.5 mr-0.5">
+                    <button
+                      type="button"
+                      disabled={idx === 0}
+                      onClick={() => moveStatusOrder(st, -1)}
+                      title="تقديم الأولوية"
+                      aria-label={`تقديم أولوية ${TASK_STATUS_AR[st]}`}
+                      className="p-0.5 text-slate-500 hover:text-[#1E3A5F] disabled:opacity-30 cursor-pointer"
+                    >
+                      <ArrowRight className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={idx === statusOrder.length - 1}
+                      onClick={() => moveStatusOrder(st, 1)}
+                      title="تأخير الأولوية"
+                      aria-label={`تأخير أولوية ${TASK_STATUS_AR[st]}`}
+                      className="p-0.5 text-slate-500 hover:text-[#1E3A5F] disabled:opacity-30 cursor-pointer"
+                    >
+                      <ArrowLeft className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between sm:justify-end gap-2 text-[11px] text-slate-500">
+          <span>اسحب البطاقات أو الحالات لتغيير الترتيب أو الحالة</span>
+          {canEdit &&
+            statusOrder.join(',') !== DEFAULT_TASK_STATUS_ORDER.join(',') && (
+              <button
+                type="button"
+                onClick={() => applyStatusOrder([...DEFAULT_TASK_STATUS_ORDER])}
+                className="inline-flex items-center gap-1 px-2 py-1 font-medium text-slate-600 bg-[#F7F8FA] hover:bg-slate-200/70 border border-slate-200 rounded-md whitespace-nowrap cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                <span>الافتراضي</span>
+              </button>
+            )}
+        </div>
+      </div>
+
       {subTab === 'tasks' ? (
         <div className="space-y-5">
           {/* Toolbar: Status Filters + Layout Switcher + New Task */}
@@ -594,9 +997,10 @@ export default function TasksProjectsView({
                   { id: 'unscheduled', label: `غير مجدولة (${unscheduledCount})` },
                   { id: 'scheduled', label: 'مجدولة' },
                   { id: 'overdue', label: 'متأخرة' },
-                  { id: 'todo', label: TASK_STATUS_AR.todo },
-                  { id: 'in_progress', label: TASK_STATUS_AR.in_progress },
-                  { id: 'done', label: TASK_STATUS_AR.done },
+                  ...statusOrder.map((st) => ({
+                    id: st,
+                    label: TASK_STATUS_AR[st],
+                  })),
                 ] as const
               ).map((st) => (
                 <button
@@ -669,6 +1073,7 @@ export default function TasksProjectsView({
                     initialTask: null,
                     prefill: {
                       hubId: activeHubFilter === 'all' ? 'knowledge' : activeHubFilter,
+                      status: statusOrder[0] || 'in_progress',
                     },
                   });
                 }}
@@ -680,6 +1085,44 @@ export default function TasksProjectsView({
             </div>
           </div>
 
+          {/* Drag Drop Target Strip when dragging in Grid or Compact view */}
+          {draggedItem?.kind === 'task' && effectiveLayout !== 'board' && (
+            <div className="bg-white border-2 border-dashed border-[#1E3A5F]/40 rounded-xl p-3 space-y-2">
+              <p className="text-[11px] font-bold text-[#1E3A5F]">
+                أفلت المهمة «{draggedItem.title}» على الحالة المطلوبة:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {statusOrder.map((st, idx) => {
+                  const isHover = hoverDropStatus === st;
+                  return (
+                    <div
+                      key={st}
+                      data-drop-task-status={st}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        if (hoverDropStatus !== st) setHoverDropStatus(st);
+                      }}
+                      onDragLeave={() => {
+                        if (hoverDropStatus === st) setHoverDropStatus(null);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        handleTaskDropOnStatus(st);
+                      }}
+                      className={`px-3 py-2.5 rounded-lg border text-center text-xs font-bold transition-colors ${
+                        isHover
+                          ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                          : 'bg-[#F7F8FA] text-slate-800 border-slate-200'
+                      }`}
+                    >
+                      {idx + 1}. {TASK_STATUS_AR[st]}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Tasks Display Area: Compact Kanban Board OR 3-Col Card Grid OR Compact Table Rows */}
           {filteredTasks.length === 0 ? (
             <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500">
@@ -687,53 +1130,116 @@ export default function TasksProjectsView({
             </div>
           ) : effectiveLayout === 'board' ? (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
-              {boardColumns.map((col) => (
-                <section
-                  key={col.status}
-                  className="bg-[#F7F8FA] border border-slate-200 rounded-xl p-3 space-y-2.5"
-                >
-                  <div className="flex items-center justify-between px-1 pb-2 border-b border-slate-200/80">
-                    <h2 className={`text-xs font-bold ${col.accent}`}>
-                      {col.title}
-                    </h2>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-semibold text-slate-500 tabular-nums">
-                        {col.items.length}
-                      </span>
-                      {canEdit && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setTaskModalState({
-                              open: true,
-                              initialTask: null,
-                              prefill: {
-                                hubId:
-                                  activeHubFilter === 'all' ? 'knowledge' : activeHubFilter,
-                                status: col.status,
-                              },
-                            })
-                          }
-                          aria-label={`إضافة مهمة في ${col.title}`}
-                          className="p-1 text-slate-400 hover:text-[#1E3A5F] rounded cursor-pointer"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                        </button>
+              {boardColumns.map((col, colIdx) => {
+                const isDropTarget =
+                  draggedItem?.kind === 'task' && hoverDropStatus === col.status;
+                const isDragActive =
+                  draggedItem?.kind === 'task' &&
+                  draggedItem.currentStatus !== col.status;
+                return (
+                  <section
+                    key={col.status}
+                    data-drop-task-status={col.status}
+                    onDragOver={(e) => {
+                      if (!canEdit || draggedItem?.kind !== 'task') return;
+                      e.preventDefault();
+                      if (hoverDropStatus !== col.status) {
+                        setHoverDropStatus(col.status);
+                      }
+                    }}
+                    onDragLeave={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                        if (hoverDropStatus === col.status) {
+                          setHoverDropStatus(null);
+                        }
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handleTaskDropOnStatus(col.status);
+                    }}
+                    className={`rounded-xl p-3 space-y-2.5 border transition-colors ${
+                      isDropTarget
+                        ? 'bg-[#1E3A5F]/10 border-[#1E3A5F] ring-2 ring-[#1E3A5F]/25'
+                        : isDragActive
+                        ? 'bg-[#F7F8FA] border-dashed border-[#1E3A5F]/45'
+                        : 'bg-[#F7F8FA] border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between px-1 pb-2 border-b border-slate-200/80 gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-[11px] font-bold text-slate-400 tabular-nums">
+                          {col.priorityIndex}.
+                        </span>
+                        <h2 className={`text-xs font-bold truncate ${col.accent}`}>
+                          {col.title}
+                        </h2>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {canEdit && (
+                          <div className="inline-flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              disabled={colIdx === 0}
+                              onClick={() => moveStatusOrder(col.status, -1)}
+                              title="تقديم أولوية العمود"
+                              aria-label={`تقديم أولوية ${col.title}`}
+                              className="p-0.5 text-slate-400 hover:text-[#1E3A5F] disabled:opacity-25 cursor-pointer"
+                            >
+                              <ArrowRight className="w-3 h-3" aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={colIdx === boardColumns.length - 1}
+                              onClick={() => moveStatusOrder(col.status, 1)}
+                              title="تأخير أولوية العمود"
+                              aria-label={`تأخير أولوية ${col.title}`}
+                              className="p-0.5 text-slate-400 hover:text-[#1E3A5F] disabled:opacity-25 cursor-pointer"
+                            >
+                              <ArrowLeft className="w-3 h-3" aria-hidden="true" />
+                            </button>
+                          </div>
+                        )}
+                        <span className="text-[11px] font-semibold text-slate-500 tabular-nums px-1">
+                          {col.items.length}
+                        </span>
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTaskModalState({
+                                open: true,
+                                initialTask: null,
+                                prefill: {
+                                  hubId:
+                                    activeHubFilter === 'all' ? 'knowledge' : activeHubFilter,
+                                  status: col.status,
+                                },
+                              })
+                            }
+                            aria-label={`إضافة مهمة في ${col.title}`}
+                            className="p-1 text-slate-400 hover:text-[#1E3A5F] rounded cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 max-h-[540px] overflow-y-auto pr-0.5 min-h-[76px]">
+                      {col.items.length === 0 ? (
+                        <p className="py-6 text-center text-[11px] text-slate-400">
+                          {isDragActive
+                            ? `أفلت المهمة هنا للنقل إلى «${col.title}»`
+                            : 'لا توجد مهام في هذا العمود'}
+                        </p>
+                      ) : (
+                        col.items.map((t) => renderTaskCard(t, true))
                       )}
                     </div>
-                  </div>
-
-                  <div className="space-y-2 max-h-[540px] overflow-y-auto pr-0.5">
-                    {col.items.length === 0 ? (
-                      <p className="py-6 text-center text-[11px] text-slate-400">
-                        لا توجد مهام في هذا العمود
-                      </p>
-                    ) : (
-                      col.items.map((t) => renderTaskCard(t, true))
-                    )}
-                  </div>
-                </section>
-              ))}
+                  </section>
+                );
+              })}
             </div>
           ) : effectiveLayout === 'grid' ? (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -745,36 +1251,74 @@ export default function TasksProjectsView({
                 const hubMeta = getHubMeta(t.hubId);
                 const overdue = isTaskOverdue(t);
                 const contextBadge = resolveTaskContextBadge(t);
+                const isDraggingThis =
+                  draggedItem?.kind === 'task' && draggedItem.id === t.id;
                 return (
                   <div
                     key={t.id}
-                    className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 hover:bg-[#F7F8FA]"
+                    draggable={canEdit}
+                    onDragStart={(e) => {
+                      if (!canEdit) return;
+                      e.dataTransfer.effectAllowed = 'move';
+                      setDraggedItem({
+                        kind: 'task',
+                        id: t.id,
+                        title: t.title,
+                        currentStatus: t.status,
+                      });
+                    }}
+                    onDragEnd={() => {
+                      setDraggedItem(null);
+                      setHoverDropStatus(null);
+                    }}
+                    className={`px-3 sm:px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 hover:bg-[#F7F8FA] transition-opacity ${
+                      isDraggingThis ? 'opacity-45' : ''
+                    }`}
                   >
-                    <button
-                      type="button"
-                      disabled={!canEdit}
-                      onClick={() =>
-                        onUpdateUnifiedTask(t.id, {
-                          status: t.status === 'done' ? 'todo' : 'done',
-                        })
-                      }
-                      className="flex items-center gap-2.5 text-right flex-1 min-w-[200px] cursor-pointer"
-                    >
-                      {t.status === 'done' ? (
-                        <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0" />
-                      ) : (
-                        <Square className="w-4 h-4 text-slate-400 shrink-0" />
+                    <div className="flex items-center gap-2 text-right flex-1 min-w-[200px]">
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onPointerDown={(e) =>
+                            startPointerDrag(e, {
+                              kind: 'task',
+                              id: t.id,
+                              title: t.title,
+                              currentStatus: t.status,
+                            })
+                          }
+                          aria-label="سحب المهمة"
+                          className="p-0.5 text-slate-300 hover:text-[#1E3A5F] touch-none cursor-grab active:cursor-grabbing shrink-0"
+                        >
+                          <GripVertical className="w-4 h-4" aria-hidden="true" />
+                        </button>
                       )}
-                      <span
-                        className={`text-xs sm:text-sm font-semibold truncate ${
-                          t.status === 'done' ? 'line-through text-slate-400' : 'text-slate-900'
-                        }`}
+                      <button
+                        type="button"
+                        disabled={!canEdit}
+                        onClick={() =>
+                          onUpdateUnifiedTask(t.id, {
+                            status: t.status === 'done' ? 'in_progress' : 'done',
+                          })
+                        }
+                        className="flex items-center gap-2 text-right flex-1 min-w-0 cursor-pointer"
                       >
-                        <BidiText text={t.title} />
-                      </span>
-                    </button>
+                        {t.status === 'done' ? (
+                          <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-400 shrink-0" />
+                        )}
+                        <span
+                          className={`text-xs sm:text-sm font-semibold truncate ${
+                            t.status === 'done' ? 'line-through text-slate-400' : 'text-slate-900'
+                          }`}
+                        >
+                          <BidiText text={t.title} />
+                        </span>
+                      </button>
+                    </div>
 
-                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 tabular-nums shrink-0">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-[11px] text-slate-500 tabular-nums shrink-0">
                       <span>{hubMeta.shortTitle}</span>
                       {t.scheduledDate && (
                         <span>
@@ -792,6 +1336,24 @@ export default function TasksProjectsView({
                       )}
                       {canEdit && (
                         <div className="flex items-center gap-1">
+                          <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#F7F8FA] border border-slate-200 rounded-md">
+                            {statusOrder.map((st) => (
+                              <button
+                                key={st}
+                                type="button"
+                                onClick={() => onUpdateUnifiedTask(t.id, { status: st })}
+                                className={`px-1.5 py-0.5 text-[10px] rounded whitespace-nowrap cursor-pointer ${
+                                  t.status === st
+                                    ? st === 'done'
+                                      ? 'bg-emerald-700 text-white font-semibold'
+                                      : 'bg-[#1E3A5F] text-white font-semibold'
+                                    : 'text-slate-600 hover:bg-slate-200/70'
+                                }`}
+                              >
+                                {TASK_STATUS_AR[st]}
+                              </button>
+                            ))}
+                          </div>
                           <button
                             type="button"
                             onClick={() =>
@@ -1082,7 +1644,34 @@ export default function TasksProjectsView({
         </div>
       ) : (
         <div className="space-y-6">
-          <div className="flex justify-end">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="inline-flex items-center gap-1 p-1 bg-white border border-slate-200 rounded-lg text-[11px]">
+              <button
+                type="button"
+                onClick={() => setProjectsLayout('board')}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md cursor-pointer ${
+                  projectsLayout === 'board'
+                    ? 'bg-[#1E3A5F] text-white font-semibold'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Columns3 className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>أعمدة بالسحب والإفلات</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setProjectsLayout('grid')}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md cursor-pointer ${
+                  projectsLayout === 'grid'
+                    ? 'bg-[#1E3A5F] text-white font-semibold'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>بطاقات</span>
+              </button>
+            </div>
+
             <button
               type="button"
               onClick={() => {
@@ -1200,18 +1789,55 @@ export default function TasksProjectsView({
                 أضف مشاريعك المهنية والتسويقية والعلمية واربطها بالكورسات.
               </p>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredProjects.map((proj) => {
-                const hubMeta = getHubMeta(proj.hubId);
-                const linkedCourse = courses.find((c) => c.id === proj.linkedCourseId);
-                return (
-                  <article
-                    key={proj.id}
-                    className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="space-y-1">
+          ) : (() => {
+            const renderProjectCard = (proj: PracticalProject) => {
+              const hubMeta = getHubMeta(proj.hubId);
+              const linkedCourse = courses.find((c) => c.id === proj.linkedCourseId);
+              const projUnifiedStatus = PROJECT_STATUS_TO_UNIFIED[proj.status];
+              const isDraggingThis =
+                draggedItem?.kind === 'project' && draggedItem.id === proj.id;
+              return (
+                <article
+                  key={proj.id}
+                  draggable={canEdit}
+                  onDragStart={(e) => {
+                    if (!canEdit) return;
+                    e.dataTransfer.effectAllowed = 'move';
+                    setDraggedItem({
+                      kind: 'project',
+                      id: proj.id,
+                      title: proj.title,
+                      currentStatus: projUnifiedStatus,
+                    });
+                  }}
+                  onDragEnd={() => {
+                    setDraggedItem(null);
+                    setHoverDropStatus(null);
+                  }}
+                  className={`bg-white border border-slate-200 hover:border-[#1E3A5F]/40 rounded-xl p-4 space-y-3 transition-all ${
+                    isDraggingThis ? 'opacity-45 ring-2 ring-[#1E3A5F]/40' : ''
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-1.5 min-w-0">
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onPointerDown={(e) =>
+                            startPointerDrag(e, {
+                              kind: 'project',
+                              id: proj.id,
+                              title: proj.title,
+                              currentStatus: projUnifiedStatus,
+                            })
+                          }
+                          aria-label="سحب المشروع"
+                          className="mt-0.5 p-0.5 text-slate-300 hover:text-[#1E3A5F] touch-none cursor-grab active:cursor-grabbing shrink-0"
+                        >
+                          <GripVertical className="w-4 h-4" aria-hidden="true" />
+                        </button>
+                      )}
+                      <div className="space-y-1 min-w-0">
                         <p className="text-[11px] text-slate-500">
                           <span className="font-semibold text-[#1E3A5F]">
                             {hubMeta.shortTitle}
@@ -1219,97 +1845,195 @@ export default function TasksProjectsView({
                           {' · '}
                           {PROJECT_STATUS_AR[proj.status]}
                         </p>
-                        <h3 className="text-base font-bold text-slate-900">
+                        <h3 className="text-sm sm:text-base font-bold text-slate-900">
                           <BidiText text={proj.title} />
                         </h3>
                       </div>
-                      {canEdit && (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteProj(proj)}
-                          aria-label={`حذف ${proj.title}`}
-                          className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                      )}
                     </div>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteProj(proj)}
+                        aria-label={`حذف ${proj.title}`}
+                        className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
 
-                    {proj.description && (
-                      <BidiText
-                        text={proj.description}
-                        as="div"
-                        multiline
-                        className="text-xs text-slate-600 leading-relaxed line-clamp-3"
-                      />
+                  {proj.description && (
+                    <BidiText
+                      text={proj.description}
+                      as="div"
+                      multiline
+                      className="text-xs text-slate-600 leading-relaxed line-clamp-3"
+                    />
+                  )}
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-600">نسبة الإنجاز</span>
+                      <span className="font-bold tabular-nums">{proj.progressPct}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      disabled={!canEdit}
+                      value={proj.progressPct}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        onUpdateProject(proj.id, {
+                          progressPct: val,
+                          status:
+                            val === 100
+                              ? 'completed'
+                              : val > 0
+                              ? 'in_progress'
+                              : 'planned',
+                        });
+                      }}
+                      className="w-full accent-[#1E3A5F]"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
+                    {linkedCourse ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenCourse(linkedCourse.id)}
+                        className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                      >
+                        {linkedCourse.title} ←
+                      </button>
+                    ) : (
+                      <span className="text-slate-400">مشروع مستقل</span>
                     )}
 
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-600">نسبة الإنجاز</span>
-                        <span className="font-bold tabular-nums">{proj.progressPct}%</span>
+                    {canEdit && (
+                      <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#F7F8FA] border border-slate-200 rounded-lg">
+                        {statusOrder.map((st) => {
+                          const targetProjSt = STATUS_TO_PROJECT_STATUS[st];
+                          const active = proj.status === targetProjSt;
+                          return (
+                            <button
+                              key={st}
+                              type="button"
+                              onClick={() =>
+                                onUpdateProject(proj.id, {
+                                  status: targetProjSt,
+                                  progressPct:
+                                    targetProjSt === 'completed'
+                                      ? 100
+                                      : targetProjSt === 'in_progress'
+                                      ? Math.max(25, Math.min(95, proj.progressPct || 50))
+                                      : 0,
+                                })
+                              }
+                              className={`px-2 py-1 text-[10px] rounded-md whitespace-nowrap cursor-pointer ${
+                                active
+                                  ? st === 'done'
+                                    ? 'bg-emerald-700 text-white font-semibold'
+                                    : 'bg-[#1E3A5F] text-white font-semibold'
+                                  : st === 'done'
+                                  ? 'text-emerald-800 hover:bg-emerald-50'
+                                  : 'text-slate-600 hover:bg-slate-200/70'
+                              }`}
+                            >
+                              {st === 'done' && active && (
+                                <CheckCircle2
+                                  className="w-3 h-3 inline-block ml-0.5"
+                                  aria-hidden="true"
+                                />
+                              )}
+                              {TASK_STATUS_AR[st]}
+                            </button>
+                          );
+                        })}
                       </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={100}
-                        disabled={!canEdit}
-                        value={proj.progressPct}
-                        onChange={(e) => {
-                          const val = Number(e.target.value);
-                          onUpdateProject(proj.id, {
-                            progressPct: val,
-                            status:
-                              val === 100
-                                ? 'completed'
-                                : val > 0
-                                ? 'in_progress'
-                                : 'planned',
-                          });
+                    )}
+                  </div>
+                </article>
+              );
+            };
+
+            if (projectsLayout === 'board') {
+              return (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+                  {statusOrder.map((st, colIdx) => {
+                    const projSt = STATUS_TO_PROJECT_STATUS[st];
+                    const colProjects = filteredProjects.filter(
+                      (p) => p.status === projSt
+                    );
+                    const isDropTarget =
+                      draggedItem?.kind === 'project' && hoverDropStatus === st;
+                    const isDragActive =
+                      draggedItem?.kind === 'project' &&
+                      draggedItem.currentStatus !== st;
+                    return (
+                      <section
+                        key={st}
+                        data-drop-project-status={st}
+                        onDragOver={(e) => {
+                          if (!canEdit || draggedItem?.kind !== 'project') return;
+                          e.preventDefault();
+                          if (hoverDropStatus !== st) setHoverDropStatus(st);
                         }}
-                        className="w-full accent-[#1E3A5F]"
-                      />
-                    </div>
-
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
-                      {linkedCourse ? (
-                        <button
-                          type="button"
-                          onClick={() => onOpenCourse(linkedCourse.id)}
-                          className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-                        >
-                          {linkedCourse.title} ←
-                        </button>
-                      ) : (
-                        <span className="text-slate-400">مشروع مستقل</span>
-                      )}
-
-                      {canEdit && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onUpdateProject(proj.id, {
-                              status:
-                                proj.status === 'completed'
-                                  ? 'in_progress'
-                                  : 'completed',
-                              progressPct: proj.status === 'completed' ? 50 : 100,
-                            })
+                        onDragLeave={(e) => {
+                          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                            if (hoverDropStatus === st) setHoverDropStatus(null);
                           }
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-md cursor-pointer"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>
-                            {proj.status === 'completed' ? 'مكتمل' : 'إتمام'}
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          handleProjectDropOnStatus(st);
+                        }}
+                        className={`rounded-xl p-3 space-y-2.5 border transition-colors ${
+                          isDropTarget
+                            ? 'bg-[#1E3A5F]/10 border-[#1E3A5F] ring-2 ring-[#1E3A5F]/25'
+                            : isDragActive
+                            ? 'bg-[#F7F8FA] border-dashed border-[#1E3A5F]/45'
+                            : 'bg-[#F7F8FA] border-slate-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between px-1 pb-2 border-b border-slate-200/80">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-bold text-slate-400 tabular-nums">
+                              {colIdx + 1}.
+                            </span>
+                            <h2 className={`text-xs font-bold ${TASK_STATUS_ACCENT[st]}`}>
+                              {TASK_STATUS_AR[st]}
+                            </h2>
+                          </div>
+                          <span className="text-[11px] font-semibold text-slate-500 tabular-nums">
+                            {colProjects.length}
                           </span>
-                        </button>
-                      )}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
+                        </div>
+                        <div className="space-y-2.5 min-h-[76px]">
+                          {colProjects.length === 0 ? (
+                            <p className="py-6 text-center text-[11px] text-slate-400">
+                              {isDragActive
+                                ? `أفلت المشروع هنا للنقل إلى «${TASK_STATUS_AR[st]}»`
+                                : 'لا توجد مشاريع في هذه الحالة'}
+                            </p>
+                          ) : (
+                            colProjects.map(renderProjectCard)
+                          )}
+                        </div>
+                      </section>
+                    );
+                  })}
+                </div>
+              );
+            }
+
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredProjects.map(renderProjectCard)}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -1444,6 +2168,20 @@ export default function TasksProjectsView({
         }}
         onCancel={() => setConfirmDeleteProj(null)}
       />
+
+      {/* Touch / Pointer Drag Ghost Preview */}
+      {pointerGhost && draggedItem && (
+        <div
+          style={{
+            left: `${pointerGhost.x + 12}px`,
+            top: `${pointerGhost.y + 12}px`,
+          }}
+          className="fixed z-[95] pointer-events-none max-w-[240px] px-3 py-2 rounded-xl bg-[#1E3A5F] text-white shadow-xl border border-white/20 text-xs font-semibold truncate"
+        >
+          {pointerGhost.title}
+          {hoverDropStatus ? ` ← ${TASK_STATUS_AR[hoverDropStatus]}` : ''}
+        </div>
+      )}
     </div>
   );
 }

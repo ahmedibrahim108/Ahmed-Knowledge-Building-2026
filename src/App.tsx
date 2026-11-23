@@ -3429,6 +3429,10 @@ export default function App() {
             onOpenCourse={(courseId) => navigateToCourseRoute(courseId)}
             onOpenPath={() => navigateToTab('paths')}
             onOpenCalendar={() => navigateToTab('calendar')}
+            statusOrder={preferences.taskStatusOrder}
+            onChangeStatusOrder={(nextOrder) =>
+              handleUpdatePreferences({ taskStatusOrder: nextOrder })
+            }
           />
         )}
 
@@ -3532,6 +3536,8 @@ export default function App() {
             uid={user?.uid}
             canEdit={canEdit}
             onRequireAuth={handleRequireAuth}
+            preferences={preferences}
+            onUpdatePreferences={handleUpdatePreferences}
           />
         )}
 

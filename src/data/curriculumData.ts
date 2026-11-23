@@ -656,6 +656,30 @@ export interface PracticalProject {
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type UnifiedTaskStatus = 'todo' | 'in_progress' | 'done';
 
+export const DEFAULT_TASK_STATUS_ORDER: UnifiedTaskStatus[] = [
+  'in_progress',
+  'todo',
+  'done',
+];
+
+export function sanitizeTaskStatusOrder(raw: unknown): UnifiedTaskStatus[] {
+  const valid: UnifiedTaskStatus[] = ['in_progress', 'todo', 'done'];
+  if (!Array.isArray(raw)) return [...DEFAULT_TASK_STATUS_ORDER];
+  const seen: UnifiedTaskStatus[] = [];
+  for (const item of raw) {
+    if (
+      (item === 'todo' || item === 'in_progress' || item === 'done') &&
+      !seen.includes(item)
+    ) {
+      seen.push(item);
+    }
+  }
+  for (const st of valid) {
+    if (!seen.includes(st)) seen.push(st);
+  }
+  return seen;
+}
+
 export interface UnifiedTask {
   id: string;
   title: string;
@@ -866,8 +890,7 @@ export const DEFAULT_DASHBOARD_HERO_FRAME: ImageFrameSpec = {
   zoom: 1,
   offsetX: 50,
   offsetY: 50,
-  sizePreset: 'md',
-  customHeightPx: 300,
+  sizePreset: 'lg',
 };
 
 export function sanitizeImageFrameSpec(
@@ -1430,6 +1453,7 @@ export interface UserPreferences {
   dashboardHeroImageUrl?: string;
   dashboardHeroImageStoragePath?: string;
   dashboardHeroImageFrame?: ImageFrameSpec;
+  taskStatusOrder?: UnifiedTaskStatus[];
 }
 
 export interface PinnableNavTabMeta {
@@ -1503,6 +1527,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   customReadingModes: READING_MODES_META,
   pinnedNavTabs: DEFAULT_PINNED_NAV_TABS,
   customHubs: DEFAULT_LEARNING_HUBS,
+  taskStatusOrder: DEFAULT_TASK_STATUS_ORDER,
 };
 
 export interface WeeklyRhythmSlot {

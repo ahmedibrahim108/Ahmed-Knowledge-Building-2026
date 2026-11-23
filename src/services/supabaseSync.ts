@@ -69,6 +69,7 @@ import {
   WeeklyRhythmItem,
   estimateReadingTimeMinutes,
   sanitizeImageFrameSpec,
+  sanitizeTaskStatusOrder,
 } from '../data/curriculumData';
 import {
   ensureSupabaseRealtimeAuth,
@@ -734,6 +735,7 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
       pinnedNavTabsMirror: sanitizedPins,
       customHubsMirror: sanitizedHubs,
       dashboardHeroMirror: dashboardHeroObj,
+      taskStatusOrderMirror: sanitizeTaskStatusOrder(prefs.taskStatusOrder),
     },
     weekly_rhythm: sanitizeWeeklyRhythm(prefs.weeklyRhythm),
     reflection_categories: sanitizeStringList(
@@ -1331,6 +1333,13 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
         ...(storagePath ? { dashboardHeroImageStoragePath: storagePath } : {}),
         ...(frame ? { dashboardHeroImageFrame: frame } : {}),
       };
+    })(),
+    taskStatusOrder: (() => {
+      const mirror =
+        raw.calendar_prefs && typeof raw.calendar_prefs === 'object'
+          ? (raw.calendar_prefs as Record<string, unknown>).taskStatusOrderMirror
+          : undefined;
+      return sanitizeTaskStatusOrder(mirror);
     })(),
   };
 }

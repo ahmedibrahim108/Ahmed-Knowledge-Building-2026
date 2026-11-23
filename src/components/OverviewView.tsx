@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
   ArrowLeft,
@@ -7,22 +7,18 @@ import {
   Check,
   CheckSquare,
   Compass,
-  Crop,
   Edit3,
   Eye,
   Feather,
   GraduationCap,
-  Image as ImageIcon,
   Images,
   KeyRound,
   ListTodo,
-  Loader2,
   LogIn,
   NotebookPen,
   Pin,
   Plus,
   Repeat,
-  RotateCcw,
   SlidersHorizontal,
   Sparkles,
   Square,
@@ -43,7 +39,6 @@ import {
   DomainInfo,
   HERO_IMAGE_PATH,
   HUB_ACCENT_PRESETS,
-  ImageFrameSpec,
   LearningHubId,
   LearningHubMeta,
   LearningPath,
@@ -69,13 +64,11 @@ import {
   setActiveLearningHubs,
 } from '../data/curriculumData';
 import type { CloudAttachmentItem } from '../services/supabaseSync';
-import { getImagesForScope } from '../utils/imageStorage';
 import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
-import { FramedImage, ImageFrameEditorModal } from './FramedImage';
+import { FramedImage } from './FramedImage';
 import { ActiveTab } from './Header';
 import type { ActivePdfTarget } from './PDFViewerModal';
-import { MAIN_GALLERY_SCOPE_KEY } from './PhotoGalleryView';
 import ProgressCharts from './ProgressCharts';
 import TaskFormModal from './TaskFormModal';
 import WeeklyRhythmSection from './WeeklyRhythmSection';
@@ -176,14 +169,6 @@ export default function OverviewView({
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<UnifiedTask | null>(null);
 
-  // Hero Image Picker & Resizer state
-  const [heroGalleryOpen, setHeroGalleryOpen] = useState(false);
-  const [heroGalleryItems, setHeroGalleryItems] = useState<
-    Array<{ id: string; name: string; url: string; storagePath?: string }>
-  >([]);
-  const [loadingHeroGallery, setLoadingHeroGallery] = useState(false);
-  const [heroFrameModalOpen, setHeroFrameModalOpen] = useState(false);
-
   // Quick Home Reflection Composer & Tag Manager state
   const [quickReflOpen, setQuickReflOpen] = useState(false);
   const [quickReflTitle, setQuickReflTitle] = useState('');
@@ -202,31 +187,6 @@ export default function OverviewView({
   const [hubDraftPurpose, setHubDraftPurpose] = useState('');
   const [hubDraftPresetId, setHubDraftPresetId] = useState<string>('indigo');
   const [hubDraftCategoriesText, setHubDraftCategoriesText] = useState('');
-
-  useEffect(() => {
-    if (!heroGalleryOpen) return;
-    let active = true;
-    setLoadingHeroGallery(true);
-    void getImagesForScope(MAIN_GALLERY_SCOPE_KEY, user?.uid)
-      .then((records) => {
-        if (!active) return;
-        const mapped = records
-          .map((rec) => ({
-            id: rec.id,
-            name: rec.caption || rec.name,
-            url: rec.downloadUrl || rec.dataUrl || '',
-            storagePath: rec.storagePath,
-          }))
-          .filter((i) => Boolean(i.url) || Boolean(i.storagePath));
-        setHeroGalleryItems(mapped);
-      })
-      .finally(() => {
-        if (active) setLoadingHeroGallery(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [heroGalleryOpen, user?.uid]);
 
   const activeHeroUrl = preferences.dashboardHeroImageUrl || HERO_IMAGE_PATH;
   const activeHeroStoragePath = preferences.dashboardHeroImageStoragePath || undefined;
@@ -600,74 +560,17 @@ export default function OverviewView({
             </div>
           </div>
 
-          <div className="lg:col-span-5 flex flex-col justify-between bg-slate-100/70 border-t lg:border-t-0 lg:border-r border-slate-200">
-            <div className="flex-1 flex items-center justify-center overflow-hidden">
-              <FramedImage
-                srcUrl={activeHeroUrl}
-                storagePath={activeHeroStoragePath}
-                frame={activeHeroFrame}
-                defaultFrame={DEFAULT_DASHBOARD_HERO_FRAME}
-                alt="صورة واجهة لوحة المعرفة الشخصية"
-                mode="gallery"
-                className="w-full"
-              />
-            </div>
-
-            {canEdit && (
-              <div className="p-2.5 sm:px-3.5 sm:py-2.5 bg-white/95 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setHeroGalleryOpen(true)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 font-semibold text-[#1E3A5F] bg-[#F7F8FA] hover:bg-slate-200/80 border border-slate-200 rounded-lg cursor-pointer transition-colors"
-                  >
-                    <ImageIcon className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>تبديل من المعرض</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setHeroFrameModalOpen(true)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 font-medium text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg cursor-pointer transition-colors"
-                  >
-                    <Crop className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-                    <span>حجم وقص الصورة</span>
-                  </button>
-                </div>
-
-                {/* Direct 1-tap height/size controls right here in Dashboard Hero */}
-                <div className="inline-flex items-center gap-1 bg-[#F7F8FA] border border-slate-200 rounded-lg p-0.5">
-                  {[
-                    { label: 'صغير', px: 210 },
-                    { label: 'متوسط', px: 300 },
-                    { label: 'كبير', px: 400 },
-                  ].map((sz) => {
-                    const currentH = activeHeroFrame.customHeightPx ?? 300;
-                    const isSelected = Math.abs(currentH - sz.px) <= 25;
-                    return (
-                      <button
-                        key={sz.label}
-                        type="button"
-                        onClick={() =>
-                          onUpdatePreferences({
-                            dashboardHeroImageFrame: {
-                              ...activeHeroFrame,
-                              customHeightPx: sz.px,
-                            },
-                          })
-                        }
-                        className={`px-2 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                          isSelected
-                            ? 'bg-[#1E3A5F] text-white'
-                            : 'text-slate-600 hover:bg-slate-200/70'
-                        }`}
-                      >
-                        {sz.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+          <div className="lg:col-span-5 relative min-h-[220px] sm:min-h-[260px] lg:min-h-full bg-slate-100 border-t lg:border-t-0 lg:border-r border-slate-200 overflow-hidden flex items-center justify-center">
+            <FramedImage
+              srcUrl={activeHeroUrl}
+              storagePath={activeHeroStoragePath}
+              frame={activeHeroFrame}
+              defaultFrame={DEFAULT_DASHBOARD_HERO_FRAME}
+              alt="صورة واجهة لوحة المعرفة الشخصية"
+              mode="gallery"
+              fillParent
+              className="w-full"
+            />
           </div>
         </div>
       </section>
@@ -1589,154 +1492,6 @@ export default function OverviewView({
             }
           }}
           onDelete={onDeleteUnifiedTask}
-        />
-      )}
-
-      {/* Hero Gallery Image Selector Modal */}
-      {heroGalleryOpen && (
-        <div
-          className="fixed inset-0 z-[80] bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setHeroGalleryOpen(false)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-3xl max-h-[88dvh] flex flex-col bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
-          >
-            <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm sm:text-base font-bold text-slate-900">
-                  اختر صورة الواجهة الرئيسية من معرض الصور
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  يمكنك اختيار أي صورة من معرضك أو استعادة الصورة الافتراضية، ثم تعديل حجمها مباشرة.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setHeroGalleryOpen(false)}
-                aria-label="إغلاق"
-                className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onUpdatePreferences({
-                      dashboardHeroImageUrl: HERO_IMAGE_PATH,
-                      dashboardHeroImageStoragePath: '',
-                    });
-                    setHeroGalleryOpen(false);
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-[#F7F8FA] hover:bg-slate-200 border border-slate-200 rounded-lg cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>استعادة الصورة الافتراضية</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setHeroGalleryOpen(false);
-                    onNavigateTab('gallery');
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-                >
-                  <Images className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>فتح معرض الصور لرفع صور جديدة</span>
-                </button>
-              </div>
-
-              {loadingHeroGallery ? (
-                <div className="py-10 flex items-center justify-center gap-2 text-xs text-slate-500">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>جاري تحميل صور المعرض...</span>
-                </div>
-              ) : heroGalleryItems.length === 0 ? (
-                <div className="p-8 text-center bg-[#F7F8FA] border border-dashed border-slate-200 rounded-xl space-y-2">
-                  <p className="text-xs text-slate-600">
-                    لا توجد صور في معرض الصور بعد. يمكنك إضافة صور من صفحة «معرض الصور» ثم اختيارها هنا.
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {heroGalleryItems.map((item) => {
-                    const isSelected =
-                      (item.storagePath &&
-                        item.storagePath === activeHeroStoragePath) ||
-                      (item.url && item.url === activeHeroUrl);
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => {
-                          onUpdatePreferences({
-                            dashboardHeroImageUrl: item.url,
-                            dashboardHeroImageStoragePath: item.storagePath || '',
-                          });
-                          setHeroGalleryOpen(false);
-                        }}
-                        className={`group text-right rounded-xl border overflow-hidden transition-all cursor-pointer ${
-                          isSelected
-                            ? 'border-[#1E3A5F] ring-2 ring-[#1E3A5F]/25 bg-slate-50'
-                            : 'border-slate-200 hover:border-[#1E3A5F]/50 bg-white'
-                        }`}
-                      >
-                        <FramedImage
-                          srcUrl={item.url}
-                          storagePath={item.storagePath}
-                          frame={{
-                            aspect: '16:9',
-                            fitMode: 'cover',
-                            zoom: 1,
-                            offsetX: 50,
-                            offsetY: 50,
-                            sizePreset: 'sm',
-                            customHeightPx: 120,
-                          }}
-                          alt={item.name}
-                          mode="card"
-                        />
-                        <div className="px-2.5 py-2 flex items-center justify-between gap-1 text-[11px]">
-                          <span className="truncate font-medium text-slate-800">
-                            {item.name}
-                          </span>
-                          {isSelected && (
-                            <Check
-                              className="w-3.5 h-3.5 text-[#1E3A5F] shrink-0"
-                              aria-hidden="true"
-                            />
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Hero Image Frame / Resize Editor Modal */}
-      {heroFrameModalOpen && (
-        <ImageFrameEditorModal
-          open={heroFrameModalOpen}
-          srcUrl={activeHeroUrl}
-          storagePath={activeHeroStoragePath}
-          initialFrame={activeHeroFrame}
-          title="ضبط حجم وقص صورة الواجهة الرئيسية"
-          onClose={() => setHeroFrameModalOpen(false)}
-          onSave={(nextFrame: ImageFrameSpec) => {
-            onUpdatePreferences({
-              dashboardHeroImageFrame: nextFrame,
-            });
-          }}
         />
       )}
     </div>

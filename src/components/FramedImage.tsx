@@ -91,6 +91,7 @@ interface FramedImageProps {
   defaultFrame?: ImageFrameSpec;
   alt: string;
   mode?: 'gallery' | 'card' | 'modal';
+  fillParent?: boolean;
   className?: string;
   onClick?: () => void;
   children?: React.ReactNode;
@@ -103,6 +104,7 @@ export function FramedImage({
   defaultFrame = DEFAULT_IMAGE_FRAME_SPEC,
   alt,
   mode = 'gallery',
+  fillParent = false,
   className = '',
   onClick,
   children,
@@ -119,6 +121,8 @@ export function FramedImage({
       mode === 'card'
         ? `${Math.min(300, safeFrame.customHeightPx)}px`
         : `${safeFrame.customHeightPx}px`;
+  } else if (fillParent && safeFrame.aspect === 'auto') {
+    // Stretch naturally to parent layout container without forced pixel height
   } else if (safeFrame.aspect !== 'auto' && mode !== 'gallery') {
     containerStyle.aspectRatio = safeFrame.aspect.replace(':', ' / ');
   } else if (mode === 'gallery') {
@@ -140,7 +144,11 @@ export function FramedImage({
     <div
       onClick={onClick}
       style={containerStyle}
-      className={`relative w-full overflow-hidden bg-slate-100/80 ${
+      className={`relative w-full ${
+        fillParent && !safeFrame.customHeightPx && safeFrame.aspect === 'auto'
+          ? 'h-full min-h-[220px]'
+          : ''
+      } overflow-hidden bg-slate-100/80 ${
         onClick ? 'cursor-pointer' : ''
       } ${className}`}
     >
