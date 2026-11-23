@@ -480,39 +480,53 @@ export default function RichTextNoteEditor({
   const updateFloatingBubblePosition = () => {
     if (!canEdit) {
       setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      setFloatingSubMenu('none');
       return;
     }
     const el = editorRef.current;
     const sel = window.getSelection();
-    if (!el || !sel || sel.rangeCount === 0) {
+    if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed) {
       setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      setFloatingSubMenu('none');
       return;
     }
     const range = sel.getRangeAt(0);
-    if (!el.contains(range.commonAncestorContainer)) {
+    if (range.collapsed || !el.contains(range.commonAncestorContainer)) {
       setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      setFloatingSubMenu('none');
+      return;
+    }
+    // Only appear when user actively selects a word, phrase, or line (never while passively typing)
+    if (!sel.toString().trim()) {
+      setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      setFloatingSubMenu('none');
       return;
     }
 
     let rect = range.getBoundingClientRect();
-    if ((!rect || (rect.width === 0 && rect.height === 0)) && range.getClientRects().length > 0) {
-      rect = range.getClientRects()[0];
+    const clientRects = range.getClientRects();
+    if ((!rect || (rect.width === 0 && rect.height === 0)) && clientRects.length > 0) {
+      rect = clientRects[0];
     }
     if (!rect || (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.left === 0)) {
-      const activeBlock = findClosestEditableBlock(sel.anchorNode);
-      if (!activeBlock) {
-        setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
-        return;
-      }
-      rect = activeBlock.getBoundingClientRect();
+      setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      setFloatingSubMenu('none');
+      return;
     }
 
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1024;
     const vh = typeof window !== 'undefined' ? window.innerHeight : 768;
-    const estWidth = Math.min(390, vw - 24);
-    const placeBelow = rect.top < 78;
-    const rawTop = placeBelow ? rect.bottom + 10 : rect.top - 52;
-    const clampedTop = Math.max(8, Math.min(vh - 64, rawTop));
+    const estWidth = Math.min(400, vw - 24);
+    const toolbarHeight = floatingToolbarRef.current?.offsetHeight || 48;
+    // Leave generous ~2 lines (~44px) of breathing space between selected text and toolbar
+    const clearance = 44;
+    const minTopBound = vw < 640 ? 96 : 108;
+    const canPlaceAbove = rect.top - toolbarHeight - clearance >= minTopBound;
+    const placeBelow = !canPlaceAbove && rect.bottom + toolbarHeight + clearance <= vh - 12;
+    const rawTop = placeBelow
+      ? rect.bottom + clearance
+      : rect.top - toolbarHeight - clearance;
+    const clampedTop = Math.max(12, Math.min(vh - toolbarHeight - 12, rawTop));
     const centerX = rect.left + rect.width / 2;
     const clampedLeft = Math.max(12, Math.min(vw - estWidth - 12, centerX - estWidth / 2));
 
@@ -2101,7 +2115,7 @@ export default function RichTextNoteEditor({
               <span>حجم</span>
             </button>
             {floatingSubMenu === 'size' && (
-              <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-lg p-1.5 flex items-center gap-1 z-20 whitespace-nowrap">
+              <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-lg p-1.5 flex items-center gap-1 z-20 whitespace-nowrap max-w-[calc(100vw-32px)] overflow-x-auto">
                 {INLINE_FONT_SIZE_OPTIONS.map((opt) => (
                   <button
                     key={opt.id}
@@ -2138,7 +2152,7 @@ export default function RichTextNoteEditor({
               <span className="w-2.5 h-1 rounded-full bg-[#1E3A5F]" />
             </button>
             {floatingSubMenu === 'color' && (
-              <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-lg p-2 flex items-center gap-1.5 z-20">
+              <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-lg p-2 flex items-center gap-1.5 z-20 max-w-[calc(100vw-32px)]">
                 {TEXT_INK_SWATCHES.map((sw) => (
                   <button
                     key={sw.id}
@@ -2173,7 +2187,7 @@ export default function RichTextNoteEditor({
               <Highlighter className="w-3.5 h-3.5" />
             </button>
             {floatingSubMenu === 'highlight' && (
-              <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-lg p-2 flex items-center gap-1.5 z-20">
+              <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-lg p-2 flex items-center gap-1.5 z-20 max-w-[calc(100vw-32px)]">
                 {(Object.keys(HIGHLIGHT_SWATCHES) as HighlightColorKey[]).map((key) => (
                   <button
                     key={key}

@@ -6,7 +6,6 @@
 import { User, onAuthStateChanged } from 'firebase/auth';
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import {
-  ArrowRight,
   CalendarDays,
   CheckCircle2,
   GraduationCap,
@@ -54,6 +53,7 @@ import {
   DentalCase,
   DomainId,
   DomainInfo,
+  GrantedItemNote,
   GrantedWorkspaceData,
   INITIAL_BOOK_NOTES,
   INITIAL_COURSES,
@@ -107,6 +107,7 @@ import {
   CloudAttachmentItem,
   PublicCatalogData,
   UserProfileRecord,
+  addGrantedItemNote,
   deleteBlogPostDoc,
   deleteBookNoteDoc,
   deleteCalendarEventDoc,
@@ -114,6 +115,7 @@ import {
   deleteCustomCategoryDoc,
   deleteDentalCaseDoc,
   deleteDomainDoc,
+  deleteGrantedItemNote,
   deleteHistoryEntryDoc,
   deleteLearningPathDoc,
   deleteMonthDoc,
@@ -352,6 +354,10 @@ export default function App() {
     'courses' | 'dental_cases'
   >('courses');
   const [backStack, setBackStack] = useState<NavStepSnapshot[]>([]);
+  const [forwardStack, setForwardStack] = useState<NavStepSnapshot[]>([]);
+  const [accountInitialSubTab, setAccountInitialSubTab] = useState<
+    'workspace' | 'users' | undefined
+  >(undefined);
   const [activePdfTarget, setActivePdfTarget] =
     useState<ActivePdfTarget | null>(null);
   const [confirmResetOpen, setConfirmResetOpen] = useState(false);
@@ -409,6 +415,7 @@ export default function App() {
 
   const pushBackStep = () => {
     const snap = buildCurrentSnapshot();
+    setForwardStack([]);
     setBackStack((prev) => {
       const last = prev[prev.length - 1];
       if (
@@ -455,26 +462,46 @@ export default function App() {
     }
   };
 
-  const handleStepBack = () => {
+  const applyNavSnapshot = (snap: NavStepSnapshot) => {
+    setActiveTab(snap.tab);
+    setSelectedCourseId(snap.courseId);
+    setActiveBookNoteId(snap.noteId);
+    setStudyModalState(
+      snap.noteId ? { noteId: snap.noteId, startInEdit: false } : null
+    );
+    setActiveHubFilter(snap.hubFilter);
+    setCoursesSection(snap.coursesSection);
+    syncLocationHash(snap.tab, snap.courseId, snap.noteId);
+    safeScrollToTop();
+  };
+
+  const handleGoBack = () => {
+    const currStep = buildCurrentSnapshot();
     if (backStack.length === 0) {
       if (selectedCourseId !== null) {
+        setForwardStack((prev) => [...prev, currStep].slice(-15));
         setSelectedCourseId(null);
         syncLocationHash('courses', null, null);
       } else {
         setActiveTab('overview');
         syncLocationHash('overview', null, null);
       }
+      safeScrollToTop();
       return;
     }
     const prevStep = backStack[backStack.length - 1];
     setBackStack((prev) => prev.slice(0, -1));
-    setActiveTab(prevStep.tab);
-    setSelectedCourseId(prevStep.courseId);
-    setActiveBookNoteId(prevStep.noteId);
-    setActiveHubFilter(prevStep.hubFilter);
-    setCoursesSection(prevStep.coursesSection);
-    syncLocationHash(prevStep.tab, prevStep.courseId, prevStep.noteId);
-    safeScrollToTop();
+    setForwardStack((prev) => [...prev, currStep].slice(-15));
+    applyNavSnapshot(prevStep);
+  };
+
+  const handleGoForward = () => {
+    if (forwardStack.length === 0) return;
+    const nextStep = forwardStack[forwardStack.length - 1];
+    const currStep = buildCurrentSnapshot();
+    setForwardStack((prev) => prev.slice(0, -1));
+    setBackStack((prev) => [...prev, currStep].slice(-15));
+    applyNavSnapshot(nextStep);
   };
 
   const navigateToTab = (tab: ActiveTab, recordStep = true) => {
@@ -579,6 +606,7 @@ export default function App() {
       setActiveBookNoteId(null);
       setSelectedCourseId(null);
       setBackStack([]);
+      setForwardStack([]);
       setCoursesSection('courses');
     }
     setActiveHubFilter('all');
@@ -2890,6 +2918,22 @@ export default function App() {
         showPublicBlogs={
           publicSiteConfig.visibilityFlags?.showBlogs !== false
         }
+        canGoBack={backStack.length > 0 || selectedCourseId !== null}
+        canGoForward={forwardStack.length > 0}
+        backLabel={
+          backStack.length > 0
+            ? backStack[backStack.length - 1].label
+            : selectedCourseId !== null
+            ? 'قائمة الكورسات'
+            : undefined
+        }
+        forwardLabel={
+          forwardStack.length > 0
+            ? forwardStack[forwardStack.length - 1].label
+            : undefined
+        }
+        onGoBack={handleGoBack}
+        onGoForward={handleGoForward}
       />
 
       {/* Auth Prompt Notice when a read-only trigger is fired */}
@@ -2952,27 +2996,6 @@ export default function App() {
       )}
 
       <main className="flex-1 max-w-[1280px] w-full mx-auto px-3 sm:px-8 py-5 sm:py-8 pb-24 lg:pb-10 overflow-x-hidden">
-        {backStack.length > 0 && (
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={handleStepBack}
-              className="inline-flex items-center gap-2 px-3.5 py-2 min-h-[38px] text-xs font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg shadow-2xs transition-colors cursor-pointer"
-            >
-              <ArrowRight className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-              <span>رجوع إلى: {backStack[backStack.length - 1].label}</span>
-            </button>
-            {backStack.length > 1 && (
-              <button
-                type="button"
-                onClick={() => setBackStack([])}
-                className="text-[11px] text-slate-500 hover:text-slate-700 cursor-pointer"
-              >
-                مسح مسار الرجوع
-              </button>
-            )}
-          </div>
-        )}
 
         <ErrorBoundary
           inline
@@ -3041,6 +3064,60 @@ export default function App() {
                 : undefined
             }
             onOpenPdf={setActivePdfTarget}
+            onAddGrantedItemNote={
+              user && !isAdmin
+                ? async (targetType: GrantedItemNote['targetType'], targetId: string, content: string) => {
+                    const ownerUid =
+                      publicSiteConfig.ownerId ||
+                      grantedWorkspace?.grants[0]?.ownerId ||
+                      '';
+                    if (!ownerUid) {
+                      throw new Error('تعذر تحديد مالك المحتوى لحفظ الملاحظة.');
+                    }
+                    const saved = await addGrantedItemNote({
+                      ownerId: ownerUid,
+                      authorUid: user.uid,
+                      authorEmail: user.email || '',
+                      authorName:
+                        user.displayName ||
+                        userProfile?.display_name ||
+                        user.email ||
+                        'حساب مشارك',
+                      targetType,
+                      targetId,
+                      content,
+                      isAdminReply: false,
+                      createdAtLabel: formatArabicDate(),
+                      createdAtMs: Date.now(),
+                    });
+                    setGrantedWorkspace((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            itemNotes: [saved, ...(prev.itemNotes ?? [])],
+                          }
+                        : prev
+                    );
+                  }
+                : undefined
+            }
+            onDeleteGrantedItemNote={
+              user && !isAdmin
+                ? async (noteId: string) => {
+                    await deleteGrantedItemNote(noteId);
+                    setGrantedWorkspace((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            itemNotes: (prev.itemNotes ?? []).filter(
+                              (n) => n.id !== noteId
+                            ),
+                          }
+                        : prev
+                    );
+                  }
+                : undefined
+            }
           />
         ) : (
           <>
@@ -3096,6 +3173,10 @@ export default function App() {
               setIsPreviewingPublic(true);
               void refreshPublicCatalog();
               navigateToTab('public', false);
+            }}
+            onOpenPermissions={() => {
+              setAccountInitialSubTab('users');
+              navigateToTab('account');
             }}
           />
         )}
@@ -3210,7 +3291,7 @@ export default function App() {
             readingItems={readingItems}
             allProjects={projects}
             allMonths={months}
-            onBack={handleStepBack}
+            onBack={handleGoBack}
             onOpenPdf={setActivePdfTarget}
             onUpdateCourse={handleUpdateCourse}
             onDeleteCourse={handleDeleteCourse}
@@ -3600,6 +3681,8 @@ export default function App() {
             onUpdateReadingModes={(nextModes) =>
               handleUpdatePreferences({ customReadingModes: nextModes })
             }
+            initialSubTab={accountInitialSubTab}
+            onConsumeInitialSubTab={() => setAccountInitialSubTab(undefined)}
           />
         )}
           </>

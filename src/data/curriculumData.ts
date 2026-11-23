@@ -860,6 +860,16 @@ export const DEFAULT_REFLECTION_IMAGE_FRAME: ImageFrameSpec = {
   customHeightPx: 140,
 };
 
+export const DEFAULT_DASHBOARD_HERO_FRAME: ImageFrameSpec = {
+  aspect: 'auto',
+  fitMode: 'cover',
+  zoom: 1,
+  offsetX: 50,
+  offsetY: 50,
+  sizePreset: 'md',
+  customHeightPx: 300,
+};
+
 export function sanitizeImageFrameSpec(
   raw: unknown,
   fallback: ImageFrameSpec = DEFAULT_IMAGE_FRAME_SPEC
@@ -1341,6 +1351,8 @@ export interface UserProfileItem {
   createdAt?: string;
 }
 
+export type GrantAccessMode = 'read_only' | 'can_annotate';
+
 export interface ContentAccessGrant {
   id: string;
   ownerId: string;
@@ -1353,8 +1365,27 @@ export interface ContentAccessGrant {
   bookIds: string[];
   reflectionIds: string[];
   reflectionCategories: string[];
+  blogIds?: string[];
+  accessMode?: GrantAccessMode;
+  allowUserNotes?: boolean;
+  customAdditionTitle?: string;
+  customAdditionBody?: string;
   notesForUser: string;
   updatedAtMs: number;
+}
+
+export interface GrantedItemNote {
+  id: string;
+  ownerId: string;
+  authorUid: string;
+  authorEmail: string;
+  authorName: string;
+  targetType: 'course' | 'note' | 'path' | 'book' | 'reflection';
+  targetId: string;
+  content: string;
+  isAdminReply?: boolean;
+  createdAtLabel: string;
+  createdAtMs: number;
 }
 
 export interface GrantedWorkspaceData {
@@ -1364,6 +1395,8 @@ export interface GrantedWorkspaceData {
   learningPaths: LearningPath[];
   readingItems: ReadingLibraryItem[];
   reflections: PersonalReflection[];
+  blogPosts?: BlogPost[];
+  itemNotes?: GrantedItemNote[];
 }
 
 export type EntitySortMode =
@@ -1394,6 +1427,9 @@ export interface UserPreferences {
   customReadingModes?: ReadingModeMeta[];
   pinnedNavTabs?: string[];
   customHubs?: LearningHubMeta[];
+  dashboardHeroImageUrl?: string;
+  dashboardHeroImageStoragePath?: string;
+  dashboardHeroImageFrame?: ImageFrameSpec;
 }
 
 export interface PinnableNavTabMeta {

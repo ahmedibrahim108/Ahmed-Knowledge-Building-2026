@@ -28,7 +28,9 @@ interface ProgressChartsProps {
   overallProgressPct?: number;
   onSelectCourse?: (courseId: number) => void;
   onOpenPaths?: () => void;
+  onOpenFocus?: () => void;
   onOpenJournal?: () => void;
+  onOpenReviews?: () => void;
 }
 
 const PATH_STATUS_AR: Record<LearningPath['status'], string> = {
@@ -44,7 +46,9 @@ export default function ProgressCharts({
   unifiedTasks,
   onSelectCourse,
   onOpenPaths,
+  onOpenFocus,
   onOpenJournal,
+  onOpenReviews,
 }: ProgressChartsProps) {
   const [courseFilter, setCourseFilter] = useState<'focus_active' | 'most_studied' | 'all'>(
     'focus_active'
@@ -312,71 +316,95 @@ export default function ProgressCharts({
           </div>
         </div>
 
-        {/* 4 Concise Focus & Study KPIs */}
+        {/* 4 Interactive Focus & Study KPIs */}
         <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div className="p-4 bg-[#F7F8FA] border border-slate-200 rounded-xl flex flex-col justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => onOpenPaths?.()}
+            className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-[#1E3A5F]/40 border border-slate-200 rounded-xl flex flex-col justify-between gap-2 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
+          >
             <div className="flex items-center justify-between text-slate-500">
-              <span className="text-xs font-medium">مسارات نشطة</span>
+              <span className="text-xs font-medium group-hover:text-[#1E3A5F] transition-colors">
+                مسارات نشطة
+              </span>
               <Compass className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
             </div>
             <div>
               <p className="text-2xl font-bold text-slate-900 tabular-nums">
                 {learningPaths.length}
               </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
-                متوسط الإنجاز {avgPathsPct}%
+              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
+                <span>متوسط الإنجاز {avgPathsPct}%</span>
+                <ArrowLeft className="w-3 h-3 text-[#1E3A5F] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
               </p>
             </div>
-          </div>
+          </button>
 
-          <div className="p-4 bg-[#F7F8FA] border border-slate-200 rounded-xl flex flex-col justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => onOpenFocus?.()}
+            className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-[#1E3A5F]/40 border border-slate-200 rounded-xl flex flex-col justify-between gap-2 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
+          >
             <div className="flex items-center justify-between text-slate-500">
-              <span className="text-xs font-medium">في دائرة التركيز</span>
+              <span className="text-xs font-medium group-hover:text-[#1E3A5F] transition-colors">
+                في دائرة التركيز
+              </span>
               <GraduationCap className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
             </div>
             <div>
               <p className="text-2xl font-bold text-slate-900 tabular-nums">
                 {activeFocusCount}
               </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
-                من أصل {courses.length} كورس
+              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
+                <span>من أصل {courses.length} كورس</span>
+                <ArrowLeft className="w-3 h-3 text-[#1E3A5F] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
               </p>
             </div>
-          </div>
+          </button>
 
           <button
             type="button"
             onClick={() => onOpenJournal?.()}
-            className="p-4 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-xl flex flex-col justify-between gap-2 text-right transition-colors cursor-pointer"
+            className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-[#1E3A5F]/40 border border-slate-200 rounded-xl flex flex-col justify-between gap-2 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
           >
             <div className="flex items-center justify-between text-slate-500">
-              <span className="text-xs font-medium">ملاحظات الكورسات</span>
+              <span className="text-xs font-medium group-hover:text-[#1E3A5F] transition-colors">
+                ملاحظات الكورسات
+              </span>
               <NotebookPen className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
             </div>
             <div>
               <p className="text-2xl font-bold text-slate-900 tabular-nums">
                 {courseLinkedNotesTotal}
               </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
-                إجمالي التلخيصات {bookNotes.length}
+              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
+                <span>إجمالي التلخيصات {bookNotes.length}</span>
+                <ArrowLeft className="w-3 h-3 text-[#1E3A5F] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
               </p>
             </div>
           </button>
 
-          <div className="p-4 bg-[#F7F8FA] border border-slate-200 rounded-xl flex flex-col justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => (onOpenReviews ? onOpenReviews() : onOpenJournal?.())}
+            className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-emerald-700/35 border border-slate-200 rounded-xl flex flex-col justify-between gap-2 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
+          >
             <div className="flex items-center justify-between text-slate-500">
-              <span className="text-xs font-medium">مراجعات واستماع</span>
+              <span className="text-xs font-medium group-hover:text-emerald-800 transition-colors">
+                مراجعات واستماع
+              </span>
               <Repeat className="w-4 h-4 text-[#059669]" aria-hidden="true" />
             </div>
             <div>
               <p className="text-2xl font-bold text-slate-900 tabular-nums">
                 {totalStudySessions}
               </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
-                تكرار وسماع مسجّل
+              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
+                <span>تكرار وسماع مسجّل</span>
+                <ArrowLeft className="w-3 h-3 text-[#059669] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
               </p>
             </div>
-          </div>
+          </button>
         </div>
       </div>
 

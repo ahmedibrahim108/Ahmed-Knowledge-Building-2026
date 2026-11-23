@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
+  ArrowLeft,
+  ArrowRight,
   BookOpenText,
   ChevronDown,
   Cloud,
@@ -65,6 +67,12 @@ interface HeaderProps {
   onSelectPublicPage?: (page: PublicPageId) => void;
   showPublicReflections?: boolean;
   showPublicBlogs?: boolean;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  backLabel?: string;
+  forwardLabel?: string;
+  onGoBack?: () => void;
+  onGoForward?: () => void;
 }
 
 export default function Header({
@@ -93,6 +101,12 @@ export default function Header({
   onSelectPublicPage,
   showPublicReflections = true,
   showPublicBlogs = true,
+  canGoBack = false,
+  canGoForward = false,
+  backLabel,
+  forwardLabel,
+  onGoBack,
+  onGoForward,
 }: HeaderProps) {
   const showAdminNav = isAdmin && !isPreviewingPublic;
   const [reloading, setReloading] = useState(false);
@@ -190,18 +204,50 @@ export default function Header({
 
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-200">
-      {/* Subtle, Non-Intrusive Top Utility Bar (Reload · Mobile App · Desktop Standalone App) */}
+      {/* Subtle, Non-Intrusive Top Utility Bar (Back · Forward · Reload · Mobile App · Desktop Standalone App) */}
       <div className="bg-slate-50/90 border-b border-slate-100">
         <div className="max-w-[1280px] mx-auto px-3 sm:px-6 h-8 flex items-center justify-between gap-2 text-[11px] text-slate-500">
           <span className="hidden sm:inline truncate">
             منصة ميزان المعرفة · قراءة هادئة وتعلّم متوازن
           </span>
-          <div className="flex items-center gap-1.5 mr-auto sm:mr-0 overflow-x-auto no-scrollbar">
+          <div className="flex items-center gap-1 sm:gap-1.5 mr-auto sm:mr-0 overflow-x-auto no-scrollbar">
+            {onGoBack && onGoForward && (
+              <>
+                <div className="inline-flex items-center gap-0.5 shrink-0">
+                  <button
+                    type="button"
+                    disabled={!canGoBack}
+                    onClick={onGoBack}
+                    title={backLabel ? `رجوع إلى: ${backLabel}` : 'رجوع للخلف'}
+                    aria-label={backLabel ? `رجوع إلى ${backLabel}` : 'رجوع للخلف'}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 h-6 text-[11px] font-medium text-slate-600 hover:text-[#1E3A5F] hover:bg-slate-200/60 rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-35 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                  >
+                    <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span className="hidden md:inline">السابق</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canGoForward}
+                    onClick={onGoForward}
+                    title={forwardLabel ? `تقدم إلى: ${forwardLabel}` : 'تقدم للأمام'}
+                    aria-label={forwardLabel ? `تقدم إلى ${forwardLabel}` : 'تقدم للأمام'}
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 h-6 text-[11px] font-medium text-slate-600 hover:text-[#1E3A5F] hover:bg-slate-200/60 rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-35 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span className="hidden md:inline">التالي</span>
+                  </button>
+                </div>
+                <span className="text-slate-300 select-none" aria-hidden="true">
+                  |
+                </span>
+              </>
+            )}
+
             <button
               type="button"
               onClick={handleHardReload}
               title="إعادة تحميل الصفحة لتحديث البيانات والنسخة"
-              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:text-[#1E3A5F] hover:bg-slate-200/60 rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex items-center gap-1 px-2 py-0.5 h-6 text-[11px] font-medium text-slate-600 hover:text-[#1E3A5F] hover:bg-slate-200/60 rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <RefreshCw
                 className={`w-3 h-3 ${reloading ? 'animate-spin' : ''}`}

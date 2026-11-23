@@ -15,10 +15,13 @@ import {
   LogIn,
   LogOut,
   Map as MapIcon,
+  MessageSquarePlus,
   NotebookPen,
   Search,
+  Send,
   ShieldCheck,
   Sparkles,
+  Trash2,
   User as UserIcon,
   X,
 } from 'lucide-react';
@@ -26,6 +29,7 @@ import {
   BlogPost,
   BookNote,
   DEFAULT_REFLECTION_IMAGE_FRAME,
+  GrantedItemNote,
   GrantedWorkspaceData,
   HERO_IMAGE_PATH,
   LearningPath,
@@ -41,6 +45,7 @@ import {
 } from '../data/curriculumData';
 import type { UserProfileRecord } from '../services/supabaseSync';
 import { ensureRichHtml, renderSafeBidiHtml } from '../utils/richText';
+import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
 import { FramedImage } from './FramedImage';
 import LearningObjectivesPanel from './LearningObjectivesPanel';
@@ -66,6 +71,12 @@ interface PublicHomeViewProps {
   onSignOut: () => void;
   onReturnToAdmin?: () => void;
   onOpenPdf: (target: ActivePdfTarget) => void;
+  onAddGrantedItemNote?: (
+    targetType: GrantedItemNote['targetType'],
+    targetId: string,
+    content: string
+  ) => Promise<void> | void;
+  onDeleteGrantedItemNote?: (noteId: string) => Promise<void> | void;
 }
 
 type PublicDetailModalState =
@@ -105,9 +116,14 @@ export default function PublicHomeView({
   onSignOut,
   onReturnToAdmin,
   onOpenPdf,
+  onAddGrantedItemNote,
+  onDeleteGrantedItemNote,
 }: PublicHomeViewProps) {
   const [detailModal, setDetailModal] = useState<PublicDetailModalState>(null);
   const [heroImgFailed, setHeroImgFailed] = useState(false);
+  const [grantedNoteDraft, setGrantedNoteDraft] = useState('');
+  const [savingGrantedNote, setSavingGrantedNote] = useState(false);
+  const [grantedNoteError, setGrantedNoteError] = useState<string | null>(null);
 
   // Reflections sub-page filters
   const [reflSearch, setReflSearch] = useState('');
@@ -127,12 +143,21 @@ export default function PublicHomeView({
   const grantedPaths = grantedWorkspace?.learningPaths ?? [];
   const grantedBooks = grantedWorkspace?.readingItems ?? [];
   const grantedReflections = grantedWorkspace?.reflections ?? [];
+  const grantedBlogs = grantedWorkspace?.blogPosts ?? [];
+  const canAnnotateGranted = (grantedWorkspace?.grants ?? []).some(
+    (g) => Boolean(g.allowUserNotes) || g.accessMode === 'can_annotate'
+  );
+  const customAdditions = (grantedWorkspace?.grants ?? []).filter((g) =>
+    Boolean((g.customAdditionTitle || '').trim() || (g.customAdditionBody || '').trim())
+  );
   const totalGrantedCount =
     grantedCourses.length +
     grantedNotes.length +
     grantedPaths.length +
     grantedBooks.length +
-    grantedReflections.length;
+    grantedReflections.length +
+    grantedBlogs.length +
+    customAdditions.length;
 
   const adminNotesForUser = (grantedWorkspace?.grants ?? [])
     .map((g) => g.notesForUser.trim())
@@ -146,6 +171,8 @@ export default function PublicHomeView({
         (Boolean(n.courseTitle) &&
           n.courseTitle!.trim().toLowerCase() === course.title.trim().toLowerCase())
     );
+    setGrantedNoteDraft('');
+    setGrantedNoteError(null);
     setDetailModal({ type: 'course', item: course, linkedNotes: matchingNotes });
   };
 
@@ -401,14 +428,23 @@ export default function PublicHomeView({
 
           {/* Granular Granted Workspace Content for Signed-In Non-Admin Accounts */}
           {user && !isAdmin && (loadingGranted || totalGrantedCount > 0) && (
-            <section className="bg-white border border-[#1E3A5F]/25 rounded-2xl p-5 sm:p-6 space-y-5">
+            <section className="bg-white border border-[#1E3A5F]/25 rounded-2xl p-4 sm:p-6 space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
                 <div className="space-y-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <KeyRound className="w-5 h-5 text-[#1E3A5F]" aria-hidden="true" />
                     <h2 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
                       محتوى مخصّص لحسابك ({totalGrantedCount})
                     </h2>
+                    <span
+                      className={`px-2 py-0.5 text-[11px] font-semibold rounded-md border ${
+                        canAnnotateGranted
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-[#F7F8FA] border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {canAnnotateGranted ? 'عرض + السماح بالإضافة' : 'عرض وقراءة فقط'}
+                    </span>
                   </div>
                   {adminNotesForUser && (
                     <p className="text-xs text-[#1E3A5F]">{adminNotesForUser}</p>
@@ -421,6 +457,32 @@ export default function PublicHomeView({
                   />
                 )}
               </div>
+
+              {/* Admin Custom Addition / Tailored Assignment for This Account */}
+              {customAdditions.length > 0 && (
+                <div className="space-y-2.5">
+                  {customAdditions.map((g) => (
+                    <div
+                      key={`custom-${g.id}`}
+                      className="p-4 rounded-xl bg-[#F8FAFC] border border-[#1E3A5F]/20 space-y-1.5"
+                    >
+                      <p className="text-[11px] font-semibold text-[#1E3A5F]">
+                        إضافة مخصّصة لحسابك من الإدارة
+                      </p>
+                      {g.customAdditionTitle && (
+                        <h3 className="font-editorial text-base sm:text-lg font-bold text-slate-900">
+                          {g.customAdditionTitle}
+                        </h3>
+                      )}
+                      {g.customAdditionBody && (
+                        <p className="text-xs sm:text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                          {g.customAdditionBody}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {grantedCourses.length > 0 && (
                 <div className="space-y-3">
@@ -568,9 +630,11 @@ export default function PublicHomeView({
                       return (
                         <article
                           key={r.id}
-                          onClick={() =>
-                            setDetailModal({ type: 'reflection', item: r })
-                          }
+                          onClick={() => {
+                            setGrantedNoteDraft('');
+                            setGrantedNoteError(null);
+                            setDetailModal({ type: 'reflection', item: r });
+                          }}
                           className={`rounded-xl border overflow-hidden cursor-pointer ${style.cardBg} ${style.cardBorder}`}
                         >
                           {(r.imageUrl || r.imageStoragePath) && (
@@ -599,6 +663,53 @@ export default function PublicHomeView({
                         </article>
                       );
                     })}
+                  </div>
+                </div>
+              )}
+
+              {grantedBlogs.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                    <BookOpenText
+                      className="w-4 h-4 text-[#1E3A5F]"
+                      aria-hidden="true"
+                    />
+                    <span>مقالات مخصّصة لحسابك ({grantedBlogs.length})</span>
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {grantedBlogs.map((post) => (
+                      <article
+                        key={post.id}
+                        onClick={() => {
+                          setGrantedNoteDraft('');
+                          setGrantedNoteError(null);
+                          setDetailModal({ type: 'blog', item: post });
+                        }}
+                        className="rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 overflow-hidden cursor-pointer transition-colors"
+                      >
+                        {(post.coverImageUrl || post.coverStoragePath) && (
+                          <FramedImage
+                            srcUrl={post.coverImageUrl}
+                            storagePath={post.coverStoragePath}
+                            frame={post.coverFrame}
+                            alt={post.title}
+                            mode="card"
+                            className="border-b border-slate-100"
+                          />
+                        )}
+                        <div className="p-4 space-y-1.5">
+                          <p className="text-[11px] font-semibold text-[#1E3A5F]">
+                            {post.categoryLabel || 'مقال مخصّص'}
+                          </p>
+                          <h4 className="font-editorial text-base font-bold text-slate-900 line-clamp-1">
+                            <BidiText text={post.title} />
+                          </h4>
+                          <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                            <BidiText text={post.excerpt || post.content} />
+                          </p>
+                        </div>
+                      </article>
+                    ))}
                   </div>
                 </div>
               )}
@@ -1310,81 +1421,247 @@ export default function PublicHomeView({
         </div>
       )}
 
-      {/* Read-Only Public / Granted Detail Modal */}
-      {detailModal && (
-        <div
-          className="fixed inset-0 z-[70] bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setDetailModal(null)}
-        >
-          <div
-            className="w-full max-w-2xl max-h-[90dvh] flex flex-col bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
-              <span className="text-xs font-semibold text-[#1E3A5F]">
-                {detailModal.type === 'course'
-                  ? 'تفاصيل الكورس'
-                  : detailModal.type === 'note'
-                  ? 'تلخيص وملاحظة'
-                  : detailModal.type === 'path'
-                  ? 'تفاصيل المسار التعلّمي'
-                  : detailModal.type === 'reflection'
-                  ? 'خاطرة وتأمل'
-                  : detailModal.type === 'blog'
-                  ? 'مقال من المدونة'
-                  : 'تفاصيل الكتاب'}
-              </span>
-              <button
-                type="button"
-                onClick={() => setDetailModal(null)}
-                aria-label="إغلاق"
-                className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      {/* Read-Only / Granted Interactive Detail Modal */}
+      {detailModal && (() => {
+        const currentTargetType =
+          detailModal.type === 'blog' ? null : detailModal.type;
+        const currentTargetId =
+          detailModal.type === 'course'
+            ? detailModal.item.docId || String(detailModal.item.id)
+            : detailModal.item.id;
+        const isCurrentModalGranted = Boolean(
+          user &&
+            !isAdmin &&
+            ((detailModal.type === 'course' &&
+              grantedCourses.some(
+                (c) =>
+                  c.id === detailModal.item.id ||
+                  (detailModal.item.docId && c.docId === detailModal.item.docId)
+              )) ||
+              (detailModal.type === 'note' &&
+                grantedNotes.some((n) => n.id === detailModal.item.id)) ||
+              (detailModal.type === 'path' &&
+                grantedPaths.some((p) => p.id === detailModal.item.id)) ||
+              (detailModal.type === 'book' &&
+                grantedBooks.some((b) => b.id === detailModal.item.id)) ||
+              (detailModal.type === 'reflection' &&
+                grantedReflections.some((r) => r.id === detailModal.item.id)))
+        );
+        const modalItemNotes =
+          currentTargetType && isCurrentModalGranted
+            ? (grantedWorkspace?.itemNotes ?? []).filter(
+                (n) =>
+                  n.targetType === currentTargetType &&
+                  (n.targetId === currentTargetId ||
+                    (detailModal.type === 'course' &&
+                      n.targetId === String(detailModal.item.id)))
+              )
+            : [];
 
-            <div className="flex-1 overflow-y-auto p-5 sm:p-7 space-y-5">
-              {detailModal.type === 'course' && (
-                <>
-                  <div className="space-y-1.5">
-                    <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
-                      {detailModal.item.title}
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      {[
-                        detailModal.item.instructor,
-                        detailModal.item.platform,
-                        detailModal.item.durationLabel,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </p>
-                  </div>
-                  {detailModal.item.complementaryBook && (
-                    <div className="p-3.5 bg-[#F7F8FA] border border-slate-200 rounded-xl text-xs text-slate-700">
-                      <span className="font-bold text-slate-900">
-                        الكتاب المكمل:{' '}
-                      </span>
-                      {detailModal.item.complementaryBook}
-                      {detailModal.item.bookAuthor
-                        ? ` — ${detailModal.item.bookAuthor}`
-                        : ''}
-                    </div>
+        return (
+          <div
+            className="fixed inset-0 z-[70] bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4"
+            role="dialog"
+            aria-modal="true"
+            onClick={() => setDetailModal(null)}
+          >
+            <div
+              className="w-full max-w-2xl max-h-[92dvh] flex flex-col bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-4 sm:px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2 min-w-0">
+                  <span className="text-xs font-semibold text-[#1E3A5F]">
+                    {detailModal.type === 'course'
+                      ? 'تفاصيل الكورس'
+                      : detailModal.type === 'note'
+                      ? 'تلخيص وملاحظة'
+                      : detailModal.type === 'path'
+                      ? 'تفاصيل المسار التعلّمي'
+                      : detailModal.type === 'reflection'
+                      ? 'خاطرة وتأمل'
+                      : detailModal.type === 'blog'
+                      ? 'مقال من المدونة'
+                      : 'تفاصيل الكتاب'}
+                  </span>
+                  {isCurrentModalGranted && (
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-semibold rounded-md border ${
+                        canAnnotateGranted
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-white border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {canAnnotateGranted ? 'مسموح بالإضافة' : 'قراءة فقط'}
+                    </span>
                   )}
-                  <LearningObjectivesPanel
-                    objectives={detailModal.item.learningObjectives}
-                    readOnly
-                  />
-                  {detailModal.item.resources.length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-bold text-slate-800">
-                        المصادر والملفات المرفقة
-                      </h4>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDetailModal(null)}
+                  aria-label="إغلاق"
+                  className="p-2 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 sm:p-7 space-y-5">
+                {detailModal.type === 'course' && (
+                  <>
+                    <div className="space-y-1.5">
+                      <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
+                        {detailModal.item.title}
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        {[
+                          detailModal.item.instructor,
+                          detailModal.item.platform,
+                          detailModal.item.durationLabel,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                    </div>
+                    {detailModal.item.complementaryBook && (
+                      <div className="p-3.5 bg-[#F7F8FA] border border-slate-200 rounded-xl text-xs text-slate-700">
+                        <span className="font-bold text-slate-900">
+                          الكتاب المكمل:{' '}
+                        </span>
+                        {detailModal.item.complementaryBook}
+                        {detailModal.item.bookAuthor
+                          ? ` — ${detailModal.item.bookAuthor}`
+                          : ''}
+                      </div>
+                    )}
+                    <LearningObjectivesPanel
+                      objectives={detailModal.item.learningObjectives}
+                      readOnly
+                    />
+                    {detailModal.item.resources.length > 0 && (
                       <div className="space-y-2">
-                        {detailModal.item.resources.map((res) => (
+                        <h4 className="text-xs font-bold text-slate-800">
+                          المصادر والملفات المرفقة
+                        </h4>
+                        <div className="space-y-2">
+                          {detailModal.item.resources.map((res) => (
+                            <div
+                              key={res.id}
+                              className="p-3 bg-[#F7F8FA] border border-slate-200 rounded-lg flex flex-wrap items-center justify-between gap-2"
+                            >
+                              <span className="text-xs font-medium text-slate-800">
+                                {res.title || res.attachmentName}
+                              </span>
+                              {(res.storagePath || res.downloadUrl) && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onOpenPdf({
+                                      title:
+                                        res.title ||
+                                        res.attachmentName ||
+                                        'ملف مرفق',
+                                      fileName:
+                                        res.attachmentName || 'document.pdf',
+                                      resourceId: res.id,
+                                      storagePath: res.storagePath,
+                                      downloadUrl: res.downloadUrl,
+                                      mimeType: res.mimeType,
+                                      contextLabel: detailModal.item.title,
+                                      uid: effectiveOwnerUid,
+                                    })
+                                  }
+                                  className="px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                                >
+                                  عرض الملف
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {detailModal.linkedNotes &&
+                      detailModal.linkedNotes.length > 0 && (
+                        <div className="space-y-2.5 pt-3 border-t border-slate-200">
+                          <h4 className="text-xs font-bold text-slate-800">
+                            التلخيصات والملاحظات المفتوحة لهذا الكورس (
+                            {detailModal.linkedNotes.length})
+                          </h4>
+                          <div className="space-y-2">
+                            {detailModal.linkedNotes.map((bn) => (
+                              <button
+                                key={bn.id}
+                                type="button"
+                                onClick={() => {
+                                  setGrantedNoteDraft('');
+                                  setGrantedNoteError(null);
+                                  setDetailModal({ type: 'note', item: bn });
+                                }}
+                                className="w-full text-right p-3 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-xl flex items-center justify-between gap-2 cursor-pointer"
+                              >
+                                <span className="text-xs font-bold text-slate-900">
+                                  <BidiText text={bn.bookTitle} />
+                                </span>
+                                <span className="text-[11px] font-semibold text-[#1E3A5F]">
+                                  قراءة الملخص ←
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                  </>
+                )}
+
+                {detailModal.type === 'note' && (
+                  <>
+                    <div className="space-y-1">
+                      <p className="text-xs text-slate-500">
+                        {detailModal.item.courseTitle ||
+                          detailModal.item.author ||
+                          'تلخيص وملاحظة'}
+                      </p>
+                      <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
+                        <BidiText text={detailModal.item.bookTitle} />
+                      </h3>
+                      {detailModal.item.lectureTitle && (
+                        <p className="text-xs text-[#1E3A5F] font-medium">
+                          {detailModal.item.lectureTitle}
+                        </p>
+                      )}
+                    </div>
+
+                    {detailModal.item.content && (
+                      <div
+                        dir="auto"
+                        className="rich-note-rendered text-sm text-slate-800 leading-relaxed bg-[#F7F8FA] border border-slate-200 rounded-xl p-4 sm:p-5"
+                        dangerouslySetInnerHTML={{
+                          __html: renderSafeBidiHtml(
+                            ensureRichHtml(detailModal.item.content)
+                          ),
+                        }}
+                      />
+                    )}
+
+                    {detailModal.item.quotes && (
+                      <div className="p-4 bg-amber-50/60 border border-amber-200/80 rounded-xl space-y-1">
+                        <h4 className="text-xs font-bold text-amber-900">
+                          اقتباسات ومقتطفات
+                        </h4>
+                        <p className="text-xs text-slate-800 whitespace-pre-wrap leading-relaxed">
+                          {detailModal.item.quotes}
+                        </p>
+                      </div>
+                    )}
+
+                    {(detailModal.item.resources?.length ?? 0) > 0 && (
+                      <div className="space-y-2">
+                        <h4 className="text-xs font-bold text-slate-800">
+                          الملفات المرفقة
+                        </h4>
+                        {(detailModal.item.resources || []).map((res) => (
                           <div
                             key={res.id}
                             className="p-3 bg-[#F7F8FA] border border-slate-200 rounded-lg flex flex-wrap items-center justify-between gap-2"
@@ -1407,7 +1684,7 @@ export default function PublicHomeView({
                                     storagePath: res.storagePath,
                                     downloadUrl: res.downloadUrl,
                                     mimeType: res.mimeType,
-                                    contextLabel: detailModal.item.title,
+                                    contextLabel: detailModal.item.bookTitle,
                                     uid: effectiveOwnerUid,
                                   })
                                 }
@@ -1419,292 +1696,287 @@ export default function PublicHomeView({
                           </div>
                         ))}
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </>
+                )}
 
-                  {detailModal.linkedNotes &&
-                    detailModal.linkedNotes.length > 0 && (
-                      <div className="space-y-2.5 pt-3 border-t border-slate-200">
+                {detailModal.type === 'path' && (
+                  <>
+                    <div className="space-y-2">
+                      <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
+                        {detailModal.item.title}
+                      </h3>
+                      {detailModal.item.description && (
+                        <p className="text-sm text-slate-600 leading-relaxed">
+                          {detailModal.item.description}
+                        </p>
+                      )}
+                      {detailModal.item.objectives && (
+                        <p className="text-xs text-slate-500">
+                          {detailModal.item.objectives}
+                        </p>
+                      )}
+                    </div>
+                    <LearningObjectivesPanel
+                      objectives={detailModal.item.learningObjectives}
+                      readOnly
+                    />
+                    {detailModal.item.stages.length > 0 && (
+                      <div className="space-y-2">
                         <h4 className="text-xs font-bold text-slate-800">
-                          التلخيصات والملاحظات المفتوحة لهذا الكورس (
-                          {detailModal.linkedNotes.length})
+                          مراحل المسار ({detailModal.item.stages.length})
                         </h4>
                         <div className="space-y-2">
-                          {detailModal.linkedNotes.map((bn) => (
-                            <button
-                              key={bn.id}
-                              type="button"
-                              onClick={() =>
-                                setDetailModal({ type: 'note', item: bn })
-                              }
-                              className="w-full text-right p-3 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-xl flex items-center justify-between gap-2 cursor-pointer"
+                          {detailModal.item.stages.map((st, idx) => (
+                            <div
+                              key={st.id}
+                              className="p-3 bg-[#F7F8FA] border border-slate-200 rounded-lg text-xs"
                             >
-                              <span className="text-xs font-bold text-slate-900">
-                                <BidiText text={bn.bookTitle} />
+                              <span className="font-bold text-slate-900">
+                                {idx + 1}. {st.title}
                               </span>
-                              <span className="text-[11px] font-semibold text-[#1E3A5F]">
-                                قراءة الملخص ←
-                              </span>
-                            </button>
+                              {st.notes && (
+                                <p className="text-slate-600 mt-1">{st.notes}</p>
+                              )}
+                            </div>
                           ))}
                         </div>
                       </div>
                     )}
-                </>
-              )}
+                  </>
+                )}
 
-              {detailModal.type === 'note' && (
-                <>
-                  <div className="space-y-1">
-                    <p className="text-xs text-slate-500">
-                      {detailModal.item.courseTitle ||
-                        detailModal.item.author ||
-                        'تلخيص وملاحظة'}
-                    </p>
-                    <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
-                      <BidiText text={detailModal.item.bookTitle} />
-                    </h3>
-                    {detailModal.item.lectureTitle && (
-                      <p className="text-xs text-[#1E3A5F] font-medium">
-                        {detailModal.item.lectureTitle}
-                      </p>
-                    )}
-                  </div>
-
-                  {detailModal.item.content && (
-                    <div
-                      dir="auto"
-                      className="rich-note-rendered text-sm text-slate-800 leading-relaxed bg-[#F7F8FA] border border-slate-200 rounded-xl p-4 sm:p-5"
-                      dangerouslySetInnerHTML={{
-                        __html: renderSafeBidiHtml(
-                          ensureRichHtml(detailModal.item.content)
-                        ),
-                      }}
-                    />
-                  )}
-
-                  {detailModal.item.quotes && (
-                    <div className="p-4 bg-amber-50/60 border border-amber-200/80 rounded-xl space-y-1">
-                      <h4 className="text-xs font-bold text-amber-900">
-                        اقتباسات ومقتطفات
-                      </h4>
-                      <p className="text-xs text-slate-800 whitespace-pre-wrap leading-relaxed">
-                        {detailModal.item.quotes}
-                      </p>
+                {detailModal.type === 'book' && (
+                  <>
+                    <div className="space-y-1.5">
+                      <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
+                        {detailModal.item.title}
+                      </h3>
+                      {detailModal.item.author && (
+                        <p className="text-xs text-slate-500">
+                          المؤلف: {detailModal.item.author}
+                        </p>
+                      )}
                     </div>
-                  )}
+                    {detailModal.item.takeaways && (
+                      <div className="p-4 bg-[#F7F8FA] border border-slate-200 rounded-xl space-y-1">
+                        <h4 className="text-xs font-bold text-slate-800">
+                          أبرز الفوائد المستخلصة
+                        </h4>
+                        <p className="text-xs sm:text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                          {detailModal.item.takeaways}
+                        </p>
+                      </div>
+                    )}
+                    <LearningObjectivesPanel
+                      objectives={detailModal.item.learningObjectives}
+                      readOnly
+                    />
+                    {(detailModal.item.storagePath ||
+                      detailModal.item.downloadUrl) && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onOpenPdf({
+                            title: detailModal.item.title,
+                            fileName:
+                              detailModal.item.attachmentName ||
+                              `${detailModal.item.title}.pdf`,
+                            resourceId: detailModal.item.attachmentResourceId,
+                            storagePath: detailModal.item.storagePath,
+                            downloadUrl: detailModal.item.downloadUrl,
+                            contextLabel: 'المكتبة',
+                            uid: effectiveOwnerUid,
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                      >
+                        <BookOpen className="w-4 h-4" aria-hidden="true" />
+                        <span>فتح ملف الكتاب</span>
+                      </button>
+                    )}
+                  </>
+                )}
 
-                  {(detailModal.item.resources?.length ?? 0) > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-bold text-slate-800">
-                        الملفات المرفقة
-                      </h4>
-                      {(detailModal.item.resources || []).map((res) => (
-                        <div
-                          key={res.id}
-                          className="p-3 bg-[#F7F8FA] border border-slate-200 rounded-lg flex flex-wrap items-center justify-between gap-2"
-                        >
-                          <span className="text-xs font-medium text-slate-800">
-                            {res.title || res.attachmentName}
-                          </span>
-                          {(res.storagePath || res.downloadUrl) && (
+                {detailModal.type === 'reflection' && (
+                  <div className="space-y-4">
+                    {(detailModal.item.imageUrl ||
+                      detailModal.item.imageStoragePath) && (
+                      <FramedImage
+                        srcUrl={detailModal.item.imageUrl}
+                        storagePath={detailModal.item.imageStoragePath}
+                        frame={detailModal.item.imageFrame}
+                        defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
+                        alt={detailModal.item.title}
+                        mode="modal"
+                        className="rounded-xl border border-slate-200"
+                      />
+                    )}
+                    <div className="space-y-1">
+                      <p className="text-xs font-semibold text-[#1E3A5F]">
+                        {detailModal.item.moodTag}
+                        {detailModal.item.categoryTag
+                          ? ` · ${detailModal.item.categoryTag}`
+                          : ''}
+                      </p>
+                      <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
+                        <BidiText text={detailModal.item.title} />
+                      </h3>
+                    </div>
+                    <div className="text-sm text-slate-800 leading-loose whitespace-pre-wrap">
+                      <BidiText text={detailModal.item.content} />
+                    </div>
+                  </div>
+                )}
+
+                {detailModal.type === 'blog' && (
+                  <div className="space-y-5">
+                    {(detailModal.item.coverImageUrl ||
+                      detailModal.item.coverStoragePath) && (
+                      <FramedImage
+                        srcUrl={detailModal.item.coverImageUrl}
+                        storagePath={detailModal.item.coverStoragePath}
+                        frame={detailModal.item.coverFrame}
+                        alt={detailModal.item.title}
+                        mode="modal"
+                        className="rounded-xl border border-slate-200"
+                      />
+                    )}
+                    <div className="space-y-2 border-b border-slate-100 pb-4">
+                      <p className="text-xs font-semibold text-[#1E3A5F] tabular-nums">
+                        {detailModal.item.categoryLabel || 'مقال'} ·{' '}
+                        {detailModal.item.readingTimeMinutes ||
+                          estimateReadingTimeMinutes(detailModal.item.content)}{' '}
+                        دقائق قراءة · {detailModal.item.createdAtLabel}
+                      </p>
+                      <h3 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900 leading-snug">
+                        <BidiText text={detailModal.item.title} />
+                      </h3>
+                      {detailModal.item.subtitle && (
+                        <p className="text-sm sm:text-base font-medium text-slate-600 leading-relaxed">
+                          <BidiText text={detailModal.item.subtitle} />
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-sm sm:text-base text-slate-800 leading-loose whitespace-pre-wrap">
+                      <BidiText text={detailModal.item.content} />
+                    </div>
+                  </div>
+                )}
+
+                {/* User Notes / Questions on Granted Content (when permitted by admin) */}
+                {user &&
+                  !isAdmin &&
+                  isCurrentModalGranted &&
+                  currentTargetType &&
+                  (canAnnotateGranted || modalItemNotes.length > 0) && (
+                    <div className="pt-4 border-t border-slate-200 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <MessageSquarePlus
+                          className="w-4 h-4 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
+                        <h4 className="text-xs sm:text-sm font-bold text-slate-900">
+                          إضافاتك وملاحظاتك على هذا المحتوى ({modalItemNotes.length})
+                        </h4>
+                      </div>
+
+                      {canAnnotateGranted && onAddGrantedItemNote && (
+                        <div className="p-3 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2">
+                          <AutoResizeTextarea
+                            minRows={2}
+                            value={grantedNoteDraft}
+                            onChange={(e) => setGrantedNoteDraft(e.target.value)}
+                            placeholder="أضف ملاحظة أو سؤالاً حول هذا المحتوى..."
+                            className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg"
+                          />
+                          {grantedNoteError && (
+                            <p className="text-[11px] text-red-700">{grantedNoteError}</p>
+                          )}
+                          <div className="flex justify-end">
                             <button
                               type="button"
-                              onClick={() =>
-                                onOpenPdf({
-                                  title:
-                                    res.title ||
-                                    res.attachmentName ||
-                                    'ملف مرفق',
-                                  fileName:
-                                    res.attachmentName || 'document.pdf',
-                                  resourceId: res.id,
-                                  storagePath: res.storagePath,
-                                  downloadUrl: res.downloadUrl,
-                                  mimeType: res.mimeType,
-                                  contextLabel: detailModal.item.bookTitle,
-                                  uid: effectiveOwnerUid,
-                                })
-                              }
-                              className="px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                              disabled={savingGrantedNote || !grantedNoteDraft.trim()}
+                              onClick={async () => {
+                                const text = grantedNoteDraft.trim();
+                                if (!text) return;
+                                setSavingGrantedNote(true);
+                                setGrantedNoteError(null);
+                                try {
+                                  await onAddGrantedItemNote(
+                                    currentTargetType,
+                                    currentTargetId,
+                                    text
+                                  );
+                                  setGrantedNoteDraft('');
+                                } catch (err) {
+                                  setGrantedNoteError(
+                                    err instanceof Error
+                                      ? err.message
+                                      : 'تعذر حفظ الملاحظة مؤقتًا.'
+                                  );
+                                } finally {
+                                  setSavingGrantedNote(false);
+                                }
+                              }}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg disabled:opacity-45 cursor-pointer"
                             >
-                              عرض الملف
+                              {savingGrantedNote ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                              )}
+                              <span>إرسال الإضافة</span>
                             </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {detailModal.type === 'path' && (
-                <>
-                  <div className="space-y-2">
-                    <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
-                      {detailModal.item.title}
-                    </h3>
-                    {detailModal.item.description && (
-                      <p className="text-sm text-slate-600 leading-relaxed">
-                        {detailModal.item.description}
-                      </p>
-                    )}
-                    {detailModal.item.objectives && (
-                      <p className="text-xs text-slate-500">
-                        {detailModal.item.objectives}
-                      </p>
-                    )}
-                  </div>
-                  <LearningObjectivesPanel
-                    objectives={detailModal.item.learningObjectives}
-                    readOnly
-                  />
-                  {detailModal.item.stages.length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-bold text-slate-800">
-                        مراحل المسار ({detailModal.item.stages.length})
-                      </h4>
-                      <div className="space-y-2">
-                        {detailModal.item.stages.map((st, idx) => (
-                          <div
-                            key={st.id}
-                            className="p-3 bg-[#F7F8FA] border border-slate-200 rounded-lg text-xs"
-                          >
-                            <span className="font-bold text-slate-900">
-                              {idx + 1}. {st.title}
-                            </span>
-                            {st.notes && (
-                              <p className="text-slate-600 mt-1">{st.notes}</p>
-                            )}
                           </div>
-                        ))}
-                      </div>
+                        </div>
+                      )}
+
+                      {modalItemNotes.length > 0 && (
+                        <div className="space-y-2">
+                          {modalItemNotes.map((n) => (
+                            <div
+                              key={n.id}
+                              className={`p-3 rounded-xl border text-xs space-y-1.5 ${
+                                n.isAdminReply
+                                  ? 'bg-[#F0F4F9] border-[#1E3A5F]/20'
+                                  : 'bg-white border-slate-200'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-bold text-slate-900">
+                                  {n.isAdminReply ? 'رد الإدارة' : n.authorName || 'أنت'}
+                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[11px] text-slate-400">
+                                    {n.createdAtLabel}
+                                  </span>
+                                  {n.authorUid === user.uid && onDeleteGrantedItemNote && (
+                                    <button
+                                      type="button"
+                                      onClick={() => void onDeleteGrantedItemNote(n.id)}
+                                      aria-label="حذف"
+                                      className="p-1 text-slate-400 hover:text-red-700 cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">
+                                {n.content}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
-                </>
-              )}
-
-              {detailModal.type === 'book' && (
-                <>
-                  <div className="space-y-1.5">
-                    <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
-                      {detailModal.item.title}
-                    </h3>
-                    {detailModal.item.author && (
-                      <p className="text-xs text-slate-500">
-                        المؤلف: {detailModal.item.author}
-                      </p>
-                    )}
-                  </div>
-                  {detailModal.item.takeaways && (
-                    <div className="p-4 bg-[#F7F8FA] border border-slate-200 rounded-xl space-y-1">
-                      <h4 className="text-xs font-bold text-slate-800">
-                        أبرز الفوائد المستخلصة
-                      </h4>
-                      <p className="text-xs sm:text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
-                        {detailModal.item.takeaways}
-                      </p>
-                    </div>
-                  )}
-                  <LearningObjectivesPanel
-                    objectives={detailModal.item.learningObjectives}
-                    readOnly
-                  />
-                  {(detailModal.item.storagePath ||
-                    detailModal.item.downloadUrl) && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpenPdf({
-                          title: detailModal.item.title,
-                          fileName:
-                            detailModal.item.attachmentName ||
-                            `${detailModal.item.title}.pdf`,
-                          resourceId: detailModal.item.attachmentResourceId,
-                          storagePath: detailModal.item.storagePath,
-                          downloadUrl: detailModal.item.downloadUrl,
-                          contextLabel: 'المكتبة',
-                          uid: effectiveOwnerUid,
-                        })
-                      }
-                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
-                    >
-                      <BookOpen className="w-4 h-4" aria-hidden="true" />
-                      <span>فتح ملف الكتاب</span>
-                    </button>
-                  )}
-                </>
-              )}
-
-              {detailModal.type === 'reflection' && (
-                <div className="space-y-4">
-                  {(detailModal.item.imageUrl ||
-                    detailModal.item.imageStoragePath) && (
-                    <FramedImage
-                      srcUrl={detailModal.item.imageUrl}
-                      storagePath={detailModal.item.imageStoragePath}
-                      frame={detailModal.item.imageFrame}
-                      defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
-                      alt={detailModal.item.title}
-                      mode="modal"
-                      className="rounded-xl border border-slate-200"
-                    />
-                  )}
-                  <div className="space-y-1">
-                    <p className="text-xs font-semibold text-[#1E3A5F]">
-                      {detailModal.item.moodTag}
-                      {detailModal.item.categoryTag
-                        ? ` · ${detailModal.item.categoryTag}`
-                        : ''}
-                    </p>
-                    <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
-                      <BidiText text={detailModal.item.title} />
-                    </h3>
-                  </div>
-                  <div className="text-sm text-slate-800 leading-loose whitespace-pre-wrap">
-                    <BidiText text={detailModal.item.content} />
-                  </div>
-                </div>
-              )}
-
-              {detailModal.type === 'blog' && (
-                <div className="space-y-5">
-                  {(detailModal.item.coverImageUrl ||
-                    detailModal.item.coverStoragePath) && (
-                    <FramedImage
-                      srcUrl={detailModal.item.coverImageUrl}
-                      storagePath={detailModal.item.coverStoragePath}
-                      frame={detailModal.item.coverFrame}
-                      alt={detailModal.item.title}
-                      mode="modal"
-                      className="rounded-xl border border-slate-200"
-                    />
-                  )}
-                  <div className="space-y-2 border-b border-slate-100 pb-4">
-                    <p className="text-xs font-semibold text-[#1E3A5F] tabular-nums">
-                      {detailModal.item.categoryLabel || 'مقال'} ·{' '}
-                      {detailModal.item.readingTimeMinutes ||
-                        estimateReadingTimeMinutes(detailModal.item.content)}{' '}
-                      دقائق قراءة · {detailModal.item.createdAtLabel}
-                    </p>
-                    <h3 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900 leading-snug">
-                      <BidiText text={detailModal.item.title} />
-                    </h3>
-                    {detailModal.item.subtitle && (
-                      <p className="text-sm sm:text-base font-medium text-slate-600 leading-relaxed">
-                        <BidiText text={detailModal.item.subtitle} />
-                      </p>
-                    )}
-                  </div>
-                  <div className="text-sm sm:text-base text-slate-800 leading-loose whitespace-pre-wrap">
-                    <BidiText text={detailModal.item.content} />
-                  </div>
-                </div>
-              )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

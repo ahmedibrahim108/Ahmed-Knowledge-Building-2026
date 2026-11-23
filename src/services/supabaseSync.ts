@@ -10,6 +10,7 @@ import {
   CourseStudyStage,
   CustomCategory,
   DEFAULT_CALENDAR_PREFERENCES,
+  DEFAULT_DASHBOARD_HERO_FRAME,
   DEFAULT_HUB_CATEGORIES,
   DEFAULT_IMAGE_FRAME_SPEC,
   DEFAULT_LEARNING_HUBS,
@@ -22,6 +23,8 @@ import {
   DentalCase,
   DentalCaseStatus,
   DomainInfo,
+  GrantAccessMode,
+  GrantedItemNote,
   GrantedWorkspaceData,
   HUB_ACCENT_PRESETS,
   LearningHubId,
@@ -693,6 +696,23 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
     ? sanitizeStringList(prefs.pinnedNavTabs, 20, 40)
     : DEFAULT_PINNED_NAV_TABS;
 
+  const heroUrl = clip(prefs.dashboardHeroImageUrl || '', 2000);
+  const heroStoragePath = clip(prefs.dashboardHeroImageStoragePath || '', 500);
+  const heroFrame = prefs.dashboardHeroImageFrame
+    ? sanitizeImageFrameSpec(
+        prefs.dashboardHeroImageFrame,
+        DEFAULT_DASHBOARD_HERO_FRAME
+      )
+    : undefined;
+  const dashboardHeroObj =
+    heroUrl || heroStoragePath || heroFrame
+      ? {
+          imageUrl: heroUrl,
+          storagePath: heroStoragePath,
+          ...(heroFrame ? { frame: heroFrame } : {}),
+        }
+      : {};
+
   return {
     owner_id: uid,
     id: 'settings',
@@ -713,6 +733,7 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
       ...sanitizeCalendarPrefs(prefs.calendarPrefs),
       pinnedNavTabsMirror: sanitizedPins,
       customHubsMirror: sanitizedHubs,
+      dashboardHeroMirror: dashboardHeroObj,
     },
     weekly_rhythm: sanitizeWeeklyRhythm(prefs.weeklyRhythm),
     reflection_categories: sanitizeStringList(
@@ -725,6 +746,7 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
     ),
     pinned_nav_tabs: sanitizedPins,
     custom_hubs: sanitizedHubs,
+    dashboard_hero: dashboardHeroObj,
   };
 }
 
@@ -1282,6 +1304,34 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
       return DEFAULT_PINNED_NAV_TABS;
     })(),
     customHubs: resolvedCustomHubs,
+    ...(() => {
+      const colHero =
+        raw.dashboard_hero &&
+        typeof raw.dashboard_hero === 'object' &&
+        Object.keys(raw.dashboard_hero as Record<string, unknown>).length > 0
+          ? (raw.dashboard_hero as Record<string, unknown>)
+          : undefined;
+      const mirrorHero =
+        raw.calendar_prefs && typeof raw.calendar_prefs === 'object'
+          ? ((raw.calendar_prefs as Record<string, unknown>).dashboardHeroMirror as
+              | Record<string, unknown>
+              | undefined)
+          : undefined;
+      const h = colHero || mirrorHero;
+      if (!h) return {};
+      const imageUrl = typeof h.imageUrl === 'string' && h.imageUrl ? h.imageUrl : undefined;
+      const storagePath =
+        typeof h.storagePath === 'string' && h.storagePath ? h.storagePath : undefined;
+      const frame =
+        h.frame && typeof h.frame === 'object'
+          ? sanitizeImageFrameSpec(h.frame, DEFAULT_DASHBOARD_HERO_FRAME)
+          : undefined;
+      return {
+        ...(imageUrl ? { dashboardHeroImageUrl: imageUrl } : {}),
+        ...(storagePath ? { dashboardHeroImageStoragePath: storagePath } : {}),
+        ...(frame ? { dashboardHeroImageFrame: frame } : {}),
+      };
+    })(),
   };
 }
 
@@ -2452,6 +2502,11 @@ export function isPending010Migration(): boolean {
   return hasPending010Migration;
 }
 
+let hasPending011Migration = false;
+export function isPending011Migration(): boolean {
+  return hasPending011Migration;
+}
+
 const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
   courses: ['learning_objectives', 'sort_order', 'is_public'],
   learning_paths: ['learning_objectives', 'sort_order', 'is_public'],
@@ -2463,6 +2518,8 @@ const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
     'reflection_categories',
     'custom_reading_modes',
     'pinned_nav_tabs',
+    'custom_hubs',
+    'dashboard_hero',
   ],
   reflections: [
     'category_tag',
@@ -3300,7 +3357,65 @@ export async function updateUserProfileAccess(
 // Per-Account Granular Content Access Grants (RBAC)
 // ============================================================================
 
+const GRANT_META_MARKER = '\n<!--MIZAN_GRANT_META:';
+
+function parseGrantMetaFromNotes(rawNotes: string): {
+  cleanNotes: string;
+  meta: {
+    accessMode?: GrantAccessMode;
+    allowUserNotes?: boolean;
+    customAdditionTitle?: string;
+    customAdditionBody?: string;
+    blogIds?: string[];
+  };
+} {
+  const idx = rawNotes.indexOf(GRANT_META_MARKER);
+  if (idx === -1) {
+    return { cleanNotes: rawNotes, meta: {} };
+  }
+  const cleanNotes = rawNotes.slice(0, idx);
+  const rest = rawNotes.slice(idx + GRANT_META_MARKER.length);
+  const endIdx = rest.indexOf('-->');
+  const jsonPart = endIdx >= 0 ? rest.slice(0, endIdx) : rest;
+  try {
+    const parsed = JSON.parse(jsonPart) as Record<string, unknown>;
+    return {
+      cleanNotes,
+      meta: {
+        accessMode:
+          parsed.accessMode === 'can_annotate' ? 'can_annotate' : 'read_only',
+        allowUserNotes: Boolean(parsed.allowUserNotes),
+        customAdditionTitle:
+          typeof parsed.customAdditionTitle === 'string'
+            ? parsed.customAdditionTitle
+            : '',
+        customAdditionBody:
+          typeof parsed.customAdditionBody === 'string'
+            ? parsed.customAdditionBody
+            : '',
+        blogIds: sanitizeStringList(parsed.blogIds, 200, 160),
+      },
+    };
+  } catch {
+    return { cleanNotes, meta: {} };
+  }
+}
+
 function mapContentGrantRow(raw: Record<string, unknown>): ContentAccessGrant {
+  const { cleanNotes, meta } = parseGrantMetaFromNotes(
+    String(raw.notes_for_user || '')
+  );
+  const accessMode: GrantAccessMode =
+    raw.access_mode === 'can_annotate' ||
+    raw.allow_user_notes === true ||
+    meta.accessMode === 'can_annotate'
+      ? 'can_annotate'
+      : 'read_only';
+  const allowUserNotes =
+    typeof raw.allow_user_notes === 'boolean'
+      ? raw.allow_user_notes
+      : accessMode === 'can_annotate' || Boolean(meta.allowUserNotes);
+
   return {
     id: String(raw.id || ''),
     ownerId: String(raw.owner_id || ''),
@@ -3313,7 +3428,21 @@ function mapContentGrantRow(raw: Record<string, unknown>): ContentAccessGrant {
     bookIds: sanitizeStringList(raw.book_ids, 300, 160),
     reflectionIds: sanitizeStringList(raw.reflection_ids, 300, 160),
     reflectionCategories: sanitizeStringList(raw.reflection_categories, 60, 80),
-    notesForUser: String(raw.notes_for_user || ''),
+    blogIds:
+      Array.isArray(raw.blog_ids) && raw.blog_ids.length > 0
+        ? sanitizeStringList(raw.blog_ids, 200, 160)
+        : meta.blogIds ?? [],
+    accessMode,
+    allowUserNotes,
+    customAdditionTitle:
+      typeof raw.custom_addition_title === 'string' && raw.custom_addition_title
+        ? raw.custom_addition_title
+        : meta.customAdditionTitle ?? '',
+    customAdditionBody:
+      typeof raw.custom_addition_body === 'string' && raw.custom_addition_body
+        ? raw.custom_addition_body
+        : meta.customAdditionBody ?? '',
+    notesForUser: cleanNotes,
     updatedAtMs: Number(raw.updated_at_ms ?? 0),
   };
 }
@@ -3344,7 +3473,17 @@ export async function upsertContentAccessGrant(
   grant: Omit<ContentAccessGrant, 'id' | 'ownerId' | 'updatedAtMs'>
 ): Promise<ContentAccessGrant> {
   const grantId = sanitizeId(`${ownerUid}__${grant.granteeUid}`);
-  const payload = {
+  const accessMode: GrantAccessMode =
+    grant.accessMode === 'can_annotate' || grant.allowUserNotes
+      ? 'can_annotate'
+      : 'read_only';
+  const allowUserNotes = accessMode === 'can_annotate';
+  const cleanNotes = clip(grant.notesForUser, 1000);
+  const customAdditionTitle = clip(grant.customAdditionTitle || '', 240);
+  const customAdditionBody = clip(grant.customAdditionBody || '', 3000);
+  const blogIds = sanitizeStringList(grant.blogIds ?? [], 200, 160);
+
+  const basePayload = {
     id: grantId,
     owner_id: ownerUid,
     grantee_uid: clip(grant.granteeUid, 128),
@@ -3356,15 +3495,51 @@ export async function upsertContentAccessGrant(
     book_ids: sanitizeStringList(grant.bookIds, 300, 160),
     reflection_ids: sanitizeStringList(grant.reflectionIds, 300, 160),
     reflection_categories: sanitizeStringList(grant.reflectionCategories, 60, 80),
-    notes_for_user: clip(grant.notesForUser, 1000),
+    notes_for_user: cleanNotes,
     updated_at_ms: Date.now(),
   };
 
-  await runWrite((c) =>
-    c.from('content_access_grants').upsert(payload, { onConflict: 'owner_id,grantee_uid' })
-  );
+  const fullPayload = {
+    ...basePayload,
+    blog_ids: blogIds,
+    access_mode: accessMode,
+    allow_user_notes: allowUserNotes,
+    custom_addition_title: customAdditionTitle,
+    custom_addition_body: customAdditionBody,
+  };
 
-  return mapContentGrantRow(payload as unknown as Record<string, unknown>);
+  if (isSupabaseConfigured && supabase) {
+    await withFirebaseTokenRetry(async (c) => {
+      const { error } = await c
+        .from('content_access_grants')
+        .upsert(fullPayload, { onConflict: 'owner_id,grantee_uid' });
+      if (!error) return;
+      if (isMissingColumnError(error)) {
+        hasPending011Migration = true;
+        const metaPacked = JSON.stringify({
+          accessMode,
+          allowUserNotes,
+          customAdditionTitle,
+          customAdditionBody,
+          blogIds,
+        });
+        const legacyPayload = {
+          ...basePayload,
+          notes_for_user: `${cleanNotes}${GRANT_META_MARKER}${metaPacked}-->`,
+        };
+        const { error: retryErr } = await c
+          .from('content_access_grants')
+          .upsert(legacyPayload, { onConflict: 'owner_id,grantee_uid' });
+        if (retryErr) {
+          throw new Error(formatSupabaseErrorMessage(retryErr));
+        }
+        return;
+      }
+      throw new Error(formatSupabaseErrorMessage(error));
+    });
+  }
+
+  return mapContentGrantRow(fullPayload as unknown as Record<string, unknown>);
 }
 
 export async function deleteContentAccessGrant(
@@ -3380,6 +3555,78 @@ export async function deleteContentAccessGrant(
   );
 }
 
+function mapGrantedItemNoteRow(raw: Record<string, unknown>): GrantedItemNote {
+  const tRaw = String(raw.target_type || 'note');
+  const targetType: GrantedItemNote['targetType'] =
+    tRaw === 'course' ||
+    tRaw === 'path' ||
+    tRaw === 'book' ||
+    tRaw === 'reflection'
+      ? tRaw
+      : 'note';
+  return {
+    id: String(raw.id || ''),
+    ownerId: String(raw.owner_id || ''),
+    authorUid: String(raw.author_uid || ''),
+    authorEmail: String(raw.author_email || ''),
+    authorName: String(raw.author_name || ''),
+    targetType,
+    targetId: String(raw.target_id || ''),
+    content: String(raw.content || ''),
+    isAdminReply: Boolean(raw.is_admin_reply),
+    createdAtLabel: String(raw.created_at_label || ''),
+    createdAtMs: Number(raw.created_at_ms ?? 0),
+  };
+}
+
+export async function fetchGrantedItemNotesForOwner(
+  ownerUid: string
+): Promise<GrantedItemNote[]> {
+  if (!isSupabaseConfigured || !supabase) return [];
+  const { data, error } = await withFirebaseTokenRetry(async (c) =>
+    c
+      .from('granted_item_notes')
+      .select('*')
+      .eq('owner_id', ownerUid)
+      .order('created_at_ms', { ascending: false })
+  );
+  if (error) {
+    if (isMissingTableError(error)) {
+      hasPending011Migration = true;
+      return [];
+    }
+    return [];
+  }
+  return (data || []).map((r) => mapGrantedItemNoteRow(r as Record<string, unknown>));
+}
+
+export async function addGrantedItemNote(
+  note: Omit<GrantedItemNote, 'id'>
+): Promise<GrantedItemNote> {
+  const id = sanitizeId(`gnote_${note.createdAtMs || Date.now()}_${Math.floor(Math.random() * 1000)}`);
+  const payload = {
+    id,
+    owner_id: clip(note.ownerId, 128),
+    author_uid: clip(note.authorUid, 128),
+    author_email: clip(note.authorEmail, 200),
+    author_name: clip(note.authorName, 120),
+    target_type: note.targetType,
+    target_id: clip(note.targetId, 160),
+    content: clip(note.content, 4000),
+    is_admin_reply: Boolean(note.isAdminReply),
+    created_at_label: clip(note.createdAtLabel, 80),
+    created_at_ms: Math.round(Number(note.createdAtMs) || Date.now()),
+  };
+  await runWrite((c) => c.from('granted_item_notes').insert(payload));
+  return mapGrantedItemNoteRow(payload as unknown as Record<string, unknown>);
+}
+
+export async function deleteGrantedItemNote(noteId: string): Promise<void> {
+  await runWrite((c) =>
+    c.from('granted_item_notes').delete().eq('id', sanitizeId(noteId))
+  );
+}
+
 export async function fetchGrantedWorkspaceForUser(
   user: User
 ): Promise<GrantedWorkspaceData> {
@@ -3390,6 +3637,8 @@ export async function fetchGrantedWorkspaceForUser(
     learningPaths: [],
     readingItems: [],
     reflections: [],
+    blogPosts: [],
+    itemNotes: [],
   };
   if (!isSupabaseConfigured || !supabase || !user?.uid) return empty;
 
@@ -3408,6 +3657,7 @@ export async function fetchGrantedWorkspaceForUser(
     const grantedBookSet = new Set<string>();
     const grantedReflSet = new Set<string>();
     const grantedReflCatSet = new Set<string>();
+    const grantedBlogSet = new Set<string>();
     let includeCourseNotesAny = false;
 
     for (const g of grants) {
@@ -3417,38 +3667,51 @@ export async function fetchGrantedWorkspaceForUser(
       g.bookIds.forEach((id) => grantedBookSet.add(id));
       g.reflectionIds.forEach((id) => grantedReflSet.add(id));
       g.reflectionCategories.forEach((cat) => grantedReflCatSet.add(cat));
+      (g.blogIds ?? []).forEach((id) => grantedBlogSet.add(id));
       if (g.includeCourseNotes) includeCourseNotesAny = true;
     }
 
-    const [coursesRes, notesRes, pathsRes, booksRes, reflRes] = await Promise.all([
-      grantedCourseDocSet.size > 0
-        ? withFirebaseTokenRetry(async (c) =>
-            c.from('courses').select('*').in('doc_id', Array.from(grantedCourseDocSet))
-          )
-        : Promise.resolve({ data: [], error: null }),
-      grantedNoteSet.size > 0 || (includeCourseNotesAny && grantedCourseDocSet.size > 0)
-        ? withFirebaseTokenRetry(async (c) => c.from('book_notes').select('*'))
-        : Promise.resolve({ data: [], error: null }),
-      grantedPathSet.size > 0
-        ? withFirebaseTokenRetry(async (c) =>
-            c.from('learning_paths').select('*').in('id', Array.from(grantedPathSet))
-          )
-        : Promise.resolve({ data: [], error: null }),
-      grantedBookSet.size > 0
-        ? withFirebaseTokenRetry(async (c) =>
-            c.from('reading_items').select('*').in('id', Array.from(grantedBookSet))
-          )
-        : Promise.resolve({ data: [], error: null }),
-      grantedReflSet.size > 0 || grantedReflCatSet.size > 0
-        ? withFirebaseTokenRetry(async (c) =>
-            c
-              .from('reflections')
-              .select('*')
-              .order('pinned', { ascending: false })
-              .order('created_at_ms', { ascending: false })
-          )
-        : Promise.resolve({ data: [], error: null }),
-    ]);
+    const [coursesRes, notesRes, pathsRes, booksRes, reflRes, blogsRes, itemNotesRes] =
+      await Promise.all([
+        grantedCourseDocSet.size > 0
+          ? withFirebaseTokenRetry(async (c) =>
+              c.from('courses').select('*').in('doc_id', Array.from(grantedCourseDocSet))
+            )
+          : Promise.resolve({ data: [], error: null }),
+        grantedNoteSet.size > 0 || (includeCourseNotesAny && grantedCourseDocSet.size > 0)
+          ? withFirebaseTokenRetry(async (c) => c.from('book_notes').select('*'))
+          : Promise.resolve({ data: [], error: null }),
+        grantedPathSet.size > 0
+          ? withFirebaseTokenRetry(async (c) =>
+              c.from('learning_paths').select('*').in('id', Array.from(grantedPathSet))
+            )
+          : Promise.resolve({ data: [], error: null }),
+        grantedBookSet.size > 0
+          ? withFirebaseTokenRetry(async (c) =>
+              c.from('reading_items').select('*').in('id', Array.from(grantedBookSet))
+            )
+          : Promise.resolve({ data: [], error: null }),
+        grantedReflSet.size > 0 || grantedReflCatSet.size > 0
+          ? withFirebaseTokenRetry(async (c) =>
+              c
+                .from('reflections')
+                .select('*')
+                .order('pinned', { ascending: false })
+                .order('created_at_ms', { ascending: false })
+            )
+          : Promise.resolve({ data: [], error: null }),
+        grantedBlogSet.size > 0
+          ? withFirebaseTokenRetry(async (c) =>
+              c.from('blog_posts').select('*').in('id', Array.from(grantedBlogSet))
+            )
+          : Promise.resolve({ data: [], error: null }),
+        withFirebaseTokenRetry(async (c) =>
+          c
+            .from('granted_item_notes')
+            .select('*')
+            .order('created_at_ms', { ascending: false })
+        ),
+      ]);
 
     const courses = (coursesRes.data || []).map((r) =>
       mapCourseRow(r as Record<string, unknown>)
@@ -3476,6 +3739,15 @@ export async function fetchGrantedWorkspaceForUser(
           grantedReflSet.has(r.id) ||
           (Boolean(r.categoryTag) && grantedReflCatSet.has(r.categoryTag as string))
       );
+    const blogPosts = (blogsRes.data || []).map((r) =>
+      mapBlogPostRow(r as Record<string, unknown>)
+    );
+    const itemNotes =
+      itemNotesRes.error || !itemNotesRes.data
+        ? []
+        : itemNotesRes.data.map((r) =>
+            mapGrantedItemNoteRow(r as Record<string, unknown>)
+          );
 
     return {
       grants,
@@ -3484,6 +3756,8 @@ export async function fetchGrantedWorkspaceForUser(
       learningPaths,
       readingItems,
       reflections,
+      blogPosts,
+      itemNotes,
     };
   } catch (err) {
     console.warn('fetchGrantedWorkspaceForUser fallback:', err);

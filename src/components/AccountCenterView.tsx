@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowUpLeft,
   BookOpen,
+  BookOpenText,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -15,6 +16,7 @@ import {
   KeyRound,
   LayoutGrid,
   Loader2,
+  MessageSquarePlus,
   PenLine,
   Pin,
   PinOff,
@@ -38,6 +40,8 @@ import {
   DEFAULT_REFLECTION_CATEGORIES,
   DomainId,
   DomainInfo,
+  GrantAccessMode,
+  GrantedItemNote,
   HUB_ACCENT_PRESETS,
   LearningHubMeta,
   LearningPath,
@@ -68,10 +72,14 @@ import {
   testSupabaseConnection,
 } from '../services/supabaseClient';
 import {
+  addGrantedItemNote,
   deleteContentAccessGrant,
+  deleteGrantedItemNote,
   fetchAllContentGrants,
   fetchAllUserProfiles,
+  fetchGrantedItemNotesForOwner,
   isPending007Migration,
+  isPending011Migration,
   updateUserProfileAccess,
   upsertContentAccessGrant,
 } from '../services/supabaseSync';
@@ -204,11 +212,21 @@ interface AccountCenterViewProps {
   onToggleBlogPublic?: (id: string, isPublic: boolean) => void;
   customReadingModes?: ReadingModeMeta[];
   onUpdateReadingModes?: (nextModes: ReadingModeMeta[]) => void;
+  initialSubTab?: AccountSubTab;
+  onConsumeInitialSubTab?: () => void;
 }
 
 export default function AccountCenterView(props: AccountCenterViewProps) {
-  const [subTab, setSubTab] = useState<AccountSubTab>('workspace');
+  const [subTab, setSubTab] = useState<AccountSubTab>(props.initialSubTab || 'workspace');
   const [planSubMode, setPlanSubMode] = useState<'domains' | 'months'>('domains');
+
+  useEffect(() => {
+    if (props.initialSubTab) {
+      setSubTab(props.initialSubTab);
+      props.onConsumeInitialSubTab?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.initialSubTab]);
 
   // Hub Editor state
   const hubs = resolveLearningHubs(props.preferences.customHubs);
@@ -254,6 +272,7 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
   const [grantsByUid, setGrantsByUid] = useState<
     Record<string, ContentAccessGrant>
   >({});
+  const [grantedItemNotes, setGrantedItemNotes] = useState<GrantedItemNote[]>([]);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
   const [profilesError, setProfilesError] = useState<string | null>(null);
   const [grantModalUser, setGrantModalUser] =
@@ -266,6 +285,10 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
     bookIds: string[];
     reflectionIds: string[];
     reflectionCategories: string[];
+    blogIds: string[];
+    accessMode: GrantAccessMode;
+    customAdditionTitle: string;
+    customAdditionBody: string;
     notesForUser: string;
   }>({
     courseDocIds: [],
@@ -275,10 +298,17 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
     bookIds: [],
     reflectionIds: [],
     reflectionCategories: [],
+    blogIds: [],
+    accessMode: 'read_only',
+    customAdditionTitle: '',
+    customAdditionBody: '',
     notesForUser: '',
   });
   const [grantNoteSearch, setGrantNoteSearch] = useState('');
   const [savingGrant, setSavingGrant] = useState(false);
+  const [replyDraftByNoteKey, setReplyDraftByNoteKey] = useState<Record<string, string>>({});
+  const [activeReplyNoteId, setActiveReplyNoteId] = useState<string | null>(null);
+  const [savingReply, setSavingReply] = useState(false);
 
   const pinnedSet = new Set(
     props.preferences.pinnedNavTabs && props.preferences.pinnedNavTabs.length > 0
@@ -403,9 +433,10 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
     setLoadingProfiles(true);
     setProfilesError(null);
     try {
-      const [list, grantsList] = await Promise.all([
+      const [list, grantsList, itemNotesList] = await Promise.all([
         fetchAllUserProfiles(),
         props.uid ? fetchAllContentGrants(props.uid) : Promise.resolve([]),
+        props.uid ? fetchGrantedItemNotesForOwner(props.uid) : Promise.resolve([]),
       ]);
       setProfiles(list);
       const map: Record<string, ContentAccessGrant> = {};
@@ -413,6 +444,7 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
         map[g.granteeUid] = g;
       }
       setGrantsByUid(map);
+      setGrantedItemNotes(itemNotesList);
     } catch (err) {
       setProfilesError(
         err instanceof Error ? err.message : 'تعذر تحميل قائمة المستخدمين.'
@@ -441,6 +473,13 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
       bookIds: existing?.bookIds ?? [],
       reflectionIds: existing?.reflectionIds ?? [],
       reflectionCategories: existing?.reflectionCategories ?? [],
+      blogIds: existing?.blogIds ?? [],
+      accessMode:
+        existing?.accessMode === 'can_annotate' || existing?.allowUserNotes
+          ? 'can_annotate'
+          : 'read_only',
+      customAdditionTitle: existing?.customAdditionTitle ?? '',
+      customAdditionBody: existing?.customAdditionBody ?? '',
       notesForUser: existing?.notesForUser ?? '',
     });
   };
@@ -454,6 +493,7 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
         granteeUid: grantModalUser.uid,
         granteeEmail: grantModalUser.email,
         ...grantDraft,
+        allowUserNotes: grantDraft.accessMode === 'can_annotate',
       });
       setGrantsByUid((prev) => ({
         ...prev,
@@ -487,6 +527,52 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
       );
     } finally {
       setSavingGrant(false);
+    }
+  };
+
+  const handleAdminReplyToItemNote = async (sourceNote: GrantedItemNote) => {
+    if (!props.uid) return;
+    const text = (replyDraftByNoteKey[sourceNote.id] || '').trim();
+    if (!text) return;
+    setSavingReply(true);
+    setProfilesError(null);
+    try {
+      const saved = await addGrantedItemNote({
+        ownerId: props.uid,
+        authorUid: props.uid,
+        authorEmail: OWNER_ADMIN_EMAIL,
+        authorName: 'الإدارة',
+        targetType: sourceNote.targetType,
+        targetId: sourceNote.targetId,
+        content: text,
+        isAdminReply: true,
+        createdAtLabel: new Date().toLocaleDateString('ar-EG', {
+          month: 'short',
+          day: 'numeric',
+        }),
+        createdAtMs: Date.now(),
+      });
+      setGrantedItemNotes((prev) => [saved, ...prev]);
+      setReplyDraftByNoteKey((prev) => ({ ...prev, [sourceNote.id]: '' }));
+      setActiveReplyNoteId(null);
+    } catch (err) {
+      setProfilesError(
+        err instanceof Error ? err.message : 'تعذر حفظ رد الإدارة.'
+      );
+    } finally {
+      setSavingReply(false);
+    }
+  };
+
+  const handleDeleteGrantedNote = async (noteId: string) => {
+    setProfilesError(null);
+    try {
+      await deleteGrantedItemNote(noteId);
+      setGrantedItemNotes((prev) => prev.filter((n) => n.id !== noteId));
+    } catch (err) {
+      setProfilesError(
+        err instanceof Error ? err.message : 'تعذر حذف الملاحظة.'
+      );
     }
   };
 
@@ -1944,59 +2030,57 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
 
           {/* SECTION 6: Users, Roles & Granular Content Access */}
           {subTab === 'users' && (
-            <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-editorial text-xl font-bold text-slate-900">
-                    المستخدمون والصلاحيات والمحتوى المخصّص
-                  </h2>
-                  <p className="text-xs text-slate-500">
-                    تحكم في أدوار الحسابات، وامنح كل حساب صلاحية الوصول إلى كورسات أو تلخيصات أو مسارات أو كتب أو خواطر محددة. يظل ({OWNER_ADMIN_EMAIL}) محميًا كمسؤول.
+            <div className="space-y-5">
+              <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-editorial text-xl font-bold text-slate-900">
+                      المستخدمون والصلاحيات والمحتوى المخصّص
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      تحكّم من هنا في أدوار الحسابات، وافتح لأي حساب كورسات أو تلخيصات أو مسارات أو كتب أو خواطر أو مقالات محددة — بصلاحية قراءة فقط أو مع السماح بالإضافة، وبإضافة مخصّصة له. يظل ({OWNER_ADMIN_EMAIL}) محميًا كمسؤول.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void loadProfiles()}
+                    disabled={loadingProfiles}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 ${loadingProfiles ? 'animate-spin' : ''}`}
+                    />
+                    <span>تحديث</span>
+                  </button>
+                </div>
+
+                {isPending011Migration() && (
+                  <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                    لتفعيل جدول إضافات الحسابات (<code className="font-mono font-bold">granted_item_notes</code>) والحقول الأصلية على قاعدة البيانات مباشرة، يُنصح بتشغيل ملف{' '}
+                    <code className="font-mono font-bold">011_account_permissions_and_hero_prefs.sql</code>{' '}
+                    في محرر SQL بلوحة Supabase. (تعمل إعدادات المنح والوصول حاليًا بالتوافق التلقائي.)
+                  </div>
+                )}
+
+                {profilesError && (
+                  <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
+                    {profilesError}
+                  </div>
+                )}
+
+                {loadingProfiles ? (
+                  <div className="py-8 flex items-center justify-center gap-2 text-xs text-slate-500">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>جاري تحميل المستخدمين...</span>
+                  </div>
+                ) : profiles.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-4">
+                    لا توجد ملفات مستخدمين مسجّلة.
                   </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void loadProfiles()}
-                  disabled={loadingProfiles}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
-                >
-                  <RefreshCw
-                    className={`w-3.5 h-3.5 ${loadingProfiles ? 'animate-spin' : ''}`}
-                  />
-                  <span>تحديث</span>
-                </button>
-              </div>
-
-              {profilesError && (
-                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
-                  {profilesError}
-                </div>
-              )}
-
-              {loadingProfiles ? (
-                <div className="py-8 flex items-center justify-center gap-2 text-xs text-slate-500">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>جاري تحميل المستخدمين...</span>
-                </div>
-              ) : profiles.length === 0 ? (
-                <p className="text-xs text-slate-500 py-4">
-                  لا توجد ملفات مستخدمين مسجّلة.
-                </p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-right text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-slate-500">
-                        <th className="py-2.5 px-3 font-semibold">المستخدم</th>
-                        <th className="py-2.5 px-3 font-semibold">البريد</th>
-                        <th className="py-2.5 px-3 font-semibold">الدور</th>
-                        <th className="py-2.5 px-3 font-semibold">الحالة</th>
-                        <th className="py-2.5 px-3 font-semibold">
-                          صلاحيات المحتوى المخصّصة
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
+                ) : (
+                  <>
+                    {/* Mobile Cards (< md) for zero horizontal table overflow */}
+                    <div className="md:hidden space-y-3">
                       {profiles.map((prof) => {
                         const isPrimaryOwner =
                           prof.email.toLowerCase() ===
@@ -2011,446 +2095,849 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                           grantParts.push(`${g.pathIds.length} مسار`);
                         if (g?.bookIds.length)
                           grantParts.push(`${g.bookIds.length} كتاب`);
+                        if ((g?.blogIds?.length || 0) > 0)
+                          grantParts.push(`${g!.blogIds!.length} مقال`);
                         if (
                           (g?.reflectionIds.length || 0) +
                             (g?.reflectionCategories.length || 0) >
                           0
                         )
                           grantParts.push('خواطر');
+                        const canAnnotate =
+                          g?.accessMode === 'can_annotate' || g?.allowUserNotes;
 
                         return (
-                          <tr key={prof.uid}>
-                            <td className="py-3 px-3 font-semibold text-slate-900">
-                              {prof.displayName || 'مستخدم'}
-                              {isPrimaryOwner && (
-                                <span className="mr-2 text-[10px] font-bold text-[#1E3A5F]">
-                                  (المالك الأساسي)
+                          <div
+                            key={`m-${prof.uid}`}
+                            className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-3 text-xs"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="font-bold text-slate-900 truncate">
+                                  {prof.displayName || 'مستخدم'}
+                                  {isPrimaryOwner && (
+                                    <span className="mr-1.5 text-[10px] text-[#1E3A5F]">
+                                      (المالك)
+                                    </span>
+                                  )}
+                                </p>
+                                <p className="text-[11px] text-slate-500 truncate" dir="ltr">
+                                  {prof.email}
+                                </p>
+                              </div>
+                              {!isPrimaryOwner && g && (
+                                <span
+                                  className={`px-2 py-0.5 text-[10px] font-semibold rounded-md border shrink-0 ${
+                                    canAnnotate
+                                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                                      : 'bg-white border-slate-200 text-slate-600'
+                                  }`}
+                                >
+                                  {canAnnotate ? 'عرض + إضافة' : 'قراءة فقط'}
                                 </span>
                               )}
-                            </td>
-                            <td className="py-3 px-3 text-slate-600">
-                              {prof.email}
-                            </td>
-                            <td className="py-3 px-3">
-                              <select
-                                disabled={isPrimaryOwner}
-                                value={prof.role}
-                                onChange={(e) =>
-                                  void handleRoleUpdate(
-                                    prof,
-                                    e.target.value as 'user' | 'admin',
-                                    prof.approvalStatus
-                                  )
-                                }
-                                className="px-2 py-1 bg-[#F7F8FA] border border-slate-300 rounded-md disabled:opacity-60"
-                              >
-                                <option value="user">
-                                  مستخدم عادي (عام + مخصّص)
-                                </option>
-                                <option value="admin">مسؤول (Admin)</option>
-                              </select>
-                            </td>
-                            <td className="py-3 px-3">
-                              <select
-                                disabled={isPrimaryOwner}
-                                value={prof.approvalStatus}
-                                onChange={(e) =>
-                                  void handleRoleUpdate(
-                                    prof,
-                                    prof.role,
-                                    e.target
-                                      .value as UserProfileItem['approvalStatus']
-                                  )
-                                }
-                                className="px-2 py-1 bg-[#F7F8FA] border border-slate-300 rounded-md disabled:opacity-60"
-                              >
-                                <option value="pending">قيد الانتظار</option>
-                                <option value="approved">مفعّل</option>
-                                <option value="suspended">معلّق</option>
-                                <option value="rejected">مرفوض</option>
-                              </select>
-                            </td>
-                            <td className="py-3 px-3">
-                              {isPrimaryOwner ? (
-                                <span className="text-[11px] text-slate-500">
-                                  صلاحية كاملة للمالك
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <label className="space-y-1">
+                                <span className="block text-[10px] text-slate-500">الدور</span>
+                                <select
+                                  disabled={isPrimaryOwner}
+                                  value={prof.role}
+                                  onChange={(e) =>
+                                    void handleRoleUpdate(
+                                      prof,
+                                      e.target.value as 'user' | 'admin',
+                                      prof.approvalStatus
+                                    )
+                                  }
+                                  className="w-full px-2 py-2 text-[11px] bg-white border border-slate-300 rounded-lg disabled:opacity-60"
+                                >
+                                  <option value="user">مستخدم عادي</option>
+                                  <option value="admin">مسؤول</option>
+                                </select>
+                              </label>
+                              <label className="space-y-1">
+                                <span className="block text-[10px] text-slate-500">الحالة</span>
+                                <select
+                                  disabled={isPrimaryOwner}
+                                  value={prof.approvalStatus}
+                                  onChange={(e) =>
+                                    void handleRoleUpdate(
+                                      prof,
+                                      prof.role,
+                                      e.target
+                                        .value as UserProfileItem['approvalStatus']
+                                    )
+                                  }
+                                  className="w-full px-2 py-2 text-[11px] bg-white border border-slate-300 rounded-lg disabled:opacity-60"
+                                >
+                                  <option value="pending">قيد الانتظار</option>
+                                  <option value="approved">مفعّل</option>
+                                  <option value="suspended">معلّق</option>
+                                  <option value="rejected">مرفوض</option>
+                                </select>
+                              </label>
+                            </div>
+
+                            {!isPrimaryOwner && (
+                              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80">
+                                <span className="text-[11px] text-slate-600 tabular-nums">
+                                  {grantParts.length > 0
+                                    ? grantParts.join(' · ')
+                                    : 'عام فقط'}
+                                  {g?.customAdditionTitle ? ' · + إضافة مخصّصة' : ''}
                                 </span>
-                              ) : (
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => openGrantModalForUser(prof)}
-                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold text-[#1E3A5F] bg-[#F7F8FA] hover:bg-slate-200 border border-slate-200 rounded-lg cursor-pointer"
-                                  >
-                                    <KeyRound
-                                      className="w-3 h-3"
-                                      aria-hidden="true"
-                                    />
-                                    <span>تخصيص المحتوى</span>
-                                  </button>
-                                  <span className="text-[11px] text-slate-500 tabular-nums">
-                                    {grantParts.length > 0
-                                      ? grantParts.join(' · ')
-                                      : 'عام فقط'}
-                                  </span>
-                                </div>
-                              )}
-                            </td>
-                          </tr>
+                                <button
+                                  type="button"
+                                  onClick={() => openGrantModalForUser(prof)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                                >
+                                  <KeyRound className="w-3.5 h-3.5" aria-hidden="true" />
+                                  <span>تخصيص الصلاحيات</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         );
                       })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                    </div>
 
-              {/* Per-Account Content Access Grants Modal */}
-              {grantModalUser && (
-                <div
-                  className="fixed inset-0 z-[75] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
-                  role="dialog"
-                  aria-modal="true"
-                  onClick={() => setGrantModalUser(null)}
-                >
+                    {/* Desktop Table (>= md) */}
+                    <div className="hidden md:block overflow-x-auto">
+                      <table className="w-full text-right text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b border-slate-200 text-slate-500">
+                            <th className="py-2.5 px-3 font-semibold">المستخدم</th>
+                            <th className="py-2.5 px-3 font-semibold">البريد</th>
+                            <th className="py-2.5 px-3 font-semibold">الدور</th>
+                            <th className="py-2.5 px-3 font-semibold">الحالة</th>
+                            <th className="py-2.5 px-3 font-semibold">
+                              صلاحيات المحتوى المخصّصة
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {profiles.map((prof) => {
+                            const isPrimaryOwner =
+                              prof.email.toLowerCase() ===
+                              OWNER_ADMIN_EMAIL.toLowerCase();
+                            const g = grantsByUid[prof.uid];
+                            const grantParts: string[] = [];
+                            if (g?.courseDocIds.length)
+                              grantParts.push(`${g.courseDocIds.length} كورس`);
+                            if (g?.noteIds.length)
+                              grantParts.push(`${g.noteIds.length} تلخيص`);
+                            if (g?.pathIds.length)
+                              grantParts.push(`${g.pathIds.length} مسار`);
+                            if (g?.bookIds.length)
+                              grantParts.push(`${g.bookIds.length} كتاب`);
+                            if ((g?.blogIds?.length || 0) > 0)
+                              grantParts.push(`${g!.blogIds!.length} مقال`);
+                            if (
+                              (g?.reflectionIds.length || 0) +
+                                (g?.reflectionCategories.length || 0) >
+                              0
+                            )
+                              grantParts.push('خواطر');
+                            const canAnnotate =
+                              g?.accessMode === 'can_annotate' || g?.allowUserNotes;
+
+                            return (
+                              <tr key={prof.uid}>
+                                <td className="py-3 px-3 font-semibold text-slate-900">
+                                  {prof.displayName || 'مستخدم'}
+                                  {isPrimaryOwner && (
+                                    <span className="mr-2 text-[10px] font-bold text-[#1E3A5F]">
+                                      (المالك الأساسي)
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-3 text-slate-600">
+                                  {prof.email}
+                                </td>
+                                <td className="py-3 px-3">
+                                  <select
+                                    disabled={isPrimaryOwner}
+                                    value={prof.role}
+                                    onChange={(e) =>
+                                      void handleRoleUpdate(
+                                        prof,
+                                        e.target.value as 'user' | 'admin',
+                                        prof.approvalStatus
+                                      )
+                                    }
+                                    className="px-2 py-1 bg-[#F7F8FA] border border-slate-300 rounded-md disabled:opacity-60"
+                                  >
+                                    <option value="user">
+                                      مستخدم عادي (عام + مخصّص)
+                                    </option>
+                                    <option value="admin">مسؤول (Admin)</option>
+                                  </select>
+                                </td>
+                                <td className="py-3 px-3">
+                                  <select
+                                    disabled={isPrimaryOwner}
+                                    value={prof.approvalStatus}
+                                    onChange={(e) =>
+                                      void handleRoleUpdate(
+                                        prof,
+                                        prof.role,
+                                        e.target
+                                          .value as UserProfileItem['approvalStatus']
+                                      )
+                                    }
+                                    className="px-2 py-1 bg-[#F7F8FA] border border-slate-300 rounded-md disabled:opacity-60"
+                                  >
+                                    <option value="pending">قيد الانتظار</option>
+                                    <option value="approved">مفعّل</option>
+                                    <option value="suspended">معلّق</option>
+                                    <option value="rejected">مرفوض</option>
+                                  </select>
+                                </td>
+                                <td className="py-3 px-3">
+                                  {isPrimaryOwner ? (
+                                    <span className="text-[11px] text-slate-500">
+                                      صلاحية كاملة للمالك
+                                    </span>
+                                  ) : (
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => openGrantModalForUser(prof)}
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold text-[#1E3A5F] bg-[#F7F8FA] hover:bg-slate-200 border border-slate-200 rounded-lg cursor-pointer whitespace-nowrap"
+                                      >
+                                        <KeyRound
+                                          className="w-3 h-3"
+                                          aria-hidden="true"
+                                        />
+                                        <span>تخصيص المحتوى</span>
+                                      </button>
+                                      {g && (
+                                        <span
+                                          className={`px-2 py-0.5 text-[10px] font-semibold rounded-md border ${
+                                            canAnnotate
+                                              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                                              : 'bg-white border-slate-200 text-slate-600'
+                                          }`}
+                                        >
+                                          {canAnnotate ? 'عرض + إضافة' : 'قراءة فقط'}
+                                        </span>
+                                      )}
+                                      <span className="text-[11px] text-slate-500 tabular-nums">
+                                        {grantParts.length > 0
+                                          ? grantParts.join(' · ')
+                                          : 'عام فقط'}
+                                        {g?.customAdditionTitle ? ' · + إضافة' : ''}
+                                      </span>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+
+                {/* Per-Account Content Access Grants Modal */}
+                {grantModalUser && (
                   <div
-                    onClick={(e) => e.stopPropagation()}
-                    className="w-full max-w-4xl max-h-[90dvh] flex flex-col bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
+                    className="fixed inset-0 z-[75] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4"
+                    role="dialog"
+                    aria-modal="true"
+                    onClick={() => setGrantModalUser(null)}
                   >
-                    <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
-                      <div>
-                        <h3 className="text-sm sm:text-base font-bold text-slate-900">
-                          تخصيص المحتوى لحساب:{' '}
-                          {grantModalUser.displayName || grantModalUser.email}
-                        </h3>
-                        <p className="text-[11px] text-slate-500">
-                          {grantModalUser.email}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setGrantModalUser(null)}
-                        aria-label="إغلاق"
-                        className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto p-5 space-y-5 text-xs">
-                      <div className="p-3.5 bg-[#F7F8FA] border border-slate-200 rounded-xl space-y-2.5">
-                        <label className="inline-flex items-center gap-2 font-semibold text-[#1E3A5F] cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={grantDraft.includeCourseNotes}
-                            onChange={(e) =>
-                              setGrantDraft((p) => ({
-                                ...p,
-                                includeCourseNotes: e.target.checked,
-                              }))
-                            }
-                          />
-                          <span>
-                            منح جميع التلخيصات والملاحظات المرتبطة بالكورسات المختارة تلقائيًا
-                          </span>
-                        </label>
-                        <input
-                          type="text"
-                          value={grantDraft.notesForUser}
-                          onChange={(e) =>
-                            setGrantDraft((p) => ({
-                              ...p,
-                              notesForUser: e.target.value,
-                            }))
-                          }
-                          placeholder="رسالة ترحيب أو ملاحظة قصيرة لهذا الحساب (اختياري)..."
-                          className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-64 overflow-y-auto">
-                          <p className="font-bold text-slate-900">
-                            الكورسات ({grantDraft.courseDocIds.length} محدد)
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full max-w-4xl max-h-[92dvh] flex flex-col bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
+                    >
+                      <div className="px-4 sm:px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <h3 className="text-sm sm:text-base font-bold text-slate-900 truncate">
+                            تخصيص المحتوى لحساب:{' '}
+                            {grantModalUser.displayName || grantModalUser.email}
+                          </h3>
+                          <p className="text-[11px] text-slate-500 truncate" dir="ltr">
+                            {grantModalUser.email}
                           </p>
-                          {props.courses.map((c) => {
-                            const docId = c.docId || `course-${c.id}`;
-                            const checked =
-                              grantDraft.courseDocIds.includes(docId);
-                            return (
-                              <label
-                                key={docId}
-                                className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
-                              >
-                                <span className="truncate">{c.title}</span>
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={(e) =>
-                                    setGrantDraft((p) => ({
-                                      ...p,
-                                      courseDocIds: e.target.checked
-                                        ? Array.from(
-                                            new Set([...p.courseDocIds, docId])
-                                          )
-                                        : p.courseDocIds.filter(
-                                            (id) => id !== docId
-                                          ),
-                                    }))
-                                  }
-                                />
-                              </label>
-                            );
-                          })}
                         </div>
-
-                        <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-64 overflow-y-auto">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="font-bold text-slate-900">
-                              التلخيصات والملاحظات ({grantDraft.noteIds.length}{' '}
-                              محدد)
-                            </p>
-                            <input
-                              type="text"
-                              value={grantNoteSearch}
-                              onChange={(e) =>
-                                setGrantNoteSearch(e.target.value)
-                              }
-                              placeholder="بحث..."
-                              className="w-32 px-2 py-1 text-[11px] bg-[#F7F8FA] border border-slate-300 rounded"
-                            />
-                          </div>
-                          {(props.bookNotes || [])
-                            .filter((bn) => {
-                              const q = grantNoteSearch.trim().toLowerCase();
-                              if (!q) return true;
-                              return (
-                                bn.bookTitle.toLowerCase().includes(q) ||
-                                (bn.courseTitle || '')
-                                  .toLowerCase()
-                                  .includes(q)
-                              );
-                            })
-                            .map((bn) => {
-                              const checked = grantDraft.noteIds.includes(
-                                bn.id
-                              );
-                              return (
-                                <label
-                                  key={bn.id}
-                                  className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
-                                >
-                                  <span className="truncate">
-                                    {bn.bookTitle}
-                                    {bn.courseTitle
-                                      ? ` — ${bn.courseTitle}`
-                                      : ''}
-                                  </span>
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={(e) =>
-                                      setGrantDraft((p) => ({
-                                        ...p,
-                                        noteIds: e.target.checked
-                                          ? Array.from(
-                                              new Set([...p.noteIds, bn.id])
-                                            )
-                                          : p.noteIds.filter(
-                                              (id) => id !== bn.id
-                                            ),
-                                      }))
-                                    }
-                                  />
-                                </label>
-                              );
-                            })}
-                        </div>
-
-                        <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-56 overflow-y-auto">
-                          <p className="font-bold text-slate-900">
-                            مسارات التعلّم ({grantDraft.pathIds.length} محدد)
-                          </p>
-                          {props.learningPaths.map((lp) => {
-                            const checked = grantDraft.pathIds.includes(lp.id);
-                            return (
-                              <label
-                                key={lp.id}
-                                className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
-                              >
-                                <span className="truncate">{lp.title}</span>
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={(e) =>
-                                    setGrantDraft((p) => ({
-                                      ...p,
-                                      pathIds: e.target.checked
-                                        ? Array.from(
-                                            new Set([...p.pathIds, lp.id])
-                                          )
-                                        : p.pathIds.filter(
-                                            (id) => id !== lp.id
-                                          ),
-                                    }))
-                                  }
-                                />
-                              </label>
-                            );
-                          })}
-                        </div>
-
-                        <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-56 overflow-y-auto">
-                          <p className="font-bold text-slate-900">
-                            الكتب ومصادر المكتبة ({grantDraft.bookIds.length}{' '}
-                            محدد)
-                          </p>
-                          {props.readingItems.map((b) => {
-                            const checked = grantDraft.bookIds.includes(b.id);
-                            return (
-                              <label
-                                key={b.id}
-                                className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
-                              >
-                                <span className="truncate">{b.title}</span>
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={(e) =>
-                                    setGrantDraft((p) => ({
-                                      ...p,
-                                      bookIds: e.target.checked
-                                        ? Array.from(
-                                            new Set([...p.bookIds, b.id])
-                                          )
-                                        : p.bookIds.filter((id) => id !== b.id),
-                                    }))
-                                  }
-                                />
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className="p-3.5 rounded-xl border border-slate-200 space-y-3">
-                        <p className="font-bold text-slate-900">
-                          منح خواطر وتصنيفات خواطر ({grantDraft.reflectionIds.length}{' '}
-                          خاطرة · {grantDraft.reflectionCategories.length} تصنيف)
-                        </p>
-                        {allReflectionCats.length > 0 && (
-                          <div className="flex flex-wrap gap-2">
-                            {allReflectionCats.map((cat) => {
-                              const checked =
-                                grantDraft.reflectionCategories.includes(cat);
-                              return (
-                                <label
-                                  key={cat}
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#F7F8FA] border border-slate-200 rounded-lg cursor-pointer"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={(e) =>
-                                      setGrantDraft((p) => ({
-                                        ...p,
-                                        reflectionCategories: e.target.checked
-                                          ? Array.from(
-                                              new Set([
-                                                ...p.reflectionCategories,
-                                                cat,
-                                              ])
-                                            )
-                                          : p.reflectionCategories.filter(
-                                              (c) => c !== cat
-                                            ),
-                                      }))
-                                    }
-                                  />
-                                  <span>تصنيف: {cat}</span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        )}
-                        {(props.reflections?.length ?? 0) > 0 && (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-40 overflow-y-auto">
-                            {(props.reflections || []).map((r) => {
-                              const checked = grantDraft.reflectionIds.includes(
-                                r.id
-                              );
-                              return (
-                                <label
-                                  key={r.id}
-                                  className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
-                                >
-                                  <span className="truncate">
-                                    {r.title || r.moodTag}
-                                  </span>
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    onChange={(e) =>
-                                      setGrantDraft((p) => ({
-                                        ...p,
-                                        reflectionIds: e.target.checked
-                                          ? Array.from(
-                                              new Set([
-                                                ...p.reflectionIds,
-                                                r.id,
-                                              ])
-                                            )
-                                          : p.reflectionIds.filter(
-                                              (id) => id !== r.id
-                                            ),
-                                      }))
-                                    }
-                                  />
-                                </label>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
-                      {grantsByUid[grantModalUser.uid] ? (
-                        <button
-                          type="button"
-                          disabled={savingGrant}
-                          onClick={() => void handleRevokeUserGrant()}
-                          className="px-3.5 py-2 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
-                        >
-                          إلغاء كل الصلاحيات المخصّصة
-                        </button>
-                      ) : (
-                        <span />
-                      )}
-                      <div className="flex items-center gap-2">
                         <button
                           type="button"
                           onClick={() => setGrantModalUser(null)}
-                          className="px-4 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg cursor-pointer"
+                          aria-label="إغلاق"
+                          className="p-2 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer shrink-0"
                         >
-                          إلغاء
+                          <X className="w-4 h-4" />
                         </button>
-                        <button
-                          type="button"
-                          disabled={savingGrant}
-                          onClick={() => void handleSaveUserGrant()}
-                          className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
-                        >
-                          {savingGrant && (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      </div>
+
+                      <div className="flex-1 overflow-y-auto p-3.5 sm:p-5 space-y-4 sm:space-y-5 text-xs">
+                        {/* Access Mode & Custom Admin Addition */}
+                        <div className="p-3.5 bg-[#F7F8FA] border border-slate-200 rounded-xl space-y-3.5">
+                          <div className="space-y-1.5">
+                            <p className="font-bold text-slate-900">
+                              مستوى الصلاحية لهذا الحساب
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setGrantDraft((p) => ({
+                                    ...p,
+                                    accessMode: 'read_only',
+                                  }))
+                                }
+                                className={`p-3 rounded-xl border text-right transition-colors cursor-pointer space-y-0.5 ${
+                                  grantDraft.accessMode === 'read_only'
+                                    ? 'bg-white border-[#1E3A5F] ring-2 ring-[#1E3A5F]/15'
+                                    : 'bg-white/70 border-slate-200 hover:bg-white'
+                                }`}
+                              >
+                                <p className="font-bold text-slate-900">
+                                  عرض وقراءة فقط
+                                </p>
+                                <p className="text-[11px] text-slate-500">
+                                  يشاهد الحساب الكورسات والملخصات المختارة دون إمكانية إضافة ملاحظات.
+                                </p>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setGrantDraft((p) => ({
+                                    ...p,
+                                    accessMode: 'can_annotate',
+                                  }))
+                                }
+                                className={`p-3 rounded-xl border text-right transition-colors cursor-pointer space-y-0.5 ${
+                                  grantDraft.accessMode === 'can_annotate'
+                                    ? 'bg-emerald-50/70 border-emerald-600 ring-2 ring-emerald-500/15'
+                                    : 'bg-white/70 border-slate-200 hover:bg-white'
+                                }`}
+                              >
+                                <p className="font-bold text-slate-900">
+                                  عرض + السماح بالإضافة والتعليق
+                                </p>
+                                <p className="text-[11px] text-slate-500">
+                                  يستطيع الحساب كتابة إضافات أو أسئلة داخل المواد المفتوحة له وتظهر لك في الإدارة.
+                                </p>
+                              </button>
+                            </div>
+                          </div>
+
+                          <label className="inline-flex items-center gap-2 font-semibold text-[#1E3A5F] cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={grantDraft.includeCourseNotes}
+                              onChange={(e) =>
+                                setGrantDraft((p) => ({
+                                  ...p,
+                                  includeCourseNotes: e.target.checked,
+                                }))
+                              }
+                            />
+                            <span>
+                              منح جميع التلخيصات والملاحظات المرتبطة بالكورسات المختارة تلقائيًا
+                            </span>
+                          </label>
+
+                          <input
+                            type="text"
+                            value={grantDraft.notesForUser}
+                            onChange={(e) =>
+                              setGrantDraft((p) => ({
+                                ...p,
+                                notesForUser: e.target.value,
+                              }))
+                            }
+                            placeholder="رسالة ترحيب أو توجيه عام لهذا الحساب (اختياري)..."
+                            className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                          />
+
+                          {/* Custom Addition / Note Specifically Attached by Admin for this Account */}
+                          <div className="pt-2.5 border-t border-slate-200 space-y-2">
+                            <p className="font-bold text-slate-900">
+                              إضافة أو تكليف خاص لهذا الحساب (يظهر داخل مساحته المخصّصة)
+                            </p>
+                            <input
+                              type="text"
+                              value={grantDraft.customAdditionTitle}
+                              onChange={(e) =>
+                                setGrantDraft((p) => ({
+                                  ...p,
+                                  customAdditionTitle: e.target.value,
+                                }))
+                              }
+                              placeholder="عنوان الإضافة المخصّصة (مثلاً: خطة المراجعة الأسبوعية لك)..."
+                              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                            />
+                            <AutoResizeTextarea
+                              minRows={2}
+                              value={grantDraft.customAdditionBody}
+                              onChange={(e) =>
+                                setGrantDraft((p) => ({
+                                  ...p,
+                                  customAdditionBody: e.target.value,
+                                }))
+                              }
+                              placeholder="اكتب هنا أي إضافة أو ملخص أو مهام خاصّة تزيدها لهذا الحساب فقط..."
+                              className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-64 overflow-y-auto">
+                            <p className="font-bold text-slate-900">
+                              الكورسات ({grantDraft.courseDocIds.length} محدد)
+                            </p>
+                            {props.courses.map((c) => {
+                              const docId = c.docId || `course-${c.id}`;
+                              const checked =
+                                grantDraft.courseDocIds.includes(docId);
+                              return (
+                                <label
+                                  key={docId}
+                                  className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                                >
+                                  <span className="truncate">{c.title}</span>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(e) =>
+                                      setGrantDraft((p) => ({
+                                        ...p,
+                                        courseDocIds: e.target.checked
+                                          ? Array.from(
+                                              new Set([...p.courseDocIds, docId])
+                                            )
+                                          : p.courseDocIds.filter(
+                                              (id) => id !== docId
+                                            ),
+                                      }))
+                                    }
+                                  />
+                                </label>
+                              );
+                            })}
+                          </div>
+
+                          <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-64 overflow-y-auto">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-bold text-slate-900">
+                                التلخيصات والملاحظات ({grantDraft.noteIds.length}{' '}
+                                محدد)
+                              </p>
+                              <input
+                                type="text"
+                                value={grantNoteSearch}
+                                onChange={(e) =>
+                                  setGrantNoteSearch(e.target.value)
+                                }
+                                placeholder="بحث..."
+                                className="w-28 sm:w-32 px-2 py-1 text-[11px] bg-[#F7F8FA] border border-slate-300 rounded"
+                              />
+                            </div>
+                            {(props.bookNotes || [])
+                              .filter((bn) => {
+                                const q = grantNoteSearch.trim().toLowerCase();
+                                if (!q) return true;
+                                return (
+                                  bn.bookTitle.toLowerCase().includes(q) ||
+                                  (bn.courseTitle || '')
+                                    .toLowerCase()
+                                    .includes(q)
+                                );
+                              })
+                              .map((bn) => {
+                                const checked = grantDraft.noteIds.includes(
+                                  bn.id
+                                );
+                                return (
+                                  <label
+                                    key={bn.id}
+                                    className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                                  >
+                                    <span className="truncate">
+                                      {bn.bookTitle}
+                                      {bn.courseTitle
+                                        ? ` — ${bn.courseTitle}`
+                                        : ''}
+                                    </span>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={(e) =>
+                                        setGrantDraft((p) => ({
+                                          ...p,
+                                          noteIds: e.target.checked
+                                            ? Array.from(
+                                                new Set([...p.noteIds, bn.id])
+                                              )
+                                            : p.noteIds.filter(
+                                                (id) => id !== bn.id
+                                              ),
+                                        }))
+                                      }
+                                    />
+                                  </label>
+                                );
+                              })}
+                          </div>
+
+                          <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-56 overflow-y-auto">
+                            <p className="font-bold text-slate-900">
+                              مسارات التعلّم ({grantDraft.pathIds.length} محدد)
+                            </p>
+                            {props.learningPaths.map((lp) => {
+                              const checked = grantDraft.pathIds.includes(lp.id);
+                              return (
+                                <label
+                                  key={lp.id}
+                                  className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                                >
+                                  <span className="truncate">{lp.title}</span>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(e) =>
+                                      setGrantDraft((p) => ({
+                                        ...p,
+                                        pathIds: e.target.checked
+                                          ? Array.from(
+                                              new Set([...p.pathIds, lp.id])
+                                            )
+                                          : p.pathIds.filter(
+                                              (id) => id !== lp.id
+                                            ),
+                                      }))
+                                    }
+                                  />
+                                </label>
+                              );
+                            })}
+                          </div>
+
+                          <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-56 overflow-y-auto">
+                            <p className="font-bold text-slate-900">
+                              الكتب ومصادر المكتبة ({grantDraft.bookIds.length}{' '}
+                              محدد)
+                            </p>
+                            {props.readingItems.map((b) => {
+                              const checked = grantDraft.bookIds.includes(b.id);
+                              return (
+                                <label
+                                  key={b.id}
+                                  className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                                >
+                                  <span className="truncate">{b.title}</span>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(e) =>
+                                      setGrantDraft((p) => ({
+                                        ...p,
+                                        bookIds: e.target.checked
+                                          ? Array.from(
+                                              new Set([...p.bookIds, b.id])
+                                            )
+                                          : p.bookIds.filter((id) => id !== b.id),
+                                      }))
+                                    }
+                                  />
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {(props.blogPosts?.length ?? 0) > 0 && (
+                          <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-48 overflow-y-auto">
+                            <p className="font-bold text-slate-900 flex items-center gap-1.5">
+                              <BookOpenText className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                              <span>مقالات مخصّصة (حتى لو غير منشورة للعامة) ({grantDraft.blogIds.length} محدد)</span>
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {(props.blogPosts || []).map((post) => {
+                                const checked = grantDraft.blogIds.includes(post.id);
+                                return (
+                                  <label
+                                    key={post.id}
+                                    className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                                  >
+                                    <span className="truncate">{post.title}</span>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={(e) =>
+                                        setGrantDraft((p) => ({
+                                          ...p,
+                                          blogIds: e.target.checked
+                                            ? Array.from(
+                                                new Set([...p.blogIds, post.id])
+                                              )
+                                            : p.blogIds.filter(
+                                                (id) => id !== post.id
+                                              ),
+                                        }))
+                                      }
+                                    />
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="p-3.5 rounded-xl border border-slate-200 space-y-3">
+                          <p className="font-bold text-slate-900">
+                            منح خواطر وتصنيفات خواطر ({grantDraft.reflectionIds.length}{' '}
+                            خاطرة · {grantDraft.reflectionCategories.length} تصنيف)
+                          </p>
+                          {allReflectionCats.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {allReflectionCats.map((cat) => {
+                                const checked =
+                                  grantDraft.reflectionCategories.includes(cat);
+                                return (
+                                  <label
+                                    key={cat}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#F7F8FA] border border-slate-200 rounded-lg cursor-pointer"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={(e) =>
+                                        setGrantDraft((p) => ({
+                                          ...p,
+                                          reflectionCategories: e.target.checked
+                                            ? Array.from(
+                                                new Set([
+                                                  ...p.reflectionCategories,
+                                                  cat,
+                                                ])
+                                              )
+                                            : p.reflectionCategories.filter(
+                                                (c) => c !== cat
+                                              ),
+                                        }))
+                                      }
+                                    />
+                                    <span>تصنيف: {cat}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
                           )}
-                          <span>حفظ الصلاحيات</span>
-                        </button>
+                          {(props.reflections?.length ?? 0) > 0 && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-40 overflow-y-auto">
+                              {(props.reflections || []).map((r) => {
+                                const checked = grantDraft.reflectionIds.includes(
+                                  r.id
+                                );
+                                return (
+                                  <label
+                                    key={r.id}
+                                    className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                                  >
+                                    <span className="truncate">
+                                      {r.title || r.moodTag}
+                                    </span>
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={(e) =>
+                                        setGrantDraft((p) => ({
+                                          ...p,
+                                          reflectionIds: e.target.checked
+                                            ? Array.from(
+                                                new Set([
+                                                  ...p.reflectionIds,
+                                                  r.id,
+                                                ])
+                                              )
+                                            : p.reflectionIds.filter(
+                                                (id) => id !== r.id
+                                              ),
+                                        }))
+                                      }
+                                    />
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="px-4 sm:px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                        {grantsByUid[grantModalUser.uid] ? (
+                          <button
+                            type="button"
+                            disabled={savingGrant}
+                            onClick={() => void handleRevokeUserGrant()}
+                            className="px-3.5 py-2 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer whitespace-nowrap"
+                          >
+                            إلغاء كل الصلاحيات المخصّصة
+                          </button>
+                        ) : (
+                          <span />
+                        )}
+                        <div className="flex items-center gap-2 mr-auto sm:mr-0">
+                          <button
+                            type="button"
+                            onClick={() => setGrantModalUser(null)}
+                            className="px-4 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg cursor-pointer whitespace-nowrap"
+                          >
+                            إلغاء
+                          </button>
+                          <button
+                            type="button"
+                            disabled={savingGrant}
+                            onClick={() => void handleSaveUserGrant()}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer whitespace-nowrap"
+                          >
+                            {savingGrant && (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            )}
+                            <span>حفظ الصلاحيات</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
+                )}
+              </section>
+
+              {/* Admin Inbox: Notes & Additions Submitted by Granted Accounts */}
+              <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <MessageSquarePlus className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                    <h3 className="font-editorial text-lg font-bold text-slate-900">
+                      إضافات وملاحظات الحسابات على المحتوى المخصّص ({grantedItemNotes.length})
+                    </h3>
+                  </div>
+                  <span className="text-[11px] text-slate-500">
+                    تظهر هنا تلقائيًا لأي حساب مُنح صلاحية الإضافة
+                  </span>
                 </div>
-              )}
-            </section>
+
+                {grantedItemNotes.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-3">
+                    لم يضف أي حساب ملاحظات أو تعليقات على المحتوى المخصّص بعد.
+                  </p>
+                ) : (
+                  <div className="space-y-2.5">
+                    {grantedItemNotes.map((itemNote) => {
+                      const targetLabel =
+                        itemNote.targetType === 'course'
+                          ? props.courses.find(
+                              (c) =>
+                                c.docId === itemNote.targetId ||
+                                String(c.id) === itemNote.targetId
+                            )?.title || 'كورس'
+                          : itemNote.targetType === 'note'
+                          ? props.bookNotes?.find((n) => n.id === itemNote.targetId)
+                              ?.bookTitle || 'تلخيص'
+                          : itemNote.targetType === 'path'
+                          ? props.learningPaths.find((p) => p.id === itemNote.targetId)
+                              ?.title || 'مسار'
+                          : itemNote.targetType === 'book'
+                          ? props.readingItems.find((b) => b.id === itemNote.targetId)
+                              ?.title || 'كتاب'
+                          : props.reflections?.find((r) => r.id === itemNote.targetId)
+                              ?.title || 'خاطرة';
+
+                      return (
+                        <div
+                          key={itemNote.id}
+                          className={`p-3.5 rounded-xl border space-y-2 text-xs ${
+                            itemNote.isAdminReply
+                              ? 'bg-[#F0F4F9] border-[#1E3A5F]/20'
+                              : 'bg-[#F7F8FA] border-slate-200'
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2 min-w-0">
+                              <span className="font-bold text-slate-900">
+                                {itemNote.isAdminReply
+                                  ? 'رد الإدارة'
+                                  : itemNote.authorName || itemNote.authorEmail}
+                              </span>
+                              <span className="px-2 py-0.5 text-[10px] font-semibold bg-white border border-slate-200 rounded-md text-[#1E3A5F] truncate max-w-[200px]">
+                                {targetLabel}
+                              </span>
+                              <span className="text-[11px] text-slate-400">
+                                {itemNote.createdAtLabel}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              {!itemNote.isAdminReply && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setActiveReplyNoteId((prev) =>
+                                      prev === itemNote.id ? null : itemNote.id
+                                    )
+                                  }
+                                  className="px-2.5 py-1 text-[11px] font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+                                >
+                                  رد
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteGrantedNote(itemNote.id)}
+                                aria-label="حذف الملاحظة"
+                                className="p-1.5 text-slate-400 hover:text-red-700 rounded-lg cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">
+                            {itemNote.content}
+                          </p>
+
+                          {activeReplyNoteId === itemNote.id && (
+                            <div className="pt-2 border-t border-slate-200/80 flex flex-col sm:flex-row gap-2">
+                              <AutoResizeTextarea
+                                minRows={2}
+                                value={replyDraftByNoteKey[itemNote.id] || ''}
+                                onChange={(e) =>
+                                  setReplyDraftByNoteKey((prev) => ({
+                                    ...prev,
+                                    [itemNote.id]: e.target.value,
+                                  }))
+                                }
+                                placeholder="اكتب ردك على هذه الملاحظة..."
+                                className="flex-1 px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                              />
+                              <button
+                                type="button"
+                                disabled={
+                                  savingReply ||
+                                  !(replyDraftByNoteKey[itemNote.id] || '').trim()
+                                }
+                                onClick={() => void handleAdminReplyToItemNote(itemNote)}
+                                className="px-3.5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg disabled:opacity-45 cursor-pointer self-end whitespace-nowrap shrink-0"
+                              >
+                                إرسال الرد
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            </div>
           )}
 
           {/* SECTION 7: Data, Excel Export & Diagnostics */}
