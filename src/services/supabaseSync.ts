@@ -1,5 +1,6 @@
 import { User } from 'firebase/auth';
 import {
+  BlogPost,
   BookNote,
   CalendarCategory,
   CalendarColor,
@@ -10,6 +11,9 @@ import {
   CustomCategory,
   DEFAULT_CALENDAR_PREFERENCES,
   DEFAULT_HUB_CATEGORIES,
+  DEFAULT_IMAGE_FRAME_SPEC,
+  DEFAULT_LEARNING_HUBS,
+  DEFAULT_PINNED_NAV_TABS,
   DEFAULT_PUBLIC_SITE_CONFIG,
   DEFAULT_REFLECTION_CATEGORIES,
   DEFAULT_REFLECTION_IMAGE_FRAME,
@@ -19,7 +23,9 @@ import {
   DentalCaseStatus,
   DomainInfo,
   GrantedWorkspaceData,
+  HUB_ACCENT_PRESETS,
   LearningHubId,
+  LearningHubMeta,
   LearningObjective,
   LearningPath,
   LearningPathStage,
@@ -58,6 +64,7 @@ import {
   WeeklyMeetingException,
   WeeklyMeetingFollowUp,
   WeeklyRhythmItem,
+  estimateReadingTimeMinutes,
   sanitizeImageFrameSpec,
 } from '../data/curriculumData';
 import {
@@ -127,10 +134,57 @@ function sanitizeReflectionColor(raw: unknown): ReflectionColorKey {
 }
 
 function sanitizeHubId(raw: unknown): LearningHubId {
-  if (raw === 'marketing' || raw === 'dental_career' || raw === 'knowledge') {
-    return raw;
-  }
-  return 'knowledge';
+  if (typeof raw !== 'string') return 'knowledge';
+  const cleaned = raw.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  return cleaned || 'knowledge';
+}
+
+function sanitizeCustomHubs(raw: unknown): LearningHubMeta[] {
+  if (!Array.isArray(raw) || raw.length === 0) return DEFAULT_LEARNING_HUBS;
+  const cleaned = raw
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .slice(0, 12)
+    .map((item, idx) => {
+      const idRaw = typeof item.id === 'string' ? item.id.trim() : '';
+      const id = sanitizeHubId(idRaw || `hub_${idx + 1}`);
+      const fallbackDefault =
+        DEFAULT_LEARNING_HUBS.find((h) => h.id === id) ?? HUB_ACCENT_PRESETS[idx % HUB_ACCENT_PRESETS.length];
+      const title = clip(typeof item.title === 'string' ? item.title.trim() : '', 120);
+      const shortTitle = clip(
+        typeof item.shortTitle === 'string' && item.shortTitle.trim()
+          ? item.shortTitle.trim()
+          : title,
+        60
+      );
+      const englishTitle = clip(
+        typeof item.englishTitle === 'string' ? item.englishTitle.trim() : '',
+        120
+      );
+      const purpose = clip(typeof item.purpose === 'string' ? item.purpose.trim() : '', 400);
+      const accentHexRaw = typeof item.accentHex === 'string' ? item.accentHex.trim() : '';
+      const matchedPreset =
+        HUB_ACCENT_PRESETS.find((p) => p.accentHex.toLowerCase() === accentHexRaw.toLowerCase()) ??
+        fallbackDefault;
+      const badgeClass =
+        typeof item.badgeClass === 'string' && item.badgeClass.trim()
+          ? clip(item.badgeClass.trim(), 160)
+          : matchedPreset.badgeClass;
+      const defaultCategories = Array.isArray(item.defaultCategories)
+        ? sanitizeStringList(item.defaultCategories, 30, 120)
+        : [];
+      return {
+        id,
+        title: title || `مجال ${idx + 1}`,
+        shortTitle: shortTitle || title || `مجال ${idx + 1}`,
+        englishTitle,
+        purpose,
+        accentHex: accentHexRaw || matchedPreset.accentHex,
+        badgeClass,
+        defaultCategories,
+      };
+    })
+    .filter((h) => h.id.length > 0);
+  return cleaned.length > 0 ? cleaned : DEFAULT_LEARNING_HUBS;
 }
 
 function sanitizeReadingModes(raw: unknown): ReadingMode[] {
@@ -225,12 +279,11 @@ function sanitizeCalendarPrefs(raw?: Partial<CalendarPreferences>): CalendarPref
     raw?.weekStartDay === 0 || raw?.weekStartDay === 1 || raw?.weekStartDay === 6
       ? raw.weekStartDay
       : DEFAULT_CALENDAR_PREFERENCES.weekStartDay;
+  const filterHubRaw = typeof raw?.filterHub === 'string' ? raw.filterHub.trim() : 'all';
   const filterHub =
-    raw &&
-    (raw.filterHub === 'all' ||
-      VALID_HUB_IDS.includes(raw.filterHub as LearningHubId))
-      ? (raw.filterHub as LearningHubId | 'all')
-      : 'all';
+    filterHubRaw === 'all' || !filterHubRaw
+      ? 'all'
+      : sanitizeHubId(filterHubRaw);
   const filterPriority =
     raw?.filterPriority === 'low' ||
     raw?.filterPriority === 'medium' ||
@@ -378,6 +431,7 @@ function mapPublicSiteConfigRow(raw: Record<string, unknown> | null | undefined)
       showPaths: rawFlags.showPaths !== false,
       showBooks: rawFlags.showBooks !== false,
       showReflections: rawFlags.showReflections !== false,
+      showBlogs: rawFlags.showBlogs !== false,
     },
     publicReflectionCategories: sanitizeStringList(
       raw.public_reflection_categories,
@@ -569,11 +623,7 @@ export function buildBookNoteRow(uid: string, bn: BookNote) {
 
 export function buildCustomCategoryRow(uid: string, cat: CustomCategory) {
   const hubId: LearningHubId | 'all' =
-    cat.hubId === 'marketing' ||
-    cat.hubId === 'dental_career' ||
-    cat.hubId === 'knowledge'
-      ? cat.hubId
-      : 'all';
+    !cat.hubId || cat.hubId === 'all' ? 'all' : sanitizeHubId(cat.hubId);
   return {
     owner_id: uid,
     id: sanitizeId(cat.id),
@@ -607,8 +657,9 @@ export function buildHistoryRow(uid: string, entry: StudyHistoryEntry) {
 }
 
 export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
+  const sanitizedHubs = sanitizeCustomHubs(prefs.customHubs);
   const rawCats = prefs.hubCategories ?? DEFAULT_HUB_CATEGORIES;
-  const cleanHubCategories: Record<LearningHubId, string[]> = {
+  const cleanHubCategories: Record<string, string[]> = {
     marketing: (Array.isArray(rawCats.marketing) ? rawCats.marketing : DEFAULT_HUB_CATEGORIES.marketing)
       .map((s) => clip(String(s).trim(), 120))
       .filter(Boolean)
@@ -622,6 +673,25 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
       .filter(Boolean)
       .slice(0, 30),
   };
+
+  for (const [k, v] of Object.entries(rawCats)) {
+    const cleanKey = sanitizeHubId(k);
+    if (cleanKey && Array.isArray(v) && !(cleanKey in cleanHubCategories)) {
+      cleanHubCategories[cleanKey] = v
+        .map((s) => clip(String(s).trim(), 120))
+        .filter(Boolean)
+        .slice(0, 30);
+    }
+  }
+  for (const h of sanitizedHubs) {
+    if (!(h.id in cleanHubCategories)) {
+      cleanHubCategories[h.id] = h.defaultCategories.length > 0 ? h.defaultCategories : ['عام', 'أساسي', 'متقدم'];
+    }
+  }
+
+  const sanitizedPins = Array.isArray(prefs.pinnedNavTabs)
+    ? sanitizeStringList(prefs.pinnedNavTabs, 20, 40)
+    : DEFAULT_PINNED_NAV_TABS;
 
   return {
     owner_id: uid,
@@ -639,7 +709,11 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
     read_aloud_speed: pickEnum(prefs.readAloudSpeed, ['normal', 'calm'] as const, DEFAULT_USER_PREFERENCES.readAloudSpeed),
     show_excel_export: prefs.showExcelExport !== false,
     hub_categories: cleanHubCategories,
-    calendar_prefs: sanitizeCalendarPrefs(prefs.calendarPrefs),
+    calendar_prefs: {
+      ...sanitizeCalendarPrefs(prefs.calendarPrefs),
+      pinnedNavTabsMirror: sanitizedPins,
+      customHubsMirror: sanitizedHubs,
+    },
     weekly_rhythm: sanitizeWeeklyRhythm(prefs.weeklyRhythm),
     reflection_categories: sanitizeStringList(
       prefs.reflectionCategories ?? DEFAULT_REFLECTION_CATEGORIES,
@@ -649,6 +723,8 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
     custom_reading_modes: sanitizeCustomReadingModesConfig(
       prefs.customReadingModes ?? READING_MODES_META
     ),
+    pinned_nav_tabs: sanitizedPins,
+    custom_hubs: sanitizedHubs,
   };
 }
 
@@ -671,6 +747,35 @@ export function buildReflectionRow(uid: string, r: PersonalReflection) {
     pinned: Boolean(r.pinned),
     created_at_label: clip(r.createdAtLabel, 80),
     created_at_ms: Number.isFinite(rawMs) ? Math.round(rawMs) : 0,
+  };
+}
+
+export function buildBlogPostRow(uid: string, post: BlogPost) {
+  const rawMs = Number(post.createdAtMs);
+  const readingMins =
+    typeof post.readingTimeMinutes === 'number' && post.readingTimeMinutes > 0
+      ? Math.min(180, Math.round(post.readingTimeMinutes))
+      : estimateReadingTimeMinutes(post.content);
+  return {
+    owner_id: uid,
+    id: sanitizeId(post.id),
+    title: clip(post.title, 260),
+    subtitle: clip(post.subtitle || '', 400),
+    excerpt: clip(post.excerpt || '', 1200),
+    content: clip(post.content, 60000),
+    category_label: clip(post.categoryLabel || '', 100),
+    cover_image_url: clip(post.coverImageUrl || '', 2000),
+    cover_storage_path: clip(post.coverStoragePath || '', 500),
+    cover_frame: post.coverFrame
+      ? sanitizeImageFrameSpec(post.coverFrame, DEFAULT_IMAGE_FRAME_SPEC)
+      : {},
+    reading_time_minutes: readingMins,
+    is_public: Boolean(post.isPublic),
+    pinned: Boolean(post.pinned),
+    sort_order: Math.max(0, Math.round(Number(post.sortOrder) || 0)),
+    created_at_label: clip(post.createdAtLabel, 80),
+    created_at_ms: Number.isFinite(rawMs) ? Math.round(rawMs) : 0,
+    updated_at_label: clip(post.updatedAtLabel || '', 80),
   };
 }
 
@@ -1087,6 +1192,41 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
       ? (raw.calendar_prefs as Partial<CalendarPreferences>)
       : undefined;
 
+  const mappedHubCats: Record<string, string[]> = {
+    marketing:
+      Array.isArray(storedCats.marketing) && storedCats.marketing.length > 0
+        ? storedCats.marketing
+        : DEFAULT_HUB_CATEGORIES.marketing,
+    dental_career:
+      Array.isArray(storedCats.dental_career) &&
+      storedCats.dental_career.length > 0
+        ? storedCats.dental_career
+        : DEFAULT_HUB_CATEGORIES.dental_career,
+    knowledge:
+      Array.isArray(storedCats.knowledge) && storedCats.knowledge.length > 0
+        ? storedCats.knowledge
+        : DEFAULT_HUB_CATEGORIES.knowledge,
+  };
+  for (const [k, v] of Object.entries(storedCats)) {
+    if (Array.isArray(v) && !(k in mappedHubCats)) {
+      mappedHubCats[k] = sanitizeStringList(v, 30, 120);
+    }
+  }
+
+  const resolvedCustomHubs = (() => {
+    if (Array.isArray(raw.custom_hubs) && raw.custom_hubs.length > 0) {
+      return sanitizeCustomHubs(raw.custom_hubs);
+    }
+    const mirror =
+      raw.calendar_prefs && typeof raw.calendar_prefs === 'object'
+        ? (raw.calendar_prefs as Record<string, unknown>).customHubsMirror
+        : undefined;
+    if (Array.isArray(mirror) && mirror.length > 0) {
+      return sanitizeCustomHubs(mirror);
+    }
+    return DEFAULT_LEARNING_HUBS;
+  })();
+
   return {
     noteFontSize:
       (raw.note_font_size as UserPreferences['noteFontSize']) ||
@@ -1120,21 +1260,7 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
       (raw.read_aloud_speed as UserPreferences['readAloudSpeed']) ||
       DEFAULT_USER_PREFERENCES.readAloudSpeed,
     showExcelExport: raw.show_excel_export !== false,
-    hubCategories: {
-      marketing:
-        Array.isArray(storedCats.marketing) && storedCats.marketing.length > 0
-          ? storedCats.marketing
-          : DEFAULT_HUB_CATEGORIES.marketing,
-      dental_career:
-        Array.isArray(storedCats.dental_career) &&
-        storedCats.dental_career.length > 0
-          ? storedCats.dental_career
-          : DEFAULT_HUB_CATEGORIES.dental_career,
-      knowledge:
-        Array.isArray(storedCats.knowledge) && storedCats.knowledge.length > 0
-          ? storedCats.knowledge
-          : DEFAULT_HUB_CATEGORIES.knowledge,
-    },
+    hubCategories: mappedHubCats,
     calendarPrefs: sanitizeCalendarPrefs(storedCal),
     weeklyRhythm: sanitizeWeeklyRhythm(raw.weekly_rhythm),
     reflectionCategories:
@@ -1142,6 +1268,20 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
         ? sanitizeStringList(raw.reflection_categories, 40, 80)
         : DEFAULT_REFLECTION_CATEGORIES,
     customReadingModes: sanitizeCustomReadingModesConfig(raw.custom_reading_modes),
+    pinnedNavTabs: (() => {
+      if (Array.isArray(raw.pinned_nav_tabs)) {
+        return sanitizeStringList(raw.pinned_nav_tabs, 20, 40);
+      }
+      const mirror =
+        raw.calendar_prefs && typeof raw.calendar_prefs === 'object'
+          ? (raw.calendar_prefs as Record<string, unknown>).pinnedNavTabsMirror
+          : undefined;
+      if (Array.isArray(mirror)) {
+        return sanitizeStringList(mirror, 20, 40);
+      }
+      return DEFAULT_PINNED_NAV_TABS;
+    })(),
+    customHubs: resolvedCustomHubs,
   };
 }
 
@@ -1174,6 +1314,41 @@ function mapReflectionRow(raw: Record<string, unknown>): PersonalReflection {
     pinned: Boolean(raw.pinned),
     createdAtLabel: String(raw.created_at_label ?? ''),
     createdAtMs: Number(raw.created_at_ms ?? 0),
+  };
+}
+
+function mapBlogPostRow(raw: Record<string, unknown>): BlogPost {
+  const rawFrame = raw.cover_frame;
+  const hasFrame =
+    rawFrame &&
+    typeof rawFrame === 'object' &&
+    Object.keys(rawFrame as Record<string, unknown>).length > 0;
+  const content = String(raw.content ?? '');
+  const readingMinsRaw = Number(raw.reading_time_minutes ?? 0);
+  return {
+    id: String(raw.id),
+    title: String(raw.title ?? ''),
+    subtitle: raw.subtitle ? String(raw.subtitle) : '',
+    excerpt: raw.excerpt ? String(raw.excerpt) : '',
+    content,
+    categoryLabel: raw.category_label ? String(raw.category_label) : '',
+    coverImageUrl: raw.cover_image_url ? String(raw.cover_image_url) : undefined,
+    coverStoragePath: raw.cover_storage_path
+      ? String(raw.cover_storage_path)
+      : undefined,
+    coverFrame: hasFrame
+      ? sanitizeImageFrameSpec(rawFrame, DEFAULT_IMAGE_FRAME_SPEC)
+      : undefined,
+    readingTimeMinutes:
+      Number.isFinite(readingMinsRaw) && readingMinsRaw > 0
+        ? readingMinsRaw
+        : estimateReadingTimeMinutes(content),
+    isPublic: Boolean(raw.is_public),
+    pinned: Boolean(raw.pinned),
+    sortOrder: Number(raw.sort_order ?? 0),
+    createdAtLabel: String(raw.created_at_label ?? ''),
+    createdAtMs: Number(raw.created_at_ms ?? 0),
+    updatedAtLabel: raw.updated_at_label ? String(raw.updated_at_label) : undefined,
   };
 }
 
@@ -1790,6 +1965,7 @@ export interface WorkspaceCallbacks {
   onHistory?: (items: StudyHistoryEntry[]) => void;
   onPreferences?: (prefs: UserPreferences) => void;
   onReflections?: (items: PersonalReflection[]) => void;
+  onBlogPosts?: (items: BlogPost[]) => void;
   onCalendarEvents?: (items: CalendarEvent[]) => void;
   onLearningPaths?: (items: LearningPath[]) => void;
   onReadingItems?: (items: ReadingLibraryItem[]) => void;
@@ -1956,6 +2132,31 @@ export function subscribeUserWorkspace(
     }
   };
 
+  const fetchBlogPosts = async () => {
+    if (!callbacks.onBlogPosts || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('blog_posts')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('pinned', { ascending: false })
+        .order('created_at_ms', { ascending: false })
+    );
+    if (error) {
+      if (isMissingTableError(error)) {
+        hasPending010Migration = true;
+      } else {
+        console.warn('Supabase blog_posts load error:', error);
+      }
+      return;
+    }
+    if (!disposed) {
+      callbacks.onBlogPosts(
+        (data || []).map((r) => mapBlogPostRow(r as Record<string, unknown>))
+      );
+    }
+  };
+
   const fetchCalendarEvents = async () => {
     if (!callbacks.onCalendarEvents || disposed) return;
     const { data, error } = await withFirebaseTokenRetry(async (c) =>
@@ -2092,6 +2293,7 @@ export function subscribeUserWorkspace(
       fetchHistory(),
       fetchPreferences(),
       fetchReflections(),
+      fetchBlogPosts(),
       fetchCalendarEvents(),
       fetchLearningPaths(),
       fetchReadingItems(),
@@ -2115,6 +2317,7 @@ export function subscribeUserWorkspace(
     study_history: fetchHistory,
     user_preferences: fetchPreferences,
     reflections: fetchReflections,
+    blog_posts: fetchBlogPosts,
     calendar_events: fetchCalendarEvents,
     learning_paths: fetchLearningPaths,
     reading_items: fetchReadingItems,
@@ -2244,13 +2447,23 @@ export function isPending007Migration(): boolean {
   return hasPending007Migration;
 }
 
+let hasPending010Migration = false;
+export function isPending010Migration(): boolean {
+  return hasPending010Migration;
+}
+
 const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
   courses: ['learning_objectives', 'sort_order', 'is_public'],
   learning_paths: ['learning_objectives', 'sort_order', 'is_public'],
   reading_items: ['learning_objectives', 'sort_order', 'is_public'],
   book_notes: ['resources', 'sort_order', 'created_at_ms'],
   unified_tasks: ['linked_course_id', 'linked_path_id', 'linked_book_id'],
-  user_preferences: ['weekly_rhythm', 'reflection_categories', 'custom_reading_modes'],
+  user_preferences: [
+    'weekly_rhythm',
+    'reflection_categories',
+    'custom_reading_modes',
+    'pinned_nav_tabs',
+  ],
   reflections: [
     'category_tag',
     'color_key',
@@ -2472,6 +2685,45 @@ export async function deleteReflectionDoc(
   await runWrite((c) =>
     c.from('reflections').delete().eq('owner_id', uid).eq('id', id)
   );
+}
+
+export async function saveBlogPostDoc(
+  uid: string,
+  post: BlogPost
+): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) return;
+  const row = buildBlogPostRow(uid, post);
+  try {
+    await runWrite((c) =>
+      c.from('blog_posts').upsert(row, { onConflict: 'owner_id,id' })
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      hasPending010Migration = true;
+      console.warn('Supabase table "blog_posts" requires migration 010.');
+      return;
+    }
+    throw err;
+  }
+}
+
+export async function deleteBlogPostDoc(
+  uid: string,
+  postId: string
+): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) return;
+  const id = sanitizeId(postId);
+  try {
+    await runWrite((c) =>
+      c.from('blog_posts').delete().eq('owner_id', uid).eq('id', id)
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      hasPending010Migration = true;
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function saveCalendarEventDoc(
@@ -2834,6 +3086,7 @@ export async function savePublicSiteConfig(
       showPaths: cfg.visibilityFlags?.showPaths !== false,
       showBooks: cfg.visibilityFlags?.showBooks !== false,
       showReflections: cfg.visibilityFlags?.showReflections !== false,
+      showBlogs: cfg.visibilityFlags?.showBlogs !== false,
     },
     public_reflection_categories: sanitizeStringList(
       cfg.publicReflectionCategories ?? [],
@@ -2888,16 +3141,23 @@ export interface PublicCatalogData {
   learningPaths: LearningPath[];
   readingItems: ReadingLibraryItem[];
   reflections: PersonalReflection[];
+  blogPosts: BlogPost[];
 }
 
 export async function fetchPublicCatalog(
   publicReflectionCategories: string[] = []
 ): Promise<PublicCatalogData> {
   if (!isSupabaseConfigured || !supabase) {
-    return { courses: [], learningPaths: [], readingItems: [], reflections: [] };
+    return {
+      courses: [],
+      learningPaths: [],
+      readingItems: [],
+      reflections: [],
+      blogPosts: [],
+    };
   }
   try {
-    const [coursesRes, pathsRes, booksRes, reflectionsRes] = await Promise.all([
+    const [coursesRes, pathsRes, booksRes, reflectionsRes, blogsRes] = await Promise.all([
       supabase
         .from('courses')
         .select('*')
@@ -2918,6 +3178,12 @@ export async function fetchPublicCatalog(
         .select('*')
         .order('pinned', { ascending: false })
         .order('created_at_ms', { ascending: false }),
+      supabase
+        .from('blog_posts')
+        .select('*')
+        .eq('is_public', true)
+        .order('pinned', { ascending: false })
+        .order('created_at_ms', { ascending: false }),
     ]);
 
     if (
@@ -2926,7 +3192,17 @@ export async function fetchPublicCatalog(
       isMissingColumnError(booksRes.error)
     ) {
       hasPending007Migration = true;
-      return { courses: [], learningPaths: [], readingItems: [], reflections: [] };
+      return {
+        courses: [],
+        learningPaths: [],
+        readingItems: [],
+        reflections: [],
+        blogPosts: [],
+      };
+    }
+
+    if (isMissingTableError(blogsRes.error)) {
+      hasPending010Migration = true;
     }
 
     const catSet = new Set(publicReflectionCategories.filter(Boolean));
@@ -2941,6 +3217,12 @@ export async function fetchPublicCatalog(
         (Boolean(r.categoryTag) && catSet.has(r.categoryTag as string))
     );
 
+    const publicBlogs = blogsRes.error
+      ? []
+      : (blogsRes.data || []).map((b) =>
+          mapBlogPostRow(b as Record<string, unknown>)
+        );
+
     return {
       courses: (coursesRes.data || []).map((r) =>
         mapCourseRow(r as Record<string, unknown>)
@@ -2952,10 +3234,17 @@ export async function fetchPublicCatalog(
         mapReadingItemRow(r as Record<string, unknown>)
       ),
       reflections: publicReflections,
+      blogPosts: publicBlogs,
     };
   } catch (err) {
     console.warn('fetchPublicCatalog failed:', err);
-    return { courses: [], learningPaths: [], readingItems: [], reflections: [] };
+    return {
+      courses: [],
+      learningPaths: [],
+      readingItems: [],
+      reflections: [],
+      blogPosts: [],
+    };
   }
 }
 

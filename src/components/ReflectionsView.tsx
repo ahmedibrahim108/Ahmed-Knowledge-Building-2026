@@ -37,6 +37,7 @@ import {
   isImageFile,
   uploadReflectionImage,
 } from '../utils/imageStorage';
+import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import { FramedImage, ImageFrameEditorModal } from './FramedImage';
@@ -669,8 +670,8 @@ export default function ReflectionsView({
           {renderPalettePicker(composerColorKey, moodTag, setComposerColorKey)}
 
           <div>
-            <textarea
-              rows={4}
+            <AutoResizeTextarea
+              minRows={4}
               value={content}
               onChange={(e) => setContent(e.target.value)}
               placeholder="اكتب بحرية... ما الفكرة أو الامتنان الذي استوقفك اليوم؟"
@@ -1267,8 +1268,8 @@ export default function ReflectionsView({
                         )}
                       </div>
 
-                      <textarea
-                        rows={7}
+                      <AutoResizeTextarea
+                        minRows={7}
                         value={editContent}
                         onChange={(e) => setEditContent(e.target.value)}
                         className="w-full px-3.5 py-3 text-sm leading-loose bg-white border border-slate-300 rounded-xl"

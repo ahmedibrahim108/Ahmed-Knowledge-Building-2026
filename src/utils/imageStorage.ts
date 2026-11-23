@@ -1053,6 +1053,69 @@ export async function deleteReflectionImageStorage(
   }
 }
 
+export async function uploadBlogCoverImage(
+  blogId: string,
+  file: File,
+  uidOverride?: string
+): Promise<{
+  imageUrl: string;
+  imageStoragePath: string;
+  localObjectUrl: string;
+}> {
+  const uid = uidOverride || auth?.currentUser?.uid;
+  const compressed = await compressImageFileForCloud(file);
+  const localObjectUrl = URL.createObjectURL(compressed.blob);
+  let imageStoragePath = '';
+  let imageUrl = '';
+
+  if (uid && isSupabaseConfigured && supabase) {
+    const safeId = sanitizeImageId(blogId);
+    const safeName = sanitizeStorageImageName(file.name || 'blog-cover.jpg');
+    const storagePath = `${uid}/images/blog_cover_${safeId}/${safeName}`;
+    await withFirebaseTokenRetry(async (client) => {
+      const { error: uploadErr } = await client.storage
+        .from(USER_IMAGES_BUCKET)
+        .upload(storagePath, compressed.blob, {
+          contentType: compressed.mimeType || 'image/jpeg',
+          upsert: true,
+        });
+      if (uploadErr) throw uploadErr;
+
+      const { data: signed } = await client.storage
+        .from(USER_IMAGES_BUCKET)
+        .createSignedUrl(storagePath, 3600);
+      imageStoragePath = storagePath;
+      imageUrl = signed?.signedUrl || '';
+    });
+  }
+
+  return {
+    imageUrl: imageUrl || compressed.dataUrl || localObjectUrl,
+    imageStoragePath,
+    localObjectUrl,
+  };
+}
+
+export async function deleteBlogCoverStorage(
+  storagePath?: string
+): Promise<void> {
+  if (
+    !storagePath ||
+    storagePath.startsWith('users/') ||
+    !isSupabaseConfigured ||
+    !supabase
+  ) {
+    return;
+  }
+  try {
+    await withFirebaseTokenRetry(async (client) =>
+      client.storage.from(USER_IMAGES_BUCKET).remove([storagePath])
+    );
+  } catch {
+    // Non-fatal storage cleanup
+  }
+}
+
 export async function deleteDentalCaseCoverStorage(
   coverStoragePath?: string
 ): Promise<void> {

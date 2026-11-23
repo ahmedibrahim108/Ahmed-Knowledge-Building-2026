@@ -6,6 +6,8 @@
 -- Paste and run this file in Supabase Dashboard -> SQL Editor
 -- ============================================================================
 
+SET lock_timeout = '8s';
+
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- Helper: authenticated Firebase UID from JWT sub claim
@@ -190,7 +192,7 @@ CREATE TABLE IF NOT EXISTS public.domains (
   owner_id text NOT NULL DEFAULT public.firebase_uid() REFERENCES public.user_profiles(uid) ON DELETE CASCADE,
   id text NOT NULL,
   sort_order integer NOT NULL DEFAULT 0,
-  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (hub_id IN ('marketing', 'dental_career', 'knowledge')),
+  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (char_length(trim(hub_id)) > 0),
   title text NOT NULL DEFAULT '',
   subtitle text NOT NULL DEFAULT '',
   purpose text NOT NULL DEFAULT '',
@@ -212,7 +214,7 @@ CREATE TABLE IF NOT EXISTS public.months (
   owner_id text NOT NULL DEFAULT public.firebase_uid() REFERENCES public.user_profiles(uid) ON DELETE CASCADE,
   doc_id text NOT NULL,
   month_number integer NOT NULL,
-  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (hub_id IN ('marketing', 'dental_career', 'knowledge')),
+  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (char_length(trim(hub_id)) > 0),
   quarter integer NOT NULL DEFAULT 1,
   quarter_title text NOT NULL DEFAULT '',
   theme text NOT NULL DEFAULT '',
@@ -250,7 +252,7 @@ CREATE TABLE IF NOT EXISTS public.courses (
   owner_id text NOT NULL DEFAULT public.firebase_uid() REFERENCES public.user_profiles(uid) ON DELETE CASCADE,
   doc_id text NOT NULL,
   course_number integer NOT NULL,
-  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (hub_id IN ('marketing', 'dental_career', 'knowledge')),
+  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (char_length(trim(hub_id)) > 0),
   title text NOT NULL DEFAULT '',
   category text NOT NULL DEFAULT '',
   study_stage text NOT NULL DEFAULT 'in_progress' CHECK (study_stage IN ('focus_now', 'in_progress', 'scheduled_later', 'deferred', 'heard_before', 'completed')),
@@ -297,7 +299,7 @@ CREATE TRIGGER trg_courses_updated_at
 CREATE TABLE IF NOT EXISTS public.book_notes (
   owner_id text NOT NULL DEFAULT public.firebase_uid() REFERENCES public.user_profiles(uid) ON DELETE CASCADE,
   id text NOT NULL,
-  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (hub_id IN ('marketing', 'dental_career', 'knowledge')),
+  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (char_length(trim(hub_id)) > 0),
   note_type text NOT NULL DEFAULT 'book' CHECK (note_type IN ('book', 'course_lecture', 'general')),
   note_color text NOT NULL DEFAULT 'default' CHECK (note_color IN ('default', 'navy', 'emerald', 'amber', 'rose', 'violet')),
   book_title text NOT NULL DEFAULT '',
@@ -338,7 +340,7 @@ CREATE TRIGGER trg_book_notes_updated_at
 CREATE TABLE IF NOT EXISTS public.custom_categories (
   owner_id text NOT NULL DEFAULT public.firebase_uid() REFERENCES public.user_profiles(uid) ON DELETE CASCADE,
   id text NOT NULL,
-  hub_id text NOT NULL DEFAULT 'all' CHECK (hub_id IN ('all', 'marketing', 'dental_career', 'knowledge')),
+  hub_id text NOT NULL DEFAULT 'all' CHECK (char_length(trim(hub_id)) > 0),
   title text NOT NULL DEFAULT '',
   description text NOT NULL DEFAULT '',
   color text NOT NULL DEFAULT 'navy' CHECK (color IN ('navy', 'emerald', 'amber', 'slate')),
@@ -398,6 +400,9 @@ CREATE TABLE IF NOT EXISTS public.user_preferences (
   calendar_prefs jsonb NOT NULL DEFAULT '{}'::jsonb,
   weekly_rhythm jsonb NOT NULL DEFAULT '[]'::jsonb,
   reflection_categories jsonb NOT NULL DEFAULT '[]'::jsonb,
+  custom_reading_modes jsonb NOT NULL DEFAULT '[]'::jsonb,
+  pinned_nav_tabs jsonb NOT NULL DEFAULT '[]'::jsonb,
+  custom_hubs jsonb NOT NULL DEFAULT '[]'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (owner_id, id)
@@ -416,6 +421,11 @@ CREATE TABLE IF NOT EXISTS public.reflections (
   content text NOT NULL DEFAULT '',
   mood_tag text NOT NULL DEFAULT 'تأمل' CHECK (mood_tag IN ('تأمل', 'فكرة', 'امتنان', 'هدف')),
   category_tag text NOT NULL DEFAULT '',
+  color_key text NOT NULL DEFAULT 'auto',
+  is_public boolean NOT NULL DEFAULT false,
+  image_url text NOT NULL DEFAULT '',
+  image_storage_path text NOT NULL DEFAULT '',
+  image_frame jsonb NOT NULL DEFAULT '{}'::jsonb,
   pinned boolean NOT NULL DEFAULT false,
   created_at_label text NOT NULL DEFAULT '',
   created_at_ms bigint NOT NULL DEFAULT 0,
@@ -429,6 +439,38 @@ CREATE INDEX IF NOT EXISTS idx_reflections_owner_pinned_ms ON public.reflections
 DROP TRIGGER IF EXISTS trg_reflections_updated_at ON public.reflections;
 CREATE TRIGGER trg_reflections_updated_at
   BEFORE UPDATE ON public.reflections
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+-- 10b. Blog Posts & Articles
+CREATE TABLE IF NOT EXISTS public.blog_posts (
+  owner_id text NOT NULL DEFAULT public.firebase_uid() REFERENCES public.user_profiles(uid) ON DELETE CASCADE,
+  id text NOT NULL,
+  title text NOT NULL DEFAULT '',
+  subtitle text NOT NULL DEFAULT '',
+  excerpt text NOT NULL DEFAULT '',
+  content text NOT NULL DEFAULT '',
+  category_label text NOT NULL DEFAULT '',
+  cover_image_url text NOT NULL DEFAULT '',
+  cover_storage_path text NOT NULL DEFAULT '',
+  cover_frame jsonb NOT NULL DEFAULT '{}'::jsonb,
+  reading_time_minutes integer NOT NULL DEFAULT 2,
+  is_public boolean NOT NULL DEFAULT false,
+  pinned boolean NOT NULL DEFAULT false,
+  sort_order integer NOT NULL DEFAULT 0,
+  created_at_label text NOT NULL DEFAULT '',
+  created_at_ms bigint NOT NULL DEFAULT 0,
+  updated_at_label text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_blog_posts_owner_created ON public.blog_posts (owner_id, pinned DESC, created_at_ms DESC);
+CREATE INDEX IF NOT EXISTS idx_blog_posts_public ON public.blog_posts (is_public, pinned DESC, created_at_ms DESC) WHERE is_public = true;
+
+DROP TRIGGER IF EXISTS trg_blog_posts_updated_at ON public.blog_posts;
+CREATE TRIGGER trg_blog_posts_updated_at
+  BEFORE UPDATE ON public.blog_posts
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 -- 11. Calendar Events
@@ -464,7 +506,7 @@ CREATE TABLE IF NOT EXISTS public.learning_paths (
   id text NOT NULL,
   title text NOT NULL DEFAULT '',
   description text NOT NULL DEFAULT '',
-  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (hub_id IN ('marketing', 'dental_career', 'knowledge')),
+  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (char_length(trim(hub_id)) > 0),
   category_label text NOT NULL DEFAULT '',
   objectives text NOT NULL DEFAULT '',
   current_level text NOT NULL DEFAULT '',
@@ -500,7 +542,7 @@ CREATE TABLE IF NOT EXISTS public.reading_items (
   id text NOT NULL,
   title text NOT NULL DEFAULT '',
   author text NOT NULL DEFAULT '',
-  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (hub_id IN ('marketing', 'dental_career', 'knowledge')),
+  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (char_length(trim(hub_id)) > 0),
   category_label text NOT NULL DEFAULT '',
   item_type text NOT NULL DEFAULT 'كتاب',
   status text NOT NULL DEFAULT 'to_read' CHECK (status IN ('to_read', 'reading', 'completed')),
@@ -543,7 +585,7 @@ CREATE TABLE IF NOT EXISTS public.practical_projects (
   id text NOT NULL,
   title text NOT NULL DEFAULT '',
   description text NOT NULL DEFAULT '',
-  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (hub_id IN ('marketing', 'dental_career', 'knowledge')),
+  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (char_length(trim(hub_id)) > 0),
   category_label text NOT NULL DEFAULT '',
   objectives text NOT NULL DEFAULT '',
   status text NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'in_progress', 'completed')),
@@ -571,7 +613,7 @@ CREATE TABLE IF NOT EXISTS public.unified_tasks (
   id text NOT NULL,
   title text NOT NULL DEFAULT '',
   description text NOT NULL DEFAULT '',
-  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (hub_id IN ('marketing', 'dental_career', 'knowledge')),
+  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (char_length(trim(hub_id)) > 0),
   category_label text NOT NULL DEFAULT '',
   priority text NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high')),
   status text NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'done')),
@@ -605,7 +647,7 @@ CREATE TABLE IF NOT EXISTS public.weekly_meetings (
   id text NOT NULL,
   title text NOT NULL DEFAULT '',
   description text NOT NULL DEFAULT '',
-  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (hub_id IN ('marketing', 'dental_career', 'knowledge')),
+  hub_id text NOT NULL DEFAULT 'knowledge' CHECK (char_length(trim(hub_id)) > 0),
   start_date text NOT NULL DEFAULT '',
   day_of_week integer NOT NULL DEFAULT 6,
   start_time text NOT NULL DEFAULT '18:00',
@@ -777,6 +819,7 @@ ALTER TABLE public.custom_categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.study_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_preferences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reflections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.blog_posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.calendar_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.learning_paths ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reading_items ENABLE ROW LEVEL SECURITY;
@@ -909,7 +952,8 @@ DECLARE
   catalog_tables text[] := ARRAY[
     'courses',
     'learning_paths',
-    'reading_items'
+    'reading_items',
+    'blog_posts'
   ];
 BEGIN
   FOREACH tbl IN ARRAY private_tables LOOP
@@ -1056,6 +1100,23 @@ CREATE POLICY mizan_storage_select_public_or_admin ON storage.objects
       public.is_verified_admin()
       AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
       AND (storage.foldername(name))[1] = public.firebase_uid()
+    )
+    OR (
+      bucket_id = 'user-images'
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM public.blog_posts AS bp
+          WHERE bp.cover_storage_path = name
+            AND bp.is_public = true
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM public.reflections AS refl
+          WHERE refl.image_storage_path = name
+            AND refl.is_public = true
+        )
+      )
     )
     OR (
       bucket_id = 'study-files'

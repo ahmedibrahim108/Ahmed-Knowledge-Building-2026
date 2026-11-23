@@ -4,8 +4,10 @@ import {
   ArrowLeft,
   BookOpen,
   CalendarDays,
+  Check,
   CheckSquare,
   Compass,
+  Edit3,
   Eye,
   Feather,
   GraduationCap,
@@ -19,6 +21,8 @@ import {
   SlidersHorizontal,
   Sparkles,
   Square,
+  Trash2,
+  X,
 } from 'lucide-react';
 import {
   BookNote,
@@ -30,8 +34,9 @@ import {
   DomainId,
   DomainInfo,
   HERO_IMAGE_PATH,
-  LEARNING_HUBS,
+  HUB_ACCENT_PRESETS,
   LearningHubId,
+  LearningHubMeta,
   LearningPath,
   MonthPlan,
   PersonalCourse,
@@ -50,8 +55,11 @@ import {
   getReflectionCardStyle,
   getTodayDateKey,
   resolveCourseStudyStage,
+  resolveLearningHubs,
+  setActiveLearningHubs,
 } from '../data/curriculumData';
 import type { CloudAttachmentItem } from '../services/supabaseSync';
+import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
 import { FramedImage } from './FramedImage';
 import { ActiveTab } from './Header';
@@ -151,6 +159,20 @@ export default function OverviewView({
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<UnifiedTask | null>(null);
 
+  // Hub Create / Edit Modal State
+  const [hubModalMode, setHubModalMode] = useState<'create' | 'edit' | null>(null);
+  const [hubDraftId, setHubDraftId] = useState<string>('');
+  const [hubDraftTitle, setHubDraftTitle] = useState('');
+  const [hubDraftShortTitle, setHubDraftShortTitle] = useState('');
+  const [hubDraftPurpose, setHubDraftPurpose] = useState('');
+  const [hubDraftPresetId, setHubDraftPresetId] = useState<string>('indigo');
+  const [hubDraftCategoriesText, setHubDraftCategoriesText] = useState('');
+
+  const hubs = useMemo(
+    () => resolveLearningHubs(preferences.customHubs),
+    [preferences.customHubs]
+  );
+
   const today = getTodayDateKey();
   const focusCoursesCount = courses.filter(
     (c) => resolveCourseStudyStage(c) === 'focus_now'
@@ -173,12 +195,16 @@ export default function OverviewView({
     }
     if (courses.length > 0) {
       const avgCourse =
-        courses.reduce((acc, c) => acc + (c.completed ? 1 : (c.progressPct ?? 0) / 100), 0) /
-        courses.length;
+        courses.reduce(
+          (acc, c) => acc + (c.completed ? 1 : (c.progressPct ?? 0) / 100),
+          0
+        ) / courses.length;
       parts.push(avgCourse);
     }
     if (unifiedTasks.length > 0) {
-      parts.push(unifiedTasks.filter((t) => t.status === 'done').length / unifiedTasks.length);
+      parts.push(
+        unifiedTasks.filter((t) => t.status === 'done').length / unifiedTasks.length
+      );
     }
     if (parts.length === 0) return 0;
     return Math.round((parts.reduce((a, b) => a + b, 0) / parts.length) * 100);
@@ -231,7 +257,8 @@ export default function OverviewView({
     }> = [];
 
     for (const c of courses) {
-      const isDue = Boolean(c.nextReviewDateKey) && (c.nextReviewDateKey ?? '') <= today;
+      const isDue =
+        Boolean(c.nextReviewDateKey) && (c.nextReviewDateKey ?? '') <= today;
       const isRepeated = (c.listenCount ?? 0) >= 2 || (c.reviewCount ?? 0) >= 2;
       if (isDue || isRepeated) {
         list.push({
@@ -248,7 +275,8 @@ export default function OverviewView({
     }
 
     for (const n of bookNotes) {
-      const isDue = Boolean(n.nextReviewDateKey) && (n.nextReviewDateKey ?? '') <= today;
+      const isDue =
+        Boolean(n.nextReviewDateKey) && (n.nextReviewDateKey ?? '') <= today;
       const isRepeated = (n.listenCount ?? 0) >= 2 || (n.reviewCount ?? 0) >= 2;
       if (isDue || isRepeated) {
         list.push({
@@ -265,8 +293,10 @@ export default function OverviewView({
     }
 
     for (const item of readingItems) {
-      const isDue = Boolean(item.nextReviewDateKey) && (item.nextReviewDateKey ?? '') <= today;
-      const isRepeated = (item.listenCount ?? 0) >= 2 || (item.reviewCount ?? 0) >= 2;
+      const isDue =
+        Boolean(item.nextReviewDateKey) && (item.nextReviewDateKey ?? '') <= today;
+      const isRepeated =
+        (item.listenCount ?? 0) >= 2 || (item.reviewCount ?? 0) >= 2;
       if (isDue || isRepeated) {
         list.push({
           key: `lib-${item.id}`,
@@ -290,6 +320,97 @@ export default function OverviewView({
     }
     onUpdatePreferences({ weeklyRhythm: next });
   };
+
+  const openCreateHubModal = () => {
+    if (!canEdit) return onRequireAuth();
+    setHubDraftId(`hub_${Date.now()}`);
+    setHubDraftTitle('');
+    setHubDraftShortTitle('');
+    setHubDraftPurpose('');
+    setHubDraftPresetId('indigo');
+    setHubDraftCategoriesText('عام\nأساسي\nمتقدم');
+    setHubModalMode('create');
+  };
+
+  const openEditHubModal = (hub: LearningHubMeta) => {
+    if (!canEdit) return onRequireAuth();
+    setHubDraftId(hub.id);
+    setHubDraftTitle(hub.title);
+    setHubDraftShortTitle(hub.shortTitle);
+    setHubDraftPurpose(hub.purpose);
+    const matchingPreset =
+      HUB_ACCENT_PRESETS.find((p) => p.accentHex === hub.accentHex) ??
+      HUB_ACCENT_PRESETS[2];
+    setHubDraftPresetId(matchingPreset.id);
+    const currentCats =
+      preferences.hubCategories?.[hub.id] &&
+      preferences.hubCategories[hub.id].length > 0
+        ? preferences.hubCategories[hub.id]
+        : hub.defaultCategories;
+    setHubDraftCategoriesText(currentCats.join('\n'));
+    setHubModalMode('edit');
+  };
+
+  const handleSaveHubModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canEdit) return onRequireAuth();
+    const cleanTitle = hubDraftTitle.trim();
+    if (!cleanTitle) return;
+    const cleanShort = hubDraftShortTitle.trim() || cleanTitle;
+    const preset =
+      HUB_ACCENT_PRESETS.find((p) => p.id === hubDraftPresetId) ??
+      HUB_ACCENT_PRESETS[2];
+    const cats = Array.from(
+      new Set(
+        hubDraftCategoriesText
+          .split(/[\n،,]/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      )
+    );
+    const effectiveCats = cats.length > 0 ? cats : ['عام', 'أساسي', 'متقدم'];
+
+    const nextHubObj: LearningHubMeta = {
+      id: hubDraftId,
+      title: cleanTitle,
+      shortTitle: cleanShort,
+      englishTitle: cleanShort,
+      purpose: hubDraftPurpose.trim(),
+      accentHex: preset.accentHex,
+      badgeClass: preset.badgeClass,
+      defaultCategories: effectiveCats,
+    };
+
+    const nextHubs =
+      hubModalMode === 'create'
+        ? [...hubs, nextHubObj]
+        : hubs.map((h) => (h.id === hubDraftId ? { ...h, ...nextHubObj } : h));
+
+    const nextHubCats = {
+      ...(preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES),
+      [hubDraftId]: effectiveCats,
+    };
+
+    setActiveLearningHubs(nextHubs);
+    onUpdatePreferences({
+      customHubs: nextHubs,
+      hubCategories: nextHubCats,
+    });
+    setHubModalMode(null);
+  };
+
+  const handleDeleteHub = (targetId: string) => {
+    if (!canEdit || hubs.length <= 1) return;
+    const nextHubs = hubs.filter((h) => h.id !== targetId);
+    setActiveLearningHubs(nextHubs);
+    onUpdatePreferences({ customHubs: nextHubs });
+    setHubModalMode(null);
+  };
+
+  const gridColsClass =
+    hubs.length >= 4
+      ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'
+      : 'grid-cols-1 md:grid-cols-3';
 
   return (
     <div className="space-y-8">
@@ -343,7 +464,10 @@ export default function OverviewView({
                 onClick={() => onNavigateTab('journal')}
                 className="inline-flex items-center gap-1.5 px-4 py-2.5 min-h-[40px] text-xs sm:text-sm font-medium text-slate-700 bg-[#F7F8FA] border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
               >
-                <NotebookPen className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <NotebookPen
+                  className="w-4 h-4 text-[#1E3A5F]"
+                  aria-hidden="true"
+                />
                 <span>دفتر التلخيص</span>
               </button>
 
@@ -352,7 +476,10 @@ export default function OverviewView({
                 onClick={() => onNavigateTab('gallery')}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-medium text-slate-700 bg-[#F7F8FA] border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
               >
-                <Images className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <Images
+                  className="w-4 h-4 text-[#1E3A5F]"
+                  aria-hidden="true"
+                />
                 <span>معرض الصور</span>
               </button>
 
@@ -391,7 +518,10 @@ export default function OverviewView({
               />
             ) : (
               <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-gradient-to-br from-slate-100 to-slate-200">
-                <BookOpen className="w-10 h-10 text-slate-400 mb-3" aria-hidden="true" />
+                <BookOpen
+                  className="w-10 h-10 text-slate-400 mb-3"
+                  aria-hidden="true"
+                />
                 <p className="text-sm font-medium text-slate-700">
                   مساحة القراءة والتأمل المتوازن
                 </p>
@@ -401,24 +531,37 @@ export default function OverviewView({
         </div>
       </section>
 
-      {/* 3-Hub Quick Navigation Strip */}
+      {/* Editable & Extensible Hubs Strip */}
       <section className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
           <h2 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
-            محاور التعلّم الثلاثة
+            محاور التعلّم والتركيز ({hubs.length})
           </h2>
-          <button
-            type="button"
-            onClick={() => onNavigateTab('account')}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-          >
-            <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>مركز الحساب والإدارة والخطة السنوية</span>
-          </button>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {canEdit && (
+              <button
+                type="button"
+                onClick={openCreateHubModal}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>إضافة مجال / محور {hubs.length + 1}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onNavigateTab('account')}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>الإدارة والحساب</span>
+            </button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {LEARNING_HUBS.map((hub) => {
+        <div className={`grid ${gridColsClass} gap-4`}>
+          {hubs.map((hub) => {
             const hCourses = courses.filter(
               (c) => (c.hubId ?? 'knowledge') === hub.id
             );
@@ -431,16 +574,35 @@ export default function OverviewView({
                 className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col justify-between gap-4"
               >
                 <div className="space-y-2">
-                  <span
-                    className={`inline-block px-2.5 py-0.5 text-[11px] font-bold rounded-md border ${hub.badgeClass}`}
-                  >
-                    {hub.shortTitle}
-                  </span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={`inline-block px-2.5 py-0.5 text-[11px] font-bold rounded-md border ${hub.badgeClass}`}
+                    >
+                      {hub.shortTitle}
+                    </span>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => openEditHubModal(hub)}
+                        title={`تعديل ${hub.title}`}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-500 hover:text-[#1E3A5F] hover:bg-slate-100 rounded-md cursor-pointer"
+                      >
+                        <Edit3 className="w-3 h-3" aria-hidden="true" />
+                        <span>تعديل</span>
+                      </button>
+                    )}
+                  </div>
                   <h3 className="font-editorial text-lg font-bold text-slate-900">
                     {hub.title}
                   </h3>
-                  <p className="text-xs text-slate-500 leading-relaxed">
-                    {hCourses.length} كورسات · {hPaths.length} مسارات · {hLibrary.length} مصادر
+                  {hub.purpose && (
+                    <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
+                      {hub.purpose}
+                    </p>
+                  )}
+                  <p className="text-xs text-slate-500 leading-relaxed tabular-nums">
+                    {hCourses.length} كورسات · {hPaths.length} مسارات ·{' '}
+                    {hLibrary.length} مصادر
                   </p>
                 </div>
 
@@ -458,7 +620,10 @@ export default function OverviewView({
                     onClick={() => onSelectHub(hub.id, 'paths')}
                     className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-800 bg-[#F7F8FA] hover:bg-slate-200 rounded-lg cursor-pointer"
                   >
-                    <Compass className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                    <Compass
+                      className="w-3.5 h-3.5 text-[#1E3A5F]"
+                      aria-hidden="true"
+                    />
                     <span>المسارات</span>
                   </button>
                   <button
@@ -466,7 +631,10 @@ export default function OverviewView({
                     onClick={() => onSelectHub(hub.id, 'library')}
                     className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-800 bg-[#F7F8FA] hover:bg-slate-200 rounded-lg cursor-pointer"
                   >
-                    <BookOpen className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                    <BookOpen
+                      className="w-3.5 h-3.5 text-[#1E3A5F]"
+                      aria-hidden="true"
+                    />
                     <span>المكتبة</span>
                   </button>
                   <button
@@ -474,7 +642,10 @@ export default function OverviewView({
                     onClick={() => onSelectHub(hub.id, 'tasks')}
                     className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-800 bg-[#F7F8FA] hover:bg-slate-200 rounded-lg cursor-pointer"
                   >
-                    <ListTodo className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                    <ListTodo
+                      className="w-3.5 h-3.5 text-[#1E3A5F]"
+                      aria-hidden="true"
+                    />
                     <span>المهام</span>
                   </button>
                   {hub.id === 'dental_career' && onOpenDentalCases && (
@@ -483,7 +654,10 @@ export default function OverviewView({
                       onClick={onOpenDentalCases}
                       className="col-span-2 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-900 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 rounded-lg cursor-pointer"
                     >
-                      <Sparkles className="w-3.5 h-3.5 text-emerald-700" aria-hidden="true" />
+                      <Sparkles
+                        className="w-3.5 h-3.5 text-emerald-700"
+                        aria-hidden="true"
+                      />
                       <span>ملف حالات طب الأسنان ({dentalCases.length})</span>
                     </button>
                   )}
@@ -500,7 +674,10 @@ export default function OverviewView({
         <section className="lg:col-span-7 bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <CalendarDays className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+              <CalendarDays
+                className="w-4 h-4 text-[#1E3A5F]"
+                aria-hidden="true"
+              />
               <h2 className="font-editorial text-xl font-bold text-slate-900">
                 المهام والجدول القادم
               </h2>
@@ -560,7 +737,11 @@ export default function OverviewView({
                 const isOverdue = Boolean(tDate && tDate < today);
                 const isToday = Boolean(tDate && tDate === today);
                 const priLabel =
-                  t.priority === 'high' ? 'عالية' : t.priority === 'low' ? 'منخفضة' : 'متوسطة';
+                  t.priority === 'high'
+                    ? 'عالية'
+                    : t.priority === 'low'
+                    ? 'منخفضة'
+                    : 'متوسطة';
                 return (
                   <div
                     key={t.id}
@@ -605,7 +786,9 @@ export default function OverviewView({
                             </span>
                           )}
                           {isOverdue && (
-                            <span className="font-semibold text-rose-700">· متأخرة</span>
+                            <span className="font-semibold text-rose-700">
+                              · متأخرة
+                            </span>
                           )}
                         </div>
                       </div>
@@ -650,7 +833,10 @@ export default function OverviewView({
         <section className="lg:col-span-5 bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Feather className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+              <Feather
+                className="w-4 h-4 text-[#1E3A5F]"
+                aria-hidden="true"
+              />
               <h2 className="font-editorial text-xl font-bold text-slate-900">
                 خواطري وتأملاتي
               </h2>
@@ -710,7 +896,10 @@ export default function OverviewView({
                           {r.categoryTag ? ` · ${r.categoryTag}` : ''}
                         </span>
                         {r.pinned && (
-                          <Pin className={`w-3 h-3 ${cardStyle.accentText}`} aria-hidden="true" />
+                          <Pin
+                            className={`w-3 h-3 ${cardStyle.accentText}`}
+                            aria-hidden="true"
+                          />
                         )}
                       </div>
                       <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">
@@ -735,7 +924,7 @@ export default function OverviewView({
         onSaveRhythm={handleSaveRhythm}
       />
 
-      {/* Spaced Repetition Tracker (Only when items exist) */}
+      {/* Spaced Repetition Tracker */}
       {dueItems.length > 0 && (
         <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -749,7 +938,7 @@ export default function OverviewView({
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {dueItems.slice(0, 6).map((item) => {
-              const hubMeta = getHubMeta(item.hubId);
+              const hubMeta = getHubMeta(item.hubId, hubs);
               const isDue = Boolean(item.nextDate) && (item.nextDate ?? '') <= today;
               return (
                 <button
@@ -805,7 +994,9 @@ export default function OverviewView({
             </p>
           </div>
           <div className="text-left shrink-0">
-            <span className="block text-[11px] text-slate-500">معدل التقدّم العام</span>
+            <span className="block text-[11px] text-slate-500">
+              معدل التقدّم العام
+            </span>
             <span className="text-2xl font-bold text-[#1E3A5F] tabular-nums">
               {overallProgressPct}%
             </span>
@@ -823,6 +1014,152 @@ export default function OverviewView({
           onOpenJournal={() => onNavigateTab('journal')}
         />
       </section>
+
+      {/* Hub Create / Edit Modal */}
+      {hubModalMode && (
+        <div
+          className="fixed inset-0 z-[75] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setHubModalMode(null)}
+        >
+          <form
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={handleSaveHubModal}
+            className="w-full max-w-lg max-h-[90dvh] overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4"
+          >
+            <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-100">
+              <h3 className="font-editorial text-lg font-bold text-slate-900">
+                {hubModalMode === 'create'
+                  ? `إضافة مجال / محور جديد (${hubs.length + 1})`
+                  : `تعديل المحور: ${hubDraftTitle}`}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setHubModalMode(null)}
+                className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  اسم المحور الكامل *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={hubDraftTitle}
+                  onChange={(e) => setHubDraftTitle(e.target.value)}
+                  placeholder="مثلاً: اللغات والترجمة أو التصميم"
+                  className="w-full px-3 py-2 text-sm bg-[#F7F8FA] border border-slate-300 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  الاسم المختصر في الأزرار
+                </label>
+                <input
+                  type="text"
+                  value={hubDraftShortTitle}
+                  onChange={(e) => setHubDraftShortTitle(e.target.value)}
+                  placeholder="مثلاً: اللغات"
+                  className="w-full px-3 py-2 text-sm bg-[#F7F8FA] border border-slate-300 rounded-xl"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                هدف المحور ونطاقه (اختياري)
+              </label>
+              <AutoResizeTextarea
+                minRows={2}
+                value={hubDraftPurpose}
+                onChange={(e) => setHubDraftPurpose(e.target.value)}
+                placeholder="ما المهارات أو الكورسات التي يضمها هذا المجال؟"
+                className="w-full px-3 py-2 text-xs sm:text-sm bg-[#F7F8FA] border border-slate-300 rounded-xl"
+              />
+            </div>
+
+            <div>
+              <span className="block text-xs font-semibold text-slate-700 mb-1.5">
+                اللون المميّز للمحور
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {HUB_ACCENT_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => setHubDraftPresetId(preset.id)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border cursor-pointer ${
+                      hubDraftPresetId === preset.id
+                        ? `${preset.badgeClass} font-bold ring-2 ring-[#1E3A5F]/25`
+                        : 'bg-white border-slate-200 text-slate-700'
+                    }`}
+                  >
+                    <span
+                      className="w-2.5 h-2.5 rounded-sm shrink-0"
+                      style={{ backgroundColor: preset.accentHex }}
+                    />
+                    <span>{preset.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                التصنيفات الفرعية داخل المحور (سطر لكل تصنيف)
+              </label>
+              <AutoResizeTextarea
+                minRows={3}
+                value={hubDraftCategoriesText}
+                onChange={(e) => setHubDraftCategoriesText(e.target.value)}
+                placeholder={'التصنيف الأول\nالتصنيف الثاني'}
+                className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-300 rounded-xl"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+              {hubModalMode === 'edit' &&
+              hubs.length > 1 &&
+              hubDraftId !== 'marketing' &&
+              hubDraftId !== 'dental_career' &&
+              hubDraftId !== 'knowledge' ? (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteHub(hubDraftId)}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>حذف المجال</span>
+                </button>
+              ) : (
+                <span />
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setHubModalMode(null)}
+                  className="px-4 py-2 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>حفظ</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
 
       {onAddUnifiedTask && (
         <TaskFormModal

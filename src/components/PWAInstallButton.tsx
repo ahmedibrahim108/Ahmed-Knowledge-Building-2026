@@ -13,10 +13,17 @@ import { usePWAInstall } from '../hooks/usePWAInstall';
 
 interface PWAInstallButtonProps {
   compact?: boolean;
+  /**
+   * 'default' = regular install CTA button
+   * 'utility-mobile' = small subtle top-bar trigger tailored to Mobile install
+   * 'utility-desktop' = small subtle top-bar trigger tailored to Desktop standalone app install
+   */
+  variant?: 'default' | 'utility-mobile' | 'utility-desktop';
 }
 
 export default function PWAInstallButton({
   compact = false,
+  variant = 'default',
 }: PWAInstallButtonProps) {
   const {
     isInstallable,
@@ -27,20 +34,26 @@ export default function PWAInstallButton({
     install,
   } = usePWAInstall();
   const [showGuide, setShowGuide] = useState(false);
+  const [guideFocus, setGuideFocus] = useState<'mobile' | 'desktop'>(() =>
+    variant === 'utility-desktop' ? 'desktop' : 'mobile'
+  );
   const [copied, setCopied] = useState(false);
   const [installing, setInstalling] = useState(false);
 
+  const isUtility = variant === 'utility-mobile' || variant === 'utility-desktop';
+
+  // In standalone mode hide prominent install CTA, or render quiet status indicator on desktop if not utility
   if (isInstalled) {
     return null;
   }
 
   const handleInstallClick = async () => {
+    setGuideFocus(variant === 'utility-desktop' ? 'desktop' : 'mobile');
     if (isInstallable) {
       setInstalling(true);
       try {
         const accepted = await install();
         if (!accepted) {
-          // User dismissed the browser prompt; keep button available
           return;
         }
       } finally {
@@ -62,8 +75,36 @@ export default function PWAInstallButton({
     }
   };
 
-  return (
-    <>
+  const renderTrigger = () => {
+    if (variant === 'utility-mobile') {
+      return (
+        <button
+          type="button"
+          onClick={handleInstallClick}
+          disabled={installing}
+          title="تثبيت كتطبيق على الهاتف (Android / iPhone)"
+          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-600 hover:text-[#1E3A5F] hover:bg-white rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          <Smartphone className="w-3 h-3 shrink-0" aria-hidden="true" />
+          <span>{installing ? 'جاري التثبيت...' : 'تطبيق الهاتف'}</span>
+        </button>
+      );
+    }
+    if (variant === 'utility-desktop') {
+      return (
+        <button
+          type="button"
+          onClick={handleInstallClick}
+          disabled={installing}
+          title="تنزيل كتطبيق مستقل على الكمبيوتر (Desktop App)"
+          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-600 hover:text-[#1E3A5F] hover:bg-white rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          <Monitor className="w-3 h-3 shrink-0" aria-hidden="true" />
+          <span>{installing ? 'جاري التثبيت...' : 'تطبيق الكمبيوتر'}</span>
+        </button>
+      );
+    }
+    return (
       <button
         type="button"
         onClick={handleInstallClick}
@@ -84,6 +125,12 @@ export default function PWAInstallButton({
             : 'تثبيت التطبيق الآن'}
         </span>
       </button>
+    );
+  };
+
+  return (
+    <>
+      {renderTrigger()}
 
       {showGuide && (
         <div
@@ -91,22 +138,32 @@ export default function PWAInstallButton({
           role="dialog"
           aria-modal="true"
           aria-labelledby="pwa-install-title"
+          onClick={() => setShowGuide(false)}
         >
-          <div className="w-full max-w-md rounded-2xl bg-white border border-slate-200 shadow-2xl overflow-hidden text-right">
+          <div
+            className="w-full max-w-md rounded-2xl bg-white border border-slate-200 shadow-2xl overflow-hidden text-right"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="bg-[#1E3A5F] text-white px-5 py-4 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center shrink-0">
-                  <Smartphone className="w-5 h-5 text-amber-300" aria-hidden="true" />
+                  {guideFocus === 'desktop' ? (
+                    <Monitor className="w-5 h-5 text-amber-300" aria-hidden="true" />
+                  ) : (
+                    <Smartphone className="w-5 h-5 text-amber-300" aria-hidden="true" />
+                  )}
                 </div>
                 <div>
                   <h3
                     id="pwa-install-title"
                     className="text-base font-bold leading-snug"
                   >
-                    تثبيت تطبيق ميزان المعرفة
+                    {guideFocus === 'desktop'
+                      ? 'تنزيل ميزان المعرفة كتطبيق كمبيوتر مستقل'
+                      : 'تثبيت ميزان المعرفة على الهاتف'}
                   </h3>
                   <p className="text-xs text-slate-200">
-                    يعمل كتطبيق مستقل على الهاتف والكمبيوتر حتى دون اتصال
+                    يعمل بنافذة مستقلة سريعة ودون شريط متصفح مع دعم التخزين المحلي
                   </p>
                 </div>
               </div>
@@ -121,6 +178,35 @@ export default function PWAInstallButton({
             </div>
 
             <div className="p-5 space-y-4 text-sm text-slate-700">
+              {isUtility && (
+                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setGuideFocus('mobile')}
+                    className={`flex-1 py-1.5 px-2.5 rounded-md font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                      guideFocus === 'mobile'
+                        ? 'bg-white text-[#1E3A5F] shadow-2xs'
+                        : 'text-slate-600'
+                    }`}
+                  >
+                    <Smartphone className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>تثبيت على الهاتف</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGuideFocus('desktop')}
+                    className={`flex-1 py-1.5 px-2.5 rounded-md font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                      guideFocus === 'desktop'
+                        ? 'bg-white text-[#1E3A5F] shadow-2xs'
+                        : 'text-slate-600'
+                    }`}
+                  >
+                    <Monitor className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>تطبيق للكمبيوتر</span>
+                  </button>
+                </div>
+              )}
+
               {isInIframe && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5 space-y-2.5">
                   <p className="text-xs font-medium text-amber-900 leading-relaxed">
@@ -159,7 +245,25 @@ export default function PWAInstallButton({
                 </div>
               )}
 
-              {isIOS ? (
+              {guideFocus === 'desktop' ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2.5">
+                  <p className="text-xs font-bold text-[#1E3A5F] flex items-center gap-1.5">
+                    <Monitor className="w-4 h-4" aria-hidden="true" />
+                    <span>تثبيت تطبيق مستقل على اللابتوب / الكمبيوتر (Chrome أو Edge):</span>
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1.5 text-xs text-slate-700 leading-relaxed">
+                    <li>
+                      في متصفح <strong>Google Chrome</strong> أو <strong>Microsoft Edge</strong>، انظر إلى أيقونة <strong>التثبيت (شاشة وسهم)</strong> داخل شريط العنوان في الأعلى.
+                    </li>
+                    <li>
+                      أو افتح قائمة المتصفح (<strong>⋮</strong>) ← <strong>حفظ ومشاركة (Cast, save, and share)</strong> ← <strong>تثبيت ميزان المعرفة كتطبيق</strong>.
+                    </li>
+                    <li>
+                      يظهر التطبيق فورًا في قائمة البرامج / سطح المكتب ويفتح في نافذة منفصلة تمامًا عن المتصفح.
+                    </li>
+                  </ol>
+                </div>
+              ) : isIOS ? (
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2.5">
                   <p className="text-xs font-bold text-[#1E3A5F] flex items-center gap-1.5">
                     <Share className="w-4 h-4" aria-hidden="true" />
@@ -199,20 +303,20 @@ export default function PWAInstallButton({
                 <div className="space-y-3">
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 space-y-1.5">
                     <p className="text-xs font-bold text-[#1E3A5F] flex items-center gap-1.5">
-                      <Monitor className="w-4 h-4" aria-hidden="true" />
-                      <span>على الكمبيوتر (Chrome أو Edge):</span>
-                    </p>
-                    <p className="text-xs text-slate-600 leading-relaxed">
-                      اضغط على أيقونة <strong>التثبيت</strong> في يمين شريط العنوان، أو افتح قائمة المتصفح واختر <strong>«تثبيت ميزان المعرفة»</strong>.
-                    </p>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 space-y-1.5">
-                    <p className="text-xs font-bold text-[#1E3A5F] flex items-center gap-1.5">
                       <Smartphone className="w-4 h-4" aria-hidden="true" />
                       <span>على الهاتف (Android / iPhone):</span>
                     </p>
                     <p className="text-xs text-slate-600 leading-relaxed">
                       في <strong>Android (Chrome)</strong>: قائمة (<strong>⋮</strong>) ← «تثبيت التطبيق». وفي <strong>iPhone (Safari)</strong>: زر المشاركة ← «إضافة إلى الشاشة الرئيسية».
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 space-y-1.5">
+                    <p className="text-xs font-bold text-[#1E3A5F] flex items-center gap-1.5">
+                      <Monitor className="w-4 h-4" aria-hidden="true" />
+                      <span>على الكمبيوتر (Chrome أو Edge):</span>
+                    </p>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      اضغط على أيقونة <strong>التثبيت</strong> في يمين شريط العنوان، أو افتح قائمة المتصفح واختر <strong>«تثبيت ميزان المعرفة»</strong>.
                     </p>
                   </div>
                 </div>

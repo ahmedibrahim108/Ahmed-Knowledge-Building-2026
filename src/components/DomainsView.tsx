@@ -16,6 +16,7 @@ import {
   ThinkerInfo,
   getHubMeta,
 } from '../data/curriculumData';
+import AutoResizeTextarea from './AutoResizeTextarea';
 import ConfirmDialog from './ConfirmDialog';
 
 interface DomainsViewProps {
@@ -199,8 +200,8 @@ export default function DomainsView({
           </div>
           <label className="block text-xs font-medium text-slate-600">
             هدف المحور وأثره (اختياري)
-            <textarea
-              rows={2}
+            <AutoResizeTextarea
+              minRows={2}
               value={newPurpose}
               onChange={(e) => setNewPurpose(e.target.value)}
               placeholder="لماذا أضفت هذا المحور إلى رحلتك؟"
@@ -335,8 +336,8 @@ export default function DomainsView({
                     </label>
                     <label className="block text-xs text-slate-600">
                       هدف المحور
-                      <textarea
-                        rows={2}
+                      <AutoResizeTextarea
+                        minRows={2}
                         value={domain.purpose}
                         onChange={(e) =>
                           onUpdateDomain(domain.id, { purpose: e.target.value })
@@ -404,8 +405,8 @@ export default function DomainsView({
                               placeholder="الأعمال (افصل بفاصلة عربية ،)"
                               className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
                             />
-                            <textarea
-                              rows={2}
+                            <AutoResizeTextarea
+                              minRows={2}
                               value={thinker.contribution}
                               onChange={(e) =>
                                 handleUpdateThinker(domain, tIdx, {

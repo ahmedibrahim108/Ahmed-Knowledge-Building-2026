@@ -65,6 +65,7 @@ import {
   richHtmlToPlainText,
   sanitizeRichHtml,
 } from '../utils/richText';
+import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
@@ -3045,8 +3046,8 @@ export default function NotesJournalView({
                     {month.discussionPrompt}
                   </p>
 
-                  <textarea
-                    rows={5}
+                  <AutoResizeTextarea
+                    minRows={5}
                     aria-label={`ملخص الوحدة ${month.id}`}
                     value={month.notes}
                     readOnly={!canEdit}

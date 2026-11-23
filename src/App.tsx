@@ -17,6 +17,7 @@ import {
   Target,
 } from 'lucide-react';
 import AccountCenterView from './components/AccountCenterView';
+import BlogsView from './components/BlogsView';
 import CalendarView from './components/CalendarView';
 import ConfirmDialog from './components/ConfirmDialog';
 import CourseDetailPage from './components/CourseDetailPage';
@@ -32,6 +33,7 @@ import OfflineIndicator from './components/OfflineIndicator';
 import OverviewView from './components/OverviewView';
 import PathsView from './components/PathsView';
 import type { ActivePdfTarget } from './components/PDFViewerModal';
+import PhotoGalleryView from './components/PhotoGalleryView';
 import PublicHomeView from './components/PublicHomeView';
 import PWAInstallButton from './components/PWAInstallButton';
 import ReflectionsView from './components/ReflectionsView';
@@ -40,6 +42,7 @@ import TwelveMonthPlanView from './components/TwelveMonthPlanView';
 
 const PDFViewerModal = lazy(() => import('./components/PDFViewerModal'));
 import {
+  BlogPost,
   BookNote,
   CalendarEvent,
   CourseStudyStage,
@@ -57,6 +60,7 @@ import {
   INITIAL_CUSTOM_CATEGORIES,
   INITIAL_MONTHS,
   INITIAL_QUARTERS,
+  ImageFrameSpec,
   LearningHubId,
   LearningPath,
   MonthActivities,
@@ -66,6 +70,7 @@ import {
   PersonalCourse,
   PersonalReflection,
   PracticalProject,
+  PublicPageId,
   PublicSiteConfig,
   QuarterInfo,
   ReadingLibraryItem,
@@ -77,7 +82,9 @@ import {
   UnifiedTask,
   UserPreferences,
   WeeklyMeeting,
+  estimateReadingTimeMinutes,
   resolveCourseStudyStage,
+  setActiveLearningHubs,
 } from './data/curriculumData';
 import {
   OWNER_ADMIN_EMAIL,
@@ -92,11 +99,15 @@ import {
   deleteCloudAttachment,
   rescueLocalAttachmentToCloud,
 } from './utils/documentImportExport';
-import { deleteDentalCaseCoverStorage } from './utils/imageStorage';
+import {
+  deleteBlogCoverStorage,
+  deleteDentalCaseCoverStorage,
+} from './utils/imageStorage';
 import {
   CloudAttachmentItem,
   PublicCatalogData,
   UserProfileRecord,
+  deleteBlogPostDoc,
   deleteBookNoteDoc,
   deleteCalendarEventDoc,
   deleteCourseDoc,
@@ -117,6 +128,7 @@ import {
   fetchGrantedWorkspaceForUser,
   fetchPublicCatalog,
   sanitizeId,
+  saveBlogPostDoc,
   saveBookNoteDoc,
   saveCalendarEventDoc,
   saveCourseDoc,
@@ -176,6 +188,8 @@ const VALID_TABS: ActiveTab[] = [
   'tasks',
   'journal',
   'reflections',
+  'blogs',
+  'gallery',
   'calendar',
   'account',
   'public',
@@ -192,6 +206,8 @@ const TAB_DISPLAY_LABELS: Record<ActiveTab, string> = {
   tasks: 'المهام والمشاريع',
   journal: 'دفتر التلخيص',
   reflections: 'خواطري وتأملاتي',
+  blogs: 'المدونة والمقالات',
+  gallery: 'معرض الصور',
   calendar: 'التقويم',
   account: 'الإدارة والحساب',
   public: 'الواجهة العامة',
@@ -225,19 +241,30 @@ function parseAppRouteFromLocation(): {
   tab: ActiveTab;
   courseId: number | null;
   noteId: string | null;
+  publicPage: PublicPageId;
 } {
   if (typeof window === 'undefined') {
-    return { tab: 'public', courseId: null, noteId: null };
+    return { tab: 'public', courseId: null, noteId: null, publicPage: 'home' };
   }
   const rawHash = window.location.hash.replace(/^#\/?/, '').trim();
   const rawPath = window.location.pathname.replace(/^\/+/, '').trim();
   const source = rawHash || rawPath;
 
+  const publicSubMatch = source.match(/^public\/(reflections|blogs)\/?$/i);
+  if (publicSubMatch) {
+    return {
+      tab: 'public',
+      courseId: null,
+      noteId: null,
+      publicPage: publicSubMatch[1].toLowerCase() as PublicPageId,
+    };
+  }
+
   const courseMatch = source.match(/^courses\/(\d+)\/?$/i);
   if (courseMatch) {
     const id = parseInt(courseMatch[1], 10);
     if (!Number.isNaN(id) && id > 0) {
-      return { tab: 'courses', courseId: id, noteId: null };
+      return { tab: 'courses', courseId: id, noteId: null, publicPage: 'home' };
     }
   }
 
@@ -253,15 +280,16 @@ function parseAppRouteFromLocation(): {
       tab: 'journal',
       courseId: null,
       noteId: decodedNoteId,
+      publicPage: 'home',
     };
   }
 
   const tabSegment = source.split('/')[0] as ActiveTab;
   if (VALID_TABS.includes(tabSegment)) {
-    return { tab: tabSegment, courseId: null, noteId: null };
+    return { tab: tabSegment, courseId: null, noteId: null, publicPage: 'home' };
   }
 
-  return { tab: 'public', courseId: null, noteId: null };
+  return { tab: 'public', courseId: null, noteId: null, publicPage: 'home' };
 }
 
 function safeScrollToTop() {
@@ -290,6 +318,7 @@ export default function App() {
   );
   const [history, setHistory] = useState<StudyHistoryEntry[]>([]);
   const [reflections, setReflections] = useState<PersonalReflection[]>([]);
+  const [blogPosts, setBlogPosts] = useState<BlogPost[]>([]);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [learningPaths, setLearningPaths] = useState<LearningPath[]>([]);
   const [readingItems, setReadingItems] = useState<ReadingLibraryItem[]>([]);
@@ -312,6 +341,9 @@ export default function App() {
   );
   const [selectedCourseId, setSelectedCourseId] = useState<number | null>(
     initialRoute.courseId
+  );
+  const [publicPage, setPublicPage] = useState<PublicPageId>(
+    initialRoute.publicPage
   );
   const [activeHubFilter, setActiveHubFilter] = useState<
     LearningHubId | 'all'
@@ -344,6 +376,7 @@ export default function App() {
     learningPaths: [],
     readingItems: [],
     reflections: [],
+    blogPosts: [],
   });
   const [loadingPublicCatalog, setLoadingPublicCatalog] = useState(false);
   const [grantedWorkspace, setGrantedWorkspace] =
@@ -394,11 +427,17 @@ export default function App() {
   const syncLocationHash = (
     tab: ActiveTab,
     courseId: number | null,
-    noteId: string | null
+    noteId: string | null,
+    nextPublicPage?: PublicPageId
   ) => {
     if (typeof window === 'undefined') return;
     let targetHash = tab === 'overview' ? '#/' : `#/${tab}`;
-    if (tab === 'courses' && courseId !== null) {
+    if (tab === 'public') {
+      targetHash =
+        nextPublicPage && nextPublicPage !== 'home'
+          ? `#/public/${nextPublicPage}`
+          : '#/public';
+    } else if (tab === 'courses' && courseId !== null) {
       targetHash = `#/courses/${courseId}`;
     } else if (tab === 'journal' && noteId) {
       targetHash = `#/journal/${encodeURIComponent(noteId)}`;
@@ -459,7 +498,12 @@ export default function App() {
     if (tab !== 'courses') {
       setCoursesSection('courses');
     }
-    syncLocationHash(tab, null, null);
+    syncLocationHash(
+      tab,
+      null,
+      null,
+      tab === 'public' ? publicPage : undefined
+    );
   };
 
   const navigateToCourseRoute = (courseId: number) => {
@@ -489,6 +533,9 @@ export default function App() {
       if (window.location.hash || parsed.courseId !== null || parsed.noteId !== null) {
         setActiveTab(parsed.tab);
         setSelectedCourseId(parsed.courseId);
+        if (parsed.tab === 'public') {
+          setPublicPage(parsed.publicPage);
+        }
         if (parsed.noteId !== null) {
           setActiveBookNoteId(parsed.noteId);
           setStudyModalState({ noteId: parsed.noteId, startInEdit: false });
@@ -517,6 +564,7 @@ export default function App() {
     setCustomCategories(INITIAL_CUSTOM_CATEGORIES);
     setHistory([]);
     setReflections([]);
+    setBlogPosts([]);
     setCalendarEvents([]);
     setLearningPaths([]);
     setReadingItems([]);
@@ -526,6 +574,7 @@ export default function App() {
     setWeeklyMeetings([]);
     setCloudAttachments([]);
     setPreferences(DEFAULT_USER_PREFERENCES);
+    setActiveLearningHubs(DEFAULT_USER_PREFERENCES.customHubs);
     if (!preserveRoute) {
       setActiveBookNoteId(null);
       setSelectedCourseId(null);
@@ -680,9 +729,13 @@ export default function App() {
           },
           onPreferences: (prefs) => {
             setPreferences(prefs);
+            setActiveLearningHubs(prefs.customHubs);
           },
           onReflections: (items) => {
             setReflections(items);
+          },
+          onBlogPosts: (items) => {
+            setBlogPosts(items);
           },
           onCalendarEvents: (items) => {
             setCalendarEvents(items);
@@ -1068,6 +1121,7 @@ export default function App() {
     }
     const nextPrefs: UserPreferences = { ...preferences, ...updates };
     setPreferences(nextPrefs);
+    setActiveLearningHubs(nextPrefs.customHubs);
     void saveUserPreferencesDoc(user.uid, nextPrefs);
   };
 
@@ -2095,6 +2149,9 @@ export default function App() {
     categoryTag?: string;
     colorKey?: ReflectionColorKey;
     isPublic?: boolean;
+    imageUrl?: string;
+    imageStoragePath?: string;
+    imageFrame?: ImageFrameSpec;
   }): string | undefined => {
     if (!user || !isAdmin) {
       handleRequireAuth();
@@ -2111,6 +2168,9 @@ export default function App() {
       colorKey: payload.colorKey,
       isPublic: Boolean(payload.isPublic),
       pinned: false,
+      imageUrl: payload.imageUrl,
+      imageStoragePath: payload.imageStoragePath,
+      imageFrame: payload.imageFrame,
       createdAtLabel: formatArabicDateTime(),
       createdAtMs: now,
     };
@@ -2155,6 +2215,97 @@ export default function App() {
     }
     setReflections((prev) => prev.filter((r) => r.id !== id));
     void deleteReflectionDoc(user.uid, id);
+  };
+
+  // --- Blog Posts («المدونة والمقالات») CRUD ---
+  const handleAddBlogPost = (payload: {
+    title: string;
+    subtitle?: string;
+    excerpt?: string;
+    content: string;
+    categoryLabel?: string;
+    coverImageUrl?: string;
+    coverStoragePath?: string;
+    coverFrame?: ImageFrameSpec;
+    isPublic?: boolean;
+    pinned?: boolean;
+  }): string | undefined => {
+    if (!user || !isAdmin) {
+      handleRequireAuth();
+      return undefined;
+    }
+    const now = Date.now();
+    const newId = `blog-${now}-${Math.floor(Math.random() * 1000)}`;
+    const contentText = payload.content || '';
+    const newPost: BlogPost = {
+      id: newId,
+      title: payload.title.trim(),
+      subtitle: (payload.subtitle || '').trim(),
+      excerpt: (payload.excerpt || '').trim(),
+      content: contentText,
+      categoryLabel: (payload.categoryLabel || 'مقال عام').trim(),
+      coverImageUrl: payload.coverImageUrl || '',
+      coverStoragePath: payload.coverStoragePath || '',
+      coverFrame: payload.coverFrame,
+      readingTimeMinutes: estimateReadingTimeMinutes(contentText),
+      isPublic: payload.isPublic !== false,
+      pinned: Boolean(payload.pinned),
+      sortOrder: 0,
+      createdAtLabel: formatArabicDate(),
+      createdAtMs: now,
+      updatedAtLabel: formatArabicDateTime(),
+    };
+    setBlogPosts((prev) => [newPost, ...prev]);
+    void saveBlogPostDoc(user.uid, newPost);
+    recordHistory({
+      actionType: 'note',
+      title: `نشرت مقالًا جديدًا: ${newPost.title}`,
+      detail: newPost.categoryLabel || 'المدونة والمقالات',
+      targetTab: 'blogs',
+    });
+    return newId;
+  };
+
+  const handleUpdateBlogPost = (id: string, updates: Partial<BlogPost>) => {
+    if (!user || !isAdmin) {
+      handleRequireAuth();
+      return;
+    }
+    setBlogPosts((prev) =>
+      prev
+        .map((post) => {
+          if (post.id !== id) return post;
+          const nextContent =
+            updates.content !== undefined ? updates.content : post.content;
+          const next: BlogPost = {
+            ...post,
+            ...updates,
+            readingTimeMinutes:
+              updates.readingTimeMinutes ??
+              estimateReadingTimeMinutes(nextContent),
+            updatedAtLabel: formatArabicDateTime(),
+          };
+          void saveBlogPostDoc(user.uid, next);
+          return next;
+        })
+        .sort((a, b) => {
+          if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+          return b.createdAtMs - a.createdAtMs;
+        })
+    );
+  };
+
+  const handleDeleteBlogPost = (id: string) => {
+    if (!user || !isAdmin) {
+      handleRequireAuth();
+      return;
+    }
+    const target = blogPosts.find((p) => p.id === id);
+    setBlogPosts((prev) => prev.filter((p) => p.id !== id));
+    if (target?.coverStoragePath) {
+      void deleteBlogCoverStorage(target.coverStoragePath);
+    }
+    void deleteBlogPostDoc(user.uid, id);
   };
 
   // --- Calendar Events (Weekly & Monthly) CRUD ---
@@ -2682,6 +2833,7 @@ export default function App() {
         onSelectTab={(tab) => {
           if (tab === 'public') {
             setIsPreviewingPublic(true);
+            setPublicPage('home');
             void refreshPublicCatalog();
             navigateToTab('public', false);
           } else {
@@ -2697,6 +2849,7 @@ export default function App() {
           const next = !isPreviewingPublic;
           setIsPreviewingPublic(next);
           if (next) {
+            setPublicPage('home');
             void refreshPublicCatalog();
             navigateToTab('public', false);
           } else {
@@ -2718,6 +2871,25 @@ export default function App() {
         tasksCount={unifiedTasks.length}
         notesCount={bookNotes.length}
         reflectionsCount={reflections.length}
+        blogsCount={blogPosts.length}
+        pinnedNavTabs={preferences.pinnedNavTabs}
+        publicPage={publicPage}
+        onSelectPublicPage={(page) => {
+          setPublicPage(page);
+          if (isAdmin && !isPreviewingPublic && activeTab !== 'public') {
+            setIsPreviewingPublic(true);
+            void refreshPublicCatalog();
+            setActiveTab('public');
+          }
+          syncLocationHash('public', null, null, page);
+          safeScrollToTop();
+        }}
+        showPublicReflections={
+          publicSiteConfig.visibilityFlags?.showReflections !== false
+        }
+        showPublicBlogs={
+          publicSiteConfig.visibilityFlags?.showBlogs !== false
+        }
       />
 
       {/* Auth Prompt Notice when a read-only trigger is fired */}
@@ -2813,6 +2985,12 @@ export default function App() {
         {(!isAdmin || isPreviewingPublic || activeTab === 'public') ? (
           <PublicHomeView
             siteConfig={publicSiteConfig}
+            publicPage={publicPage}
+            onChangePublicPage={(page) => {
+              setPublicPage(page);
+              syncLocationHash('public', null, null, page);
+              safeScrollToTop();
+            }}
             publicCourses={
               isAdmin && isPreviewingPublic
                 ? courses.filter((c) => c.isPublic)
@@ -2839,6 +3017,11 @@ export default function App() {
                         ).includes(r.categoryTag!))
                   )
                 : publicCatalog.reflections
+            }
+            publicBlogs={
+              isAdmin && isPreviewingPublic
+                ? blogPosts.filter((b) => b.isPublic)
+                : publicCatalog.blogPosts
             }
             grantedWorkspace={isAdmin ? null : grantedWorkspace}
             loadingGranted={loadingGranted}
@@ -3248,6 +3431,29 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'blogs' && (
+          <BlogsView
+            uid={user?.uid}
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            posts={blogPosts}
+            voiceDialect={preferences.voiceDialect}
+            readAloudVoice={preferences.readAloudVoice}
+            readAloudSpeed={preferences.readAloudSpeed}
+            onAddPost={handleAddBlogPost}
+            onUpdatePost={handleUpdateBlogPost}
+            onDeletePost={handleDeleteBlogPost}
+          />
+        )}
+
+        {activeTab === 'gallery' && (
+          <PhotoGalleryView
+            uid={user?.uid}
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+          />
+        )}
+
         {activeTab === 'calendar' && (
           <CalendarView
             uid={user?.uid}
@@ -3286,6 +3492,9 @@ export default function App() {
             canEdit={canEdit}
             onRequireAuth={handleRequireAuth}
             voiceDialect={preferences.voiceDialect}
+            preferences={preferences}
+            onUpdatePreferences={handleUpdatePreferences}
+            onNavigateTab={navigateToTab}
             quarters={quarters}
             months={months}
             domains={domains}
@@ -3372,6 +3581,7 @@ export default function App() {
             }}
             onPreviewPublicSite={() => {
               setIsPreviewingPublic(true);
+              setPublicPage('home');
               void refreshPublicCatalog();
               navigateToTab('public', false);
             }}
@@ -3381,6 +3591,10 @@ export default function App() {
             reflectionCategories={preferences.reflectionCategories}
             onToggleReflectionPublic={(id, isPub) => {
               handleUpdateReflection(id, { isPublic: isPub });
+            }}
+            blogPosts={blogPosts}
+            onToggleBlogPublic={(id, isPub) => {
+              handleUpdateBlogPost(id, { isPublic: isPub });
             }}
             customReadingModes={preferences.customReadingModes}
             onUpdateReadingModes={(nextModes) =>

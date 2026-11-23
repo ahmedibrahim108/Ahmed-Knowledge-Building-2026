@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
+  BookOpenText,
   ChevronDown,
   Cloud,
   Eye,
@@ -10,9 +11,16 @@ import {
   LogIn,
   LogOut,
   NotebookPen,
+  RefreshCw,
   Settings2,
 } from 'lucide-react';
+import {
+  DEFAULT_PINNED_NAV_TABS,
+  NAV_PINNABLE_TABS_META,
+  PublicPageId,
+} from '../data/curriculumData';
 import BrandMark from './BrandMark';
+import PWAInstallButton from './PWAInstallButton';
 
 export type ActiveTab =
   | 'overview'
@@ -24,6 +32,7 @@ export type ActiveTab =
   | 'library'
   | 'journal'
   | 'reflections'
+  | 'blogs'
   | 'gallery'
   | 'tasks'
   | 'calendar'
@@ -50,6 +59,12 @@ interface HeaderProps {
   tasksCount?: number;
   notesCount: number;
   reflectionsCount?: number;
+  blogsCount?: number;
+  pinnedNavTabs?: string[];
+  publicPage?: PublicPageId;
+  onSelectPublicPage?: (page: PublicPageId) => void;
+  showPublicReflections?: boolean;
+  showPublicBlogs?: boolean;
 }
 
 export default function Header({
@@ -64,30 +79,90 @@ export default function Header({
   onGoogleSignIn,
   onSignOut,
   focusCoursesCount = 0,
+  monthsCount = 0,
+  domainsCount,
   coursesCount,
   pathsCount = 0,
   libraryCount = 0,
   tasksCount = 0,
   notesCount,
   reflectionsCount = 0,
+  blogsCount = 0,
+  pinnedNavTabs,
+  publicPage = 'home',
+  onSelectPublicPage,
+  showPublicReflections = true,
+  showPublicBlogs = true,
 }: HeaderProps) {
   const showAdminNav = isAdmin && !isPreviewingPublic;
+  const [reloading, setReloading] = useState(false);
 
-  const navItems: Array<{ id: ActiveTab; label: string }> = showAdminNav
-    ? [
-        { id: 'overview', label: 'لوحة المتابعة' },
-        { id: 'focus', label: `التركيز (${focusCoursesCount})` },
-        { id: 'courses', label: `الكورسات (${coursesCount})` },
-        { id: 'paths', label: `المسارات (${pathsCount})` },
-        { id: 'library', label: `المكتبة (${libraryCount})` },
-        { id: 'journal', label: `التلخيص (${notesCount})` },
-        { id: 'reflections', label: `خواطري (${reflectionsCount})` },
-        { id: 'gallery', label: 'معرض الصور' },
-        { id: 'tasks', label: `المهام (${tasksCount})` },
-        { id: 'calendar', label: 'التقويم' },
-        { id: 'account', label: 'الإدارة والحساب' },
-      ]
-    : [{ id: 'public', label: 'الواجهة العامة' }];
+  const countByTab: Record<string, number | undefined> = {
+    focus: focusCoursesCount,
+    courses: coursesCount,
+    paths: pathsCount,
+    library: libraryCount,
+    journal: notesCount,
+    reflections: reflectionsCount,
+    blogs: blogsCount,
+    tasks: tasksCount,
+    plan: monthsCount,
+    domains: domainsCount,
+  };
+
+  const navItems: Array<{ id: ActiveTab; label: string }> = useMemo(() => {
+    if (!showAdminNav) {
+      return [];
+    }
+    const pinnedSet = new Set(
+      pinnedNavTabs && pinnedNavTabs.length > 0
+        ? pinnedNavTabs
+        : DEFAULT_PINNED_NAV_TABS
+    );
+
+    const dynamicItems: Array<{ id: ActiveTab; label: string }> = [
+      { id: 'overview', label: 'لوحة المتابعة' },
+    ];
+
+    for (const meta of NAV_PINNABLE_TABS_META) {
+      if (!pinnedSet.has(meta.id)) continue;
+      const cnt = countByTab[meta.id];
+      const displayLabel =
+        typeof cnt === 'number' && meta.id !== 'plan' && meta.id !== 'domains'
+          ? `${meta.label} (${cnt})`
+          : meta.label;
+      dynamicItems.push({ id: meta.id, label: displayLabel });
+    }
+
+    dynamicItems.push({ id: 'account', label: 'الإدارة والحساب' });
+    return dynamicItems;
+  }, [
+    showAdminNav,
+    pinnedNavTabs,
+    focusCoursesCount,
+    coursesCount,
+    pathsCount,
+    libraryCount,
+    notesCount,
+    reflectionsCount,
+    blogsCount,
+    tasksCount,
+    monthsCount,
+    domainsCount,
+  ]);
+
+  const publicNavItems: Array<{ id: PublicPageId; label: string }> = useMemo(() => {
+    const list: Array<{ id: PublicPageId; label: string }> = [
+      { id: 'home', label: 'الرئيسية' },
+    ];
+    if (showPublicReflections) {
+      list.push({ id: 'reflections', label: 'خواطري وتأملاتي' });
+    }
+    if (showPublicBlogs) {
+      list.push({ id: 'blogs', label: 'المدونة والمقالات' });
+    }
+    return list;
+  }, [showPublicReflections, showPublicBlogs]);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -105,13 +180,58 @@ export default function Header({
   const userInitial =
     (user?.displayName || user?.email || 'م').trim().charAt(0).toUpperCase();
 
+  const handleHardReload = () => {
+    if (typeof window === 'undefined') return;
+    setReloading(true);
+    window.setTimeout(() => {
+      window.location.reload();
+    }, 120);
+  };
+
   return (
     <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b border-slate-200">
-      <div className="max-w-[1280px] mx-auto px-3 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-3">
+      {/* Subtle, Non-Intrusive Top Utility Bar (Reload · Mobile App · Desktop Standalone App) */}
+      <div className="bg-slate-50/90 border-b border-slate-100">
+        <div className="max-w-[1280px] mx-auto px-3 sm:px-6 h-8 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+          <span className="hidden sm:inline truncate">
+            منصة ميزان المعرفة · قراءة هادئة وتعلّم متوازن
+          </span>
+          <div className="flex items-center gap-1.5 mr-auto sm:mr-0 overflow-x-auto no-scrollbar">
+            <button
+              type="button"
+              onClick={handleHardReload}
+              title="إعادة تحميل الصفحة لتحديث البيانات والنسخة"
+              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:text-[#1E3A5F] hover:bg-slate-200/60 rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <RefreshCw
+                className={`w-3 h-3 ${reloading ? 'animate-spin' : ''}`}
+                aria-hidden="true"
+              />
+              <span>تحديث الصفحة</span>
+            </button>
+
+            <span className="text-slate-300 select-none" aria-hidden="true">
+              |
+            </span>
+
+            <PWAInstallButton variant="utility-mobile" />
+            <PWAInstallButton variant="utility-desktop" />
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-[1280px] mx-auto px-3 sm:px-6 h-13 sm:h-15 flex items-center justify-between gap-2 sm:gap-3">
         {/* Zone 1: Brand Wordmark + Custom Emblem */}
         <button
           type="button"
-          onClick={() => onSelectTab(showAdminNav ? 'overview' : 'public')}
+          onClick={() => {
+            if (showAdminNav) {
+              onSelectTab('overview');
+            } else {
+              onSelectPublicPage?.('home');
+              onSelectTab('public');
+            }
+          }}
           className="inline-flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1E3A5F]"
         >
           <BrandMark className="w-7 h-7 sm:w-8 sm:h-8 shrink-0" />
@@ -121,34 +241,68 @@ export default function Header({
         </button>
 
         {/* Zone 2: Horizontal Scroll-Safe Desktop Navigation */}
-        <nav
-          aria-label="التنقل الرئيسي"
-          className="hidden lg:flex items-center gap-3.5 xl:gap-4 h-full overflow-x-auto no-scrollbar"
-        >
-          {navItems.map((item) => {
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onSelectTab(item.id)}
-                className={`relative h-full inline-flex items-center text-[13px] font-medium transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F] ${
-                  isActive
-                    ? 'text-[#1E3A5F] font-semibold'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {item.label}
-                {isActive && (
-                  <span
-                    aria-hidden="true"
-                    className="absolute bottom-0 inset-x-0 h-0.5 bg-[#1E3A5F]"
-                  />
-                )}
-              </button>
-            );
-          })}
-        </nav>
+        {showAdminNav ? (
+          <nav
+            aria-label="التنقل الرئيسي"
+            className="hidden lg:flex items-center gap-3.5 xl:gap-4 h-full overflow-x-auto no-scrollbar"
+          >
+            {navItems.map((item) => {
+              const isActive = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onSelectTab(item.id)}
+                  className={`relative h-full inline-flex items-center text-[13px] font-medium transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F] ${
+                    isActive
+                      ? 'text-[#1E3A5F] font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {item.label}
+                  {isActive && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute bottom-0 inset-x-0 h-0.5 bg-[#1E3A5F]"
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        ) : (
+          <nav
+            aria-label="صفحات الموقع العام"
+            className="hidden md:flex items-center gap-5 h-full"
+          >
+            {publicNavItems.map((pItem) => {
+              const isActive = publicPage === pItem.id;
+              return (
+                <button
+                  key={pItem.id}
+                  type="button"
+                  onClick={() => {
+                    onSelectPublicPage?.(pItem.id);
+                    onSelectTab('public');
+                  }}
+                  className={`relative h-full inline-flex items-center text-sm font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    isActive
+                      ? 'text-[#1E3A5F] font-semibold'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {pItem.label}
+                  {isActive && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute bottom-0 inset-x-0 h-0.5 bg-[#1E3A5F]"
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        )}
 
         {/* Zone 3: User Account / Google Auth Control */}
         <div className="flex items-center gap-2 shrink-0 relative" ref={menuRef}>
@@ -156,12 +310,14 @@ export default function Header({
             <button
               type="button"
               onClick={onTogglePreviewPublic}
-              className={`hidden md:inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[36px] text-xs font-semibold rounded-lg border cursor-pointer transition-colors ${
+              className={`hidden md:inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[34px] text-xs font-semibold rounded-lg border cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
                 isPreviewingPublic
                   ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
                   : 'bg-[#F7F8FA] text-[#1E3A5F] border-slate-200 hover:bg-slate-100'
               }`}
-              title={isPreviewingPublic ? 'العودة للوحة الإدارة' : 'معاينة الموقع العام'}
+              title={
+                isPreviewingPublic ? 'العودة للوحة الإدارة' : 'معاينة الموقع العام'
+              }
             >
               <Eye className="w-3.5 h-3.5" aria-hidden="true" />
               <span>{isPreviewingPublic ? 'لوحة الإدارة' : 'الموقع العام'}</span>
@@ -178,21 +334,21 @@ export default function Header({
                 type="button"
                 onClick={() => setMenuOpen((v) => !v)}
                 aria-expanded={menuOpen}
-                className="inline-flex items-center gap-2 px-2.5 py-1.5 min-h-[38px] rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-2 px-2.5 py-1.5 min-h-[36px] rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 {user.photoURL ? (
                   <img
                     src={user.photoURL}
                     alt=""
                     referrerPolicy="no-referrer"
-                    className="w-7 h-7 rounded-full object-cover border border-slate-200 shrink-0"
+                    className="w-6.5 h-6.5 rounded-full object-cover border border-slate-200 shrink-0"
                   />
                 ) : (
-                  <span className="w-7 h-7 rounded-full bg-[#1E3A5F] text-white text-xs font-semibold inline-flex items-center justify-center shrink-0">
+                  <span className="w-6.5 h-6.5 rounded-full bg-[#1E3A5F] text-white text-xs font-semibold inline-flex items-center justify-center shrink-0">
                     {userInitial}
                   </span>
                 )}
-                <div className="hidden sm:flex flex-col items-start text-right leading-tight max-w-[115px]">
+                <div className="hidden sm:flex flex-col items-start text-right leading-tight max-w-[110px]">
                   <span className="text-xs font-semibold text-slate-900 truncate w-full">
                     {user.displayName || 'حسابي'}
                   </span>
@@ -232,10 +388,27 @@ export default function Header({
                           onSelectTab('overview');
                           setMenuOpen(false);
                         }}
-                        className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                        className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                       >
-                        <LayoutDashboard className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                        <LayoutDashboard
+                          className="w-3.5 h-3.5 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
                         <span>لوحة المتابعة والمحاور</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectTab('blogs');
+                          setMenuOpen(false);
+                        }}
+                        className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <BookOpenText
+                          className="w-3.5 h-3.5 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
+                        <span>المدونة والمقالات ({blogsCount})</span>
                       </button>
                       <button
                         type="button"
@@ -243,9 +416,12 @@ export default function Header({
                           onSelectTab('reflections');
                           setMenuOpen(false);
                         }}
-                        className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                        className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                       >
-                        <Feather className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                        <Feather
+                          className="w-3.5 h-3.5 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
                         <span>خواطري وتأملاتي ({reflectionsCount})</span>
                       </button>
                       <button
@@ -254,9 +430,12 @@ export default function Header({
                           onSelectTab('gallery');
                           setMenuOpen(false);
                         }}
-                        className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                        className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                       >
-                        <Images className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                        <Images
+                          className="w-3.5 h-3.5 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
                         <span>معرض الصور</span>
                       </button>
                       <button
@@ -265,9 +444,12 @@ export default function Header({
                           onSelectTab('journal');
                           setMenuOpen(false);
                         }}
-                        className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                        className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                       >
-                        <NotebookPen className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                        <NotebookPen
+                          className="w-3.5 h-3.5 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
                         <span>دفتر التلخيص والنوتس</span>
                       </button>
                       <button
@@ -276,9 +458,12 @@ export default function Header({
                           onSelectTab('account');
                           setMenuOpen(false);
                         }}
-                        className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                        className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                       >
-                        <Settings2 className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                        <Settings2
+                          className="w-3.5 h-3.5 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
                         <span>مركز الحساب والإدارة</span>
                       </button>
                       {onTogglePreviewPublic && (
@@ -288,7 +473,7 @@ export default function Header({
                             onTogglePreviewPublic();
                             setMenuOpen(false);
                           }}
-                          className="w-full px-4 py-2.5 text-right text-xs font-medium text-[#1E3A5F] hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                          className="w-full px-4 py-2 text-right text-xs font-medium text-[#1E3A5F] hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
                         >
                           <Eye className="w-3.5 h-3.5" aria-hidden="true" />
                           <span>
@@ -308,7 +493,7 @@ export default function Header({
                         setMenuOpen(false);
                         onSignOut();
                       }}
-                      className="w-full px-4 py-2.5 text-right text-xs font-medium text-red-700 hover:bg-red-50 flex items-center gap-2 cursor-pointer"
+                      className="w-full px-4 py-2 text-right text-xs font-medium text-red-700 hover:bg-red-50 flex items-center gap-2 cursor-pointer"
                     >
                       <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>تسجيل الخروج</span>
@@ -321,7 +506,7 @@ export default function Header({
             <button
               type="button"
               onClick={onGoogleSignIn}
-              className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 min-h-[38px] text-xs sm:text-sm font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
+              className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 min-h-[36px] text-xs sm:text-sm font-medium text-white bg-[#1E3A5F] rounded-lg hover:bg-[#162C49] transition-colors duration-150 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
             >
               <LogIn className="w-4 h-4 shrink-0" aria-hidden="true" />
               <span className="sm:hidden">دخول Google</span>
@@ -332,7 +517,7 @@ export default function Header({
       </div>
 
       {/* Tablet / Mobile Scrollable Secondary Nav */}
-      {showAdminNav && (
+      {showAdminNav ? (
         <nav
           aria-label="تنقل الجوال والتابلت"
           className="lg:hidden border-t border-slate-100 px-3 py-1 flex items-center gap-3 overflow-x-auto no-scrollbar snap-x"
@@ -344,13 +529,39 @@ export default function Header({
                 key={item.id}
                 type="button"
                 onClick={() => onSelectTab(item.id)}
-                className={`snap-start px-2 py-2 min-h-[40px] text-xs font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors ${
+                className={`snap-start px-2 py-2 min-h-[38px] text-xs font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
                   isActive
                     ? 'border-[#1E3A5F] text-[#1E3A5F] font-semibold'
                     : 'border-transparent text-slate-600'
                 }`}
               >
                 {item.label}
+              </button>
+            );
+          })}
+        </nav>
+      ) : (
+        <nav
+          aria-label="تنقل الموقع العام على الجوال"
+          className="md:hidden border-t border-slate-100 px-3 py-1 flex items-center gap-4 overflow-x-auto no-scrollbar"
+        >
+          {publicNavItems.map((pItem) => {
+            const isActive = publicPage === pItem.id;
+            return (
+              <button
+                key={pItem.id}
+                type="button"
+                onClick={() => {
+                  onSelectPublicPage?.(pItem.id);
+                  onSelectTab('public');
+                }}
+                className={`px-2 py-1.5 min-h-[36px] text-xs font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors cursor-pointer ${
+                  isActive
+                    ? 'border-[#1E3A5F] text-[#1E3A5F] font-semibold'
+                    : 'border-transparent text-slate-600'
+                }`}
+              >
+                {pItem.label}
               </button>
             );
           })}

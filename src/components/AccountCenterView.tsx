@@ -1,40 +1,50 @@
 import { useEffect, useState } from 'react';
 import {
   Activity,
+  ArrowUpLeft,
   BookOpen,
   CalendarDays,
   Check,
   CheckCircle2,
   Database,
   Download,
+  Edit3,
   Eye,
   FolderCog,
   Globe,
   KeyRound,
+  LayoutGrid,
   Loader2,
   PenLine,
+  Pin,
+  PinOff,
   Plus,
   RefreshCw,
   RotateCcw,
   Save,
   Shield,
+  Sparkles,
   Trash2,
   Users,
   X,
 } from 'lucide-react';
 import {
+  BlogPost,
   BookNote,
   ContentAccessGrant,
   CustomCategory,
+  DEFAULT_HUB_CATEGORIES,
+  DEFAULT_PINNED_NAV_TABS,
   DEFAULT_REFLECTION_CATEGORIES,
   DomainId,
   DomainInfo,
-  LEARNING_HUBS,
-  LearningHubId,
+  HUB_ACCENT_PRESETS,
+  LearningHubMeta,
   LearningPath,
   MonthActivities,
   MonthPlan,
   MonthStatus,
+  NAV_PINNABLE_TABS_META,
   PersonalCourse,
   PersonalReflection,
   PublicSiteConfig,
@@ -45,10 +55,12 @@ import {
   StudyHistoryEntry,
   StudyResource,
   UnifiedTask,
+  UserPreferences,
   UserProfileItem,
   VoiceDialectMode,
   WeeklyMeeting,
-  getHubMeta,
+  resolveLearningHubs,
+  setActiveLearningHubs,
 } from '../data/curriculumData';
 import { OWNER_ADMIN_EMAIL } from '../firebase';
 import {
@@ -64,25 +76,31 @@ import {
   upsertContentAccessGrant,
 } from '../services/supabaseSync';
 import { exportPlanToExcel } from '../utils/excelExport';
+import AutoResizeTextarea from './AutoResizeTextarea';
 import ConfirmDialog from './ConfirmDialog';
 import DomainsView from './DomainsView';
+import { ActiveTab } from './Header';
 import type { ActivePdfTarget } from './PDFViewerModal';
 import TwelveMonthPlanView from './TwelveMonthPlanView';
 import WeeklyMeetingsPanel from './WeeklyMeetingsPanel';
 
 type AccountSubTab =
+  | 'workspace'
+  | 'public_site'
   | 'plan'
   | 'meetings'
   | 'categories'
-  | 'data'
-  | 'public_site'
-  | 'users';
+  | 'users'
+  | 'data';
 
 interface AccountCenterViewProps {
   uid?: string;
   canEdit: boolean;
   onRequireAuth: () => void;
   voiceDialect: VoiceDialectMode;
+  preferences: UserPreferences;
+  onUpdatePreferences: (updates: Partial<UserPreferences>) => void;
+  onNavigateTab: (tab: ActiveTab) => void;
   quarters: QuarterInfo[];
   months: MonthPlan[];
   domains: DomainInfo[];
@@ -182,13 +200,25 @@ interface AccountCenterViewProps {
   reflections?: PersonalReflection[];
   reflectionCategories?: string[];
   onToggleReflectionPublic?: (id: string, isPublic: boolean) => void;
+  blogPosts?: BlogPost[];
+  onToggleBlogPublic?: (id: string, isPublic: boolean) => void;
   customReadingModes?: ReadingModeMeta[];
   onUpdateReadingModes?: (nextModes: ReadingModeMeta[]) => void;
 }
 
 export default function AccountCenterView(props: AccountCenterViewProps) {
-  const [subTab, setSubTab] = useState<AccountSubTab>('plan');
-  const [planSubMode, setPlanSubMode] = useState<'months' | 'domains'>('months');
+  const [subTab, setSubTab] = useState<AccountSubTab>('workspace');
+  const [planSubMode, setPlanSubMode] = useState<'domains' | 'months'>('domains');
+
+  // Hub Editor state
+  const hubs = resolveLearningHubs(props.preferences.customHubs);
+  const [editingHubId, setEditingHubId] = useState<string | null>(null);
+  const [creatingHub, setCreatingHub] = useState(false);
+  const [hubTitle, setHubTitle] = useState('');
+  const [hubShort, setHubShort] = useState('');
+  const [hubPurpose, setHubPurpose] = useState('');
+  const [hubPresetId, setHubPresetId] = useState('indigo');
+  const [hubCatsText, setHubCatsText] = useState('');
 
   // Custom Category state
   const [catTitle, setCatTitle] = useState('');
@@ -201,25 +231,33 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
   const [syncingManual, setSyncingManual] = useState(false);
   const [diagOpen, setDiagOpen] = useState(false);
   const [diagRunning, setDiagRunning] = useState(false);
-  const [diagResult, setDiagResult] = useState<SupabaseConnectionTestResult | null>(null);
+  const [diagResult, setDiagResult] =
+    useState<SupabaseConnectionTestResult | null>(null);
 
   // Public site editor state
-  const [siteDraft, setSiteDraft] = useState<PublicSiteConfig>(props.publicSiteConfig);
+  const [siteDraft, setSiteDraft] = useState<PublicSiteConfig>(
+    props.publicSiteConfig
+  );
   const [newSkill, setNewSkill] = useState('');
   const [editingSkillIdx, setEditingSkillIdx] = useState<number | null>(null);
   const [editingSkillVal, setEditingSkillVal] = useState('');
   const [newInterest, setNewInterest] = useState('');
-  const [editingInterestIdx, setEditingInterestIdx] = useState<number | null>(null);
+  const [editingInterestIdx, setEditingInterestIdx] = useState<number | null>(
+    null
+  );
   const [editingInterestVal, setEditingInterestVal] = useState('');
   const [savingSite, setSavingSite] = useState(false);
   const [siteSavedNotice, setSiteSavedNotice] = useState<string | null>(null);
 
   // Users RBAC & Content Grants state
   const [profiles, setProfiles] = useState<UserProfileItem[]>([]);
-  const [grantsByUid, setGrantsByUid] = useState<Record<string, ContentAccessGrant>>({});
+  const [grantsByUid, setGrantsByUid] = useState<
+    Record<string, ContentAccessGrant>
+  >({});
   const [loadingProfiles, setLoadingProfiles] = useState(false);
   const [profilesError, setProfilesError] = useState<string | null>(null);
-  const [grantModalUser, setGrantModalUser] = useState<UserProfileItem | null>(null);
+  const [grantModalUser, setGrantModalUser] =
+    useState<UserProfileItem | null>(null);
   const [grantDraft, setGrantDraft] = useState<{
     courseDocIds: string[];
     includeCourseNotes: boolean;
@@ -241,6 +279,110 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
   });
   const [grantNoteSearch, setGrantNoteSearch] = useState('');
   const [savingGrant, setSavingGrant] = useState(false);
+
+  const pinnedSet = new Set(
+    props.preferences.pinnedNavTabs && props.preferences.pinnedNavTabs.length > 0
+      ? props.preferences.pinnedNavTabs
+      : DEFAULT_PINNED_NAV_TABS
+  );
+
+  const handleTogglePinTab = (tabId: string) => {
+    if (!props.canEdit) return props.onRequireAuth();
+    const current = Array.from(pinnedSet);
+    const next = pinnedSet.has(tabId)
+      ? current.filter((id) => id !== tabId)
+      : [...current, tabId];
+    // Guarantee at least 1 tab stays pinned besides overview/account
+    if (next.length === 0) return;
+    props.onUpdatePreferences({ pinnedNavTabs: next });
+  };
+
+  const openHubForm = (hub?: LearningHubMeta) => {
+    if (!props.canEdit) return props.onRequireAuth();
+    if (hub) {
+      setCreatingHub(false);
+      setEditingHubId(hub.id);
+      setHubTitle(hub.title);
+      setHubShort(hub.shortTitle);
+      setHubPurpose(hub.purpose);
+      const match =
+        HUB_ACCENT_PRESETS.find((p) => p.accentHex === hub.accentHex) ??
+        HUB_ACCENT_PRESETS[2];
+      setHubPresetId(match.id);
+      const cats =
+        props.preferences.hubCategories?.[hub.id] &&
+        props.preferences.hubCategories[hub.id].length > 0
+          ? props.preferences.hubCategories[hub.id]
+          : hub.defaultCategories;
+      setHubCatsText(cats.join('\n'));
+    } else {
+      setCreatingHub(true);
+      setEditingHubId(`hub_${Date.now()}`);
+      setHubTitle('');
+      setHubShort('');
+      setHubPurpose('');
+      setHubPresetId('indigo');
+      setHubCatsText('عام\nأساسي\nمتقدم');
+    }
+  };
+
+  const handleSaveHub = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!props.canEdit || !editingHubId) return;
+    const cleanTitle = hubTitle.trim();
+    if (!cleanTitle) return;
+    const cleanShort = hubShort.trim() || cleanTitle;
+    const preset =
+      HUB_ACCENT_PRESETS.find((p) => p.id === hubPresetId) ??
+      HUB_ACCENT_PRESETS[2];
+    const cats = Array.from(
+      new Set(
+        hubCatsText
+          .split(/[\n،,]/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      )
+    );
+    const finalCats = cats.length > 0 ? cats : ['عام', 'أساسي', 'متقدم'];
+
+    const hubItem: LearningHubMeta = {
+      id: editingHubId,
+      title: cleanTitle,
+      shortTitle: cleanShort,
+      englishTitle: cleanShort,
+      purpose: hubPurpose.trim(),
+      accentHex: preset.accentHex,
+      badgeClass: preset.badgeClass,
+      defaultCategories: finalCats,
+    };
+
+    const nextHubs = creatingHub
+      ? [...hubs, hubItem]
+      : hubs.map((h) => (h.id === editingHubId ? { ...h, ...hubItem } : h));
+    const nextHubCats = {
+      ...(props.preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES),
+      [editingHubId]: finalCats,
+    };
+
+    setActiveLearningHubs(nextHubs);
+    props.onUpdatePreferences({
+      customHubs: nextHubs,
+      hubCategories: nextHubCats,
+    });
+    setEditingHubId(null);
+    setCreatingHub(false);
+  };
+
+  const handleDeleteCustomHub = (hubId: string) => {
+    if (!props.canEdit || hubs.length <= 1) return;
+    const nextHubs = hubs.filter((h) => h.id !== hubId);
+    setActiveLearningHubs(nextHubs);
+    props.onUpdatePreferences({ customHubs: nextHubs });
+    if (editingHubId === hubId) {
+      setEditingHubId(null);
+      setCreatingHub(false);
+    }
+  };
 
   const allReflectionCats = Array.from(
     new Set([
@@ -367,7 +509,7 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
         ...siteDraft,
         updatedAtMs: Date.now(),
       });
-      setSiteSavedNotice('تم حفظ إعدادات الموقع العام ومزامنتها.');
+      setSiteSavedNotice('تم حفظ إعدادات الموقع العام وصفحاته بنجاح.');
     } finally {
       setSavingSite(false);
     }
@@ -395,9 +537,13 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
 
   const domainBreakdown = props.domains.map((domain) => {
     const matchingMonths = props.months.filter(
-      (m) => m.foundational.domainId === domain.id || m.exploratory.domainId === domain.id
+      (m) =>
+        m.foundational.domainId === domain.id ||
+        m.exploratory.domainId === domain.id
     );
-    const completedMonths = matchingMonths.filter((m) => m.status === 'completed').length;
+    const completedMonths = matchingMonths.filter(
+      (m) => m.status === 'completed'
+    ).length;
     return {
       domain,
       total: matchingMonths.length,
@@ -405,1547 +551,2092 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
     };
   });
 
-  const subTabs: Array<{ id: AccountSubTab; label: string; icon: typeof CalendarDays }> = [
-    { id: 'plan', label: 'الخطة السنوية والمجالات', icon: CalendarDays },
-    { id: 'meetings', label: 'اللقاءات والتراكمي', icon: Activity },
-    { id: 'categories', label: 'التصنيفات وسجل النشاط', icon: FolderCog },
-    { id: 'public_site', label: 'تخصيص الموقع العام', icon: Globe },
-    { id: 'users', label: 'المستخدمون والصلاحيات', icon: Users },
-    { id: 'data', label: 'البيانات والنسخ الاحتياطي', icon: Database },
+  const navRailItems: Array<{
+    id: AccountSubTab;
+    label: string;
+    subtitle: string;
+    icon: typeof LayoutGrid;
+  }> = [
+    {
+      id: 'workspace',
+      label: 'الأقسام والشريط العلوي',
+      subtitle: 'تثبيت التبويبات وتعديل المجالات',
+      icon: LayoutGrid,
+    },
+    {
+      id: 'public_site',
+      label: 'الموقع العام والنشر',
+      subtitle: 'الرئيسية والخواطر والمدونة',
+      icon: Globe,
+    },
+    {
+      id: 'plan',
+      label: 'المجالات وخطة السنة',
+      subtitle: 'المحاور المعرفية و12 شهرًا',
+      icon: CalendarDays,
+    },
+    {
+      id: 'meetings',
+      label: 'اللقاءات والتراكمي',
+      subtitle: 'متابعة أسبوعية وإحصائيات',
+      icon: Activity,
+    },
+    {
+      id: 'categories',
+      label: 'التصنيفات والنشاط',
+      subtitle: 'تصنيفات مخصّصة وسجل العمل',
+      icon: FolderCog,
+    },
+    {
+      id: 'users',
+      label: 'المستخدمون والصلاحيات',
+      subtitle: 'إدارة الحسابات والمحتوى المخصّص',
+      icon: Users,
+    },
+    {
+      id: 'data',
+      label: 'البيانات والنسخ',
+      subtitle: 'Excel والمزامنة والتشخيص',
+      icon: Database,
+    },
   ];
 
   return (
     <div className="space-y-6">
-      {/* Header + Sub-nav */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900">
-              مركز الحساب والإدارة
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-600 mt-1">
-              إدارة الخطة السنوية، اللقاءات، التصنيفات، تخصيص الصفحة العامة للزوار، وإدارة صلاحيات المستخدمين والبيانات.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={props.onPreviewPublicSite}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] text-xs font-semibold text-[#1E3A5F] bg-[#F7F8FA] border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer"
-          >
-            <Eye className="w-4 h-4" aria-hidden="true" />
-            <span>معاينة الموقع العام</span>
-          </button>
+      {/* Calm Header Bar */}
+      <div className="bg-white border border-slate-200 rounded-2xl px-6 py-5 flex flex-wrap items-center justify-between gap-4">
+        <div className="space-y-1">
+          <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900">
+            الإدارة والحساب
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500">
+            تحكّم هادئ في تثبيت أقسامك بالشريط العلوي، وتعديل مجالات التركيز، وإدارة الموقع العام والصلاحيات.
+          </p>
         </div>
 
-        <div className="flex flex-wrap gap-2 pt-1 border-t border-slate-100">
-          {subTabs.map((t) => {
-            const Icon = t.icon;
-            const active = subTab === t.id;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setSubTab(t.id)}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[38px] text-xs font-semibold rounded-lg border cursor-pointer transition-colors ${
-                  active
-                    ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-                    : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>{t.label}</span>
-              </button>
-            );
-          })}
-        </div>
+        <button
+          type="button"
+          onClick={props.onPreviewPublicSite}
+          className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[38px] text-xs font-semibold text-[#1E3A5F] bg-[#F7F8FA] border border-slate-200 hover:bg-slate-100 rounded-xl cursor-pointer whitespace-nowrap shrink-0"
+        >
+          <Eye className="w-4 h-4" aria-hidden="true" />
+          <span>معاينة الموقع العام</span>
+        </button>
       </div>
 
-      {/* Sub-tab 1: 12-Month Plan & Domains */}
-      {subTab === 'plan' && (
-        <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setPlanSubMode('months')}
-              className={`px-4 py-2 text-xs font-semibold rounded-lg border cursor-pointer ${
-                planSubMode === 'months'
-                  ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-                  : 'bg-white text-slate-700 border-slate-200'
-              }`}
-            >
-              الخطة الشهرية والوحدات (12 وحدة)
-            </button>
-            <button
-              type="button"
-              onClick={() => setPlanSubMode('domains')}
-              className={`px-4 py-2 text-xs font-semibold rounded-lg border cursor-pointer ${
-                planSubMode === 'domains'
-                  ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-                  : 'bg-white text-slate-700 border-slate-200'
-              }`}
-            >
-              المحاور المعرفية والمفكرون ({props.domains.length})
-            </button>
-          </div>
+      {/* Calm Two-Column Settings Layout (Sidebar Rail on Desktop, Clean Strip on Mobile) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <aside className="lg:col-span-3 lg:sticky lg:top-28">
+          <nav
+            aria-label="أقسام الإدارة"
+            className="bg-white border border-slate-200 rounded-2xl p-2 flex lg:flex-col gap-1.5 overflow-x-auto no-scrollbar"
+          >
+            {navRailItems.map((item) => {
+              const Icon = item.icon;
+              const active = subTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setSubTab(item.id)}
+                  className={`flex items-start gap-2.5 px-3 py-2.5 rounded-xl text-right transition-colors whitespace-nowrap lg:whitespace-normal shrink-0 cursor-pointer ${
+                    active
+                      ? 'bg-[#F1F5F9] text-[#1E3A5F]'
+                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                  }`}
+                >
+                  <Icon
+                    className={`w-4 h-4 mt-0.5 shrink-0 ${
+                      active ? 'text-[#1E3A5F]' : 'text-slate-400'
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0">
+                    <p
+                      className={`text-xs sm:text-[13px] leading-snug ${
+                        active ? 'font-bold text-[#1E3A5F]' : 'font-semibold'
+                      }`}
+                    >
+                      {item.label}
+                    </p>
+                    <p className="hidden lg:block text-[11px] text-slate-400 mt-0.5">
+                      {item.subtitle}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
 
-          {planSubMode === 'months' ? (
-            <TwelveMonthPlanView
-              uid={props.uid}
-              canEdit={props.canEdit}
-              onRequireAuth={props.onRequireAuth}
-              voiceDialect={props.voiceDialect}
-              quarters={props.quarters}
-              months={props.months}
-              domains={props.domains}
-              courses={props.courses}
-              selectedMonthId={props.selectedMonthId}
-              domainFilter={props.domainFilter}
-              onSelectMonth={props.onSelectMonth}
-              onChangeDomainFilter={props.onChangeDomainFilter}
-              onOpenPdf={props.onOpenPdf}
-              onAddQuarter={props.onAddQuarter}
-              onUpdateQuarter={props.onUpdateQuarter}
-              onDeleteQuarter={props.onDeleteQuarter}
-              onAddMonth={props.onAddMonth}
-              onUpdateMonth={props.onUpdateMonth}
-              onDeleteMonth={props.onDeleteMonth}
-              onUpdateMonthStatus={props.onUpdateMonthStatus}
-              onToggleActivity={props.onToggleActivity}
-              onUpdateMonthNotes={props.onUpdateMonthNotes}
-              onUpdateTrackItem={props.onUpdateTrackItem}
-              onToggleMonthTask={props.onToggleMonthTask}
-              onAddMonthTask={props.onAddMonthTask}
-              onDeleteMonthTask={props.onDeleteMonthTask}
-              onAddMonthResource={props.onAddMonthResource}
-              onUpdateMonthResource={props.onUpdateMonthResource}
-              onDeleteMonthResource={props.onDeleteMonthResource}
-              onOpenBookNote={props.onOpenBookNote ?? (() => {})}
-              customReadingModes={props.customReadingModes}
-              onUpdateReadingModes={props.onUpdateReadingModes}
-            />
-          ) : (
-            <DomainsView
-              canEdit={props.canEdit}
-              domains={props.domains}
-              months={props.months}
-              onFilterMonthsByDomain={(dId) => {
-                props.onChangeDomainFilter(dId);
-                setPlanSubMode('months');
-              }}
-              onAddDomain={props.onAddDomain}
-              onUpdateDomain={props.onUpdateDomain}
-              onDeleteDomain={props.onDeleteDomain}
-            />
-          )}
-        </div>
-      )}
+        <div className="lg:col-span-9 space-y-6">
+          {/* SECTION 1: Workspace Navigation Pins & Learning Hubs Customizer */}
+          {subTab === 'workspace' && (
+            <div className="space-y-6">
+              {/* Navbar Pinning & Quick Launcher */}
+              <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
+                <div className="space-y-1 pb-3 border-b border-slate-100">
+                  <h2 className="font-editorial text-xl font-bold text-slate-900">
+                    الأقسام المثبتة في الشريط العلوي ({pinnedSet.size})
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    اختر الأقسام التي تظهر دائمًا في الشريط العلوي لسهولة الوصول، بينما تبقى بقية الأقسام متاحة للفتح مباشرة من هنا في أي وقت.
+                  </p>
+                </div>
 
-      {/* Sub-tab 2: Cumulative Stats & Weekly Meetings */}
-      {subTab === 'meetings' && (
-        <div className="space-y-6">
-          <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
-            <h2 className="font-editorial text-xl font-bold text-slate-900">
-              التقدم التراكمي عبر المجالات
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-              {domainBreakdown.map(({ domain, total, completed }) => {
-                const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
-                return (
-                  <div
-                    key={domain.id}
-                    className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-bold text-slate-900 truncate">
-                        {domain.title}
-                      </span>
-                      <span className="text-xs font-semibold text-[#1E3A5F] tabular-nums">
-                        {completed} / {total}
-                      </span>
-                    </div>
-                    <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                  {NAV_PINNABLE_TABS_META.map((item) => {
+                    const isPinned = pinnedSet.has(item.id);
+                    return (
                       <div
-                        className="h-full bg-[#1E3A5F]"
-                        style={{ width: `${pct}%` }}
+                        key={item.id}
+                        className={`p-4 rounded-xl border transition-colors flex flex-col justify-between gap-3 ${
+                          isPinned
+                            ? 'bg-[#F8FAFC] border-[#1E3A5F]/25'
+                            : 'bg-white border-slate-200'
+                        }`}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-bold text-slate-900">
+                              {item.label}
+                            </p>
+                            <span
+                              className={`text-[10px] font-semibold ${
+                                isPinned ? 'text-[#1E3A5F]' : 'text-slate-400'
+                              }`}
+                            >
+                              {isPinned ? 'ظاهر بالشريط' : 'مخفي بالداخل'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 leading-relaxed">
+                            {item.description}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                          <button
+                            type="button"
+                            onClick={() => props.onNavigateTab(item.id)}
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                          >
+                            <span>فتح القسم</span>
+                            <ArrowUpLeft
+                              className="w-3.5 h-3.5"
+                              aria-hidden="true"
+                            />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleTogglePinTab(item.id)}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg border cursor-pointer ${
+                              isPinned
+                                ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            {isPinned ? (
+                              <>
+                                <PinOff className="w-3 h-3" aria-hidden="true" />
+                                <span>إخفاء من الشريط</span>
+                              </>
+                            ) : (
+                              <>
+                                <Pin className="w-3 h-3" aria-hidden="true" />
+                                <span>تثبيت بالشريط</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* Editable Focus Hubs Manager (Edit existing titles / add 4th+ Hub) */}
+              <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Sparkles
+                        className="w-4 h-4 text-[#1E3A5F]"
+                        aria-hidden="true"
+                      />
+                      <h2 className="font-editorial text-xl font-bold text-slate-900">
+                        تخصيص مجالات التركيز والمحاور ({hubs.length})
+                      </h2>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      عدّل عنوان أي مجال حالي أو أضف مجالاً رابعًا وخامسًا للتركيز عليه في الكورسات والمسارات والمكتبة.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openHubForm()}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer whitespace-nowrap"
+                  >
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>إضافة مجال / محور {hubs.length + 1}</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  {hubs.map((h) => (
+                    <div
+                      key={h.id}
+                      className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 flex flex-col justify-between gap-3"
+                    >
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className={`px-2 py-0.5 text-[11px] font-bold rounded-md border ${h.badgeClass}`}
+                          >
+                            {h.shortTitle}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => openHubForm(h)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer"
+                            >
+                              <Edit3 className="w-3 h-3" aria-hidden="true" />
+                              <span>تعديل</span>
+                            </button>
+                            {hubs.length > 1 &&
+                              h.id !== 'marketing' &&
+                              h.id !== 'dental_career' &&
+                              h.id !== 'knowledge' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCustomHub(h.id)}
+                                  aria-label={`حذف ${h.title}`}
+                                  className="p-1.5 text-slate-400 hover:text-red-700 rounded-lg cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                          </div>
+                        </div>
+                        <p className="text-sm font-bold text-slate-900">
+                          {h.title}
+                        </p>
+                        {h.purpose && (
+                          <p className="text-xs text-slate-600 leading-relaxed">
+                            {h.purpose}
+                          </p>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-400 tabular-nums">
+                        {
+                          (
+                            props.preferences.hubCategories?.[h.id] ??
+                            h.defaultCategories
+                          ).length
+                        }{' '}
+                        تصنيف فرعي مرتبط
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {editingHubId && (
+                  <form
+                    onSubmit={handleSaveHub}
+                    className="p-5 rounded-2xl bg-[#F8FAFC] border border-[#1E3A5F]/25 space-y-4"
+                  >
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-slate-900">
+                        {creatingHub
+                          ? `إضافة مجال تركيز جديد (${hubs.length + 1})`
+                          : `تعديل المجال: ${hubTitle}`}
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingHubId(null);
+                          setCreatingHub(false);
+                        }}
+                        className="p-1 text-slate-500 hover:text-slate-900 cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          عنوان المجال *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={hubTitle}
+                          onChange={(e) => setHubTitle(e.target.value)}
+                          placeholder="مثلاً: الذكاء الاصطناعي والبرمجة"
+                          className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-xl"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          الاسم المختصر
+                        </label>
+                        <input
+                          type="text"
+                          value={hubShort}
+                          onChange={(e) => setHubShort(e.target.value)}
+                          placeholder="مثلاً: التقنية والبرمجة"
+                          className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-xl"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        وصف المجال وغايته
+                      </label>
+                      <AutoResizeTextarea
+                        minRows={2}
+                        value={hubPurpose}
+                        onChange={(e) => setHubPurpose(e.target.value)}
+                        className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-xl"
                       />
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
 
-          <WeeklyMeetingsPanel
-            canEdit={props.canEdit}
-            onRequireAuth={props.onRequireAuth}
-            meetings={props.weeklyMeetings}
-            onAddMeeting={props.onAddWeeklyMeeting}
-            onUpdateMeeting={props.onUpdateWeeklyMeeting}
-            onDeleteMeeting={props.onDeleteWeeklyMeeting}
-            onCreateTaskFromFollowUp={(t) => props.onAddUnifiedTask(t)}
-            onOpenCalendar={props.onOpenCalendar}
-          />
-        </div>
-      )}
-
-      {/* Sub-tab 3: Custom Categories & Activity History */}
-      {subTab === 'categories' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
-            <h2 className="font-editorial text-xl font-bold text-slate-900">
-              التصنيفات المخصّصة
-            </h2>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!catTitle.trim()) return;
-                props.onAddCustomCategory(
-                  catTitle.trim(),
-                  catDesc.trim(),
-                  catColor,
-                  catHub
-                );
-                setCatTitle('');
-                setCatDesc('');
-              }}
-              className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-3"
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <input
-                  type="text"
-                  value={catTitle}
-                  onChange={(e) => setCatTitle(e.target.value)}
-                  placeholder="اسم التصنيف..."
-                  className="px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
-                />
-                <select
-                  value={catHub}
-                  onChange={(e) => setCatHub(e.target.value as CustomCategory['hubId'])}
-                  className="px-2.5 py-2 text-xs bg-white border border-slate-300 rounded-lg"
-                >
-                  <option value="all">جميع المحاور</option>
-                  {LEARNING_HUBS.map((h) => (
-                    <option key={h.id} value={h.id}>
-                      {h.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <input
-                  type="text"
-                  value={catDesc}
-                  onChange={(e) => setCatDesc(e.target.value)}
-                  placeholder="وصف مختصر..."
-                  className="flex-1 min-w-[160px] px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
-                />
-                <select
-                  value={catColor}
-                  onChange={(e) =>
-                    setCatColor(e.target.value as CustomCategory['color'])
-                  }
-                  className="px-2.5 py-2 text-xs bg-white border border-slate-300 rounded-lg"
-                >
-                  <option value="navy">كحلي</option>
-                  <option value="emerald">أخضر</option>
-                  <option value="amber">ذهبي</option>
-                  <option value="slate">رمادي</option>
-                </select>
-                <button
-                  type="submit"
-                  disabled={!catTitle.trim()}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg disabled:opacity-45 cursor-pointer"
-                >
-                  إضافة
-                </button>
-              </div>
-            </form>
-
-            <div className="space-y-2">
-              {props.customCategories.map((cat) => (
-                <div
-                  key={cat.id}
-                  className="p-3 bg-[#F7F8FA] border border-slate-200 rounded-lg flex items-center justify-between gap-2"
-                >
-                  <div>
-                    <p className="text-xs font-bold text-slate-900">{cat.title}</p>
-                    {cat.description && (
-                      <p className="text-[11px] text-slate-500">{cat.description}</p>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => props.onDeleteCustomCategory(cat.id)}
-                    aria-label="حذف التصنيف"
-                    className="p-1.5 text-slate-400 hover:text-red-700 cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="font-editorial text-xl font-bold text-slate-900">
-                سجل النشاط والدراسة ({props.history.length})
-              </h2>
-              {props.history.length > 0 && (
-                <button
-                  type="button"
-                  onClick={props.onClearHistory}
-                  className="text-xs text-red-700 hover:underline cursor-pointer"
-                >
-                  مسح السجل
-                </button>
-              )}
-            </div>
-
-            {props.history.length === 0 ? (
-              <p className="text-xs text-slate-500 py-4">لا يوجد نشاط مسجّل بعد.</p>
-            ) : (
-              <div className="space-y-2 max-h-[460px] overflow-y-auto">
-                {props.history.map((entry) => (
-                  <button
-                    key={entry.id}
-                    type="button"
-                    onClick={() => props.onNavigateFromHistory(entry)}
-                    className="w-full text-right p-3 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
-                      <span className="font-semibold text-[#1E3A5F]">
-                        {entry.title}
+                    <div>
+                      <span className="block text-xs font-semibold text-slate-700 mb-1.5">
+                        لون التمييز
                       </span>
-                      <span>{entry.timestampLabel}</span>
+                      <div className="flex flex-wrap gap-2">
+                        {HUB_ACCENT_PRESETS.map((p) => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => setHubPresetId(p.id)}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border cursor-pointer ${
+                              hubPresetId === p.id
+                                ? `${p.badgeClass} font-bold ring-2 ring-[#1E3A5F]/20`
+                                : 'bg-white border-slate-200 text-slate-700'
+                            }`}
+                          >
+                            <span
+                              className="w-2.5 h-2.5 rounded-sm shrink-0"
+                              style={{ backgroundColor: p.accentHex }}
+                            />
+                            <span>{p.label}</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    {entry.detail && (
-                      <p className="text-xs text-slate-700 mt-1 truncate">
-                        {entry.detail}
-                      </p>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </section>
-        </div>
-      )}
 
-      {/* Sub-tab 4: Public Homepage Editor & Publish Controls */}
-      {subTab === 'public_site' && (
-        <div className="space-y-6">
-          <form
-            onSubmit={handleSavePublicConfig}
-            className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="font-editorial text-xl font-bold text-slate-900">
-                  تحرير الواجهة العامة للزوار
-                </h2>
-                <p className="text-xs text-slate-500">
-                  تظهر هذه المعلومات للزوار غير المسجلين وللمستخدمين العاديين فقط.
-                </p>
-              </div>
-              <button
-                type="submit"
-                disabled={savingSite}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
-              >
-                {savingSite ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Save className="w-3.5 h-3.5" />
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        التصنيفات الفرعية (سطر لكل تصنيف)
+                      </label>
+                      <AutoResizeTextarea
+                        minRows={3}
+                        value={hubCatsText}
+                        onChange={(e) => setHubCatsText(e.target.value)}
+                        className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl"
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingHubId(null);
+                          setCreatingHub(false);
+                        }}
+                        className="px-4 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg cursor-pointer"
+                      >
+                        إلغاء
+                      </button>
+                      <button
+                        type="submit"
+                        className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                      >
+                        <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>حفظ التغييرات</span>
+                      </button>
+                    </div>
+                  </form>
                 )}
-                <span>حفظ التغييرات</span>
-              </button>
+              </section>
             </div>
+          )}
 
-            {siteSavedNotice && (
-              <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800">
-                {siteSavedNotice}
-              </div>
-            )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  العنوان الرئيسي للواجهة
-                </label>
-                <input
-                  type="text"
-                  value={siteDraft.heroTitle}
-                  onChange={(e) =>
-                    setSiteDraft((p) => ({ ...p, heroTitle: e.target.value }))
-                  }
-                  className="w-full px-3 py-2 text-sm bg-[#F7F8FA] border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  العنوان الفرعي
-                </label>
-                <input
-                  type="text"
-                  value={siteDraft.heroSubtitle}
-                  onChange={(e) =>
-                    setSiteDraft((p) => ({ ...p, heroSubtitle: e.target.value }))
-                  }
-                  className="w-full px-3 py-2 text-sm bg-[#F7F8FA] border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                نبذة تعريفية
-              </label>
-              <textarea
-                rows={3}
-                value={siteDraft.introBio}
-                onChange={(e) =>
-                  setSiteDraft((p) => ({ ...p, introBio: e.target.value }))
-                }
-                className="w-full px-3 py-2 text-sm bg-[#F7F8FA] border border-slate-300 rounded-lg"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  الخلفية والخبرة
-                </label>
-                <textarea
-                  rows={3}
-                  value={siteDraft.backgroundText}
-                  onChange={(e) =>
-                    setSiteDraft((p) => ({ ...p, backgroundText: e.target.value }))
-                  }
-                  className="w-full px-3 py-2 text-sm bg-[#F7F8FA] border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  فلسفة التعلّم
-                </label>
-                <textarea
-                  rows={3}
-                  value={siteDraft.philosophyText}
-                  onChange={(e) =>
-                    setSiteDraft((p) => ({ ...p, philosophyText: e.target.value }))
-                  }
-                  className="w-full px-3 py-2 text-sm bg-[#F7F8FA] border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-
-            {/* Skills & Interests with Inline Edit */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2.5">
-                <p className="text-xs font-bold text-slate-800">المهارات الظاهرة</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {siteDraft.skills.map((sk, idx) =>
-                    editingSkillIdx === idx ? (
-                      <div
-                        key={`edit-sk-${idx}`}
-                        className="inline-flex items-center gap-1 bg-white border border-[#1E3A5F] rounded-md px-1.5 py-0.5"
-                      >
-                        <input
-                          type="text"
-                          autoFocus
-                          value={editingSkillVal}
-                          onChange={(e) => setEditingSkillVal(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              const clean = editingSkillVal.trim();
-                              if (clean) {
-                                setSiteDraft((p) => ({
-                                  ...p,
-                                  skills: p.skills.map((s, i) => (i === idx ? clean : s)),
-                                }));
-                              }
-                              setEditingSkillIdx(null);
-                            } else if (e.key === 'Escape') {
-                              setEditingSkillIdx(null);
-                            }
-                          }}
-                          className="w-28 text-xs focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const clean = editingSkillVal.trim();
-                            if (clean) {
-                              setSiteDraft((p) => ({
-                                ...p,
-                                skills: p.skills.map((s, i) => (i === idx ? clean : s)),
-                              }));
-                            }
-                            setEditingSkillIdx(null);
-                          }}
-                          className="text-emerald-700 cursor-pointer"
-                          aria-label="حفظ التعديل"
-                        >
-                          <Check className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ) : (
-                      <span
-                        key={`${sk}-${idx}`}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-md"
-                      >
-                        <span>{sk}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingSkillIdx(idx);
-                            setEditingSkillVal(sk);
-                          }}
-                          aria-label={`تعديل ${sk}`}
-                          className="text-slate-400 hover:text-[#1E3A5F] cursor-pointer"
-                        >
-                          <PenLine className="w-2.5 h-2.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setSiteDraft((p) => ({
-                              ...p,
-                              skills: p.skills.filter((_, i) => i !== idx),
-                            }))
-                          }
-                          aria-label={`حذف ${sk}`}
-                          className="text-slate-400 hover:text-red-700 cursor-pointer"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    )
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={newSkill}
-                    onChange={(e) => setNewSkill(e.target.value)}
-                    placeholder="أضف مهارة..."
-                    className="flex-1 px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const clean = newSkill.trim();
-                      if (!clean || siteDraft.skills.includes(clean)) return;
-                      setSiteDraft((p) => ({ ...p, skills: [...p.skills, clean] }));
-                      setNewSkill('');
-                    }}
-                    className="px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
-                  >
-                    إضافة
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2.5">
-                <p className="text-xs font-bold text-slate-800">الاهتمامات الظاهرة</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {siteDraft.interests.map((intr, idx) =>
-                    editingInterestIdx === idx ? (
-                      <div
-                        key={`edit-intr-${idx}`}
-                        className="inline-flex items-center gap-1 bg-white border border-[#1E3A5F] rounded-md px-1.5 py-0.5"
-                      >
-                        <input
-                          type="text"
-                          autoFocus
-                          value={editingInterestVal}
-                          onChange={(e) => setEditingInterestVal(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              const clean = editingInterestVal.trim();
-                              if (clean) {
-                                setSiteDraft((p) => ({
-                                  ...p,
-                                  interests: p.interests.map((s, i) =>
-                                    i === idx ? clean : s
-                                  ),
-                                }));
-                              }
-                              setEditingInterestIdx(null);
-                            } else if (e.key === 'Escape') {
-                              setEditingInterestIdx(null);
-                            }
-                          }}
-                          className="w-28 text-xs focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const clean = editingInterestVal.trim();
-                            if (clean) {
-                              setSiteDraft((p) => ({
-                                ...p,
-                                interests: p.interests.map((s, i) =>
-                                  i === idx ? clean : s
-                                ),
-                              }));
-                            }
-                            setEditingInterestIdx(null);
-                          }}
-                          className="text-emerald-700 cursor-pointer"
-                          aria-label="حفظ التعديل"
-                        >
-                          <Check className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ) : (
-                      <span
-                        key={`${intr}-${idx}`}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-md"
-                      >
-                        <span>{intr}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingInterestIdx(idx);
-                            setEditingInterestVal(intr);
-                          }}
-                          aria-label={`تعديل ${intr}`}
-                          className="text-slate-400 hover:text-[#1E3A5F] cursor-pointer"
-                        >
-                          <PenLine className="w-2.5 h-2.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setSiteDraft((p) => ({
-                              ...p,
-                              interests: p.interests.filter((_, i) => i !== idx),
-                            }))
-                          }
-                          aria-label={`حذف ${intr}`}
-                          className="text-slate-400 hover:text-red-700 cursor-pointer"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    )
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={newInterest}
-                    onChange={(e) => setNewInterest(e.target.value)}
-                    placeholder="أضف اهتمامًا..."
-                    className="flex-1 px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const clean = newInterest.trim();
-                      if (!clean || siteDraft.interests.includes(clean)) return;
-                      setSiteDraft((p) => ({
-                        ...p,
-                        interests: [...p.interests, clean],
-                      }));
-                      setNewInterest('');
-                    }}
-                    className="px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
-                  >
-                    إضافة
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Visibility Toggles */}
-            <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-3">
-              <p className="text-xs font-bold text-slate-800">
-                إظهار / إخفاء الأقسام في الصفحة العامة
-              </p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 text-xs">
-                {(
-                  [
-                    ['showHero', 'الواجهة التعريفية'],
-                    ['showBackground', 'الخلفية المهنية'],
-                    ['showPhilosophy', 'فلسفة التعلّم'],
-                    ['showSkills', 'المهارات'],
-                    ['showInterests', 'الاهتمامات'],
-                    ['showCourses', 'الكورسات المنشورة'],
-                    ['showPaths', 'المسارات المنشورة'],
-                    ['showBooks', 'الكتب المنشورة'],
-                    ['showReflections', 'الخواطر المنشورة'],
-                  ] as const
-                ).map(([key, label]) => (
-                  <label
-                    key={key}
-                    className="inline-flex items-center gap-2 p-2 bg-white border border-slate-200 rounded-lg cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={siteDraft.visibilityFlags[key] !== false}
-                      onChange={(e) =>
-                        setSiteDraft((p) => ({
-                          ...p,
-                          visibilityFlags: {
-                            ...p.visibilityFlags,
-                            [key]: e.target.checked,
-                          },
-                        }))
-                      }
-                    />
-                    <span>{label}</span>
-                  </label>
-                ))}
-              </div>
-
-              {allReflectionCats.length > 0 && (
-                <div className="pt-3 border-t border-slate-200/80 space-y-2">
-                  <p className="text-xs font-bold text-slate-800">
-                    تصنيفات الخواطر المنشورة تلقائيًا للعامة:
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {allReflectionCats.map((cat) => {
-                      const pubCats = siteDraft.publicReflectionCategories ?? [];
-                      const checked = pubCats.includes(cat);
-                      return (
-                        <label
-                          key={cat}
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border cursor-pointer ${
-                            checked
-                              ? 'bg-emerald-50 border-emerald-200 text-emerald-900 font-semibold'
-                              : 'bg-white border-slate-200 text-slate-700'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) =>
-                              setSiteDraft((p) => {
-                                const prev = p.publicReflectionCategories ?? [];
-                                const next = e.target.checked
-                                  ? Array.from(new Set([...prev, cat]))
-                                  : prev.filter((c) => c !== cat);
-                                return { ...p, publicReflectionCategories: next };
-                              })
-                            }
-                          />
-                          <span>{cat}</span>
-                        </label>
-                      );
-                    })}
+          {/* SECTION 2: Public Website & Multi-Page Controls */}
+          {subTab === 'public_site' && (
+            <div className="space-y-6">
+              <form
+                onSubmit={handleSavePublicConfig}
+                className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-editorial text-xl font-bold text-slate-900">
+                      إعدادات الموقع العام وصفحاته الثلاث
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      يتكون الموقع العام للزوار من: الرئيسية، الخواطر والتأملات، والمدونة والمقالات.
+                    </p>
                   </div>
+                  <button
+                    type="submit"
+                    disabled={savingSite}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer"
+                  >
+                    {savingSite ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Save className="w-3.5 h-3.5" />
+                    )}
+                    <span>حفظ التغييرات</span>
+                  </button>
                 </div>
-              )}
-            </div>
 
-            {/* Custom Sections */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-bold text-slate-800">
-                  الأقسام المخصّصة ({siteDraft.sections.length})
-                </p>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setSiteDraft((p) => ({
-                      ...p,
-                      sections: [
-                        ...p.sections,
-                        {
-                          id: `sec-${Date.now()}`,
-                          title: 'قسم جديد',
-                          body: '',
-                          visible: true,
-                        },
-                      ],
-                    }))
-                  }
-                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-slate-100 rounded-lg cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>إضافة قسم</span>
-                </button>
-              </div>
-              {siteDraft.sections.map((sec) => (
-                <div
-                  key={sec.id}
-                  className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
+                {siteSavedNotice && (
+                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800">
+                    {siteSavedNotice}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      العنوان الرئيسي للواجهة
+                    </label>
                     <input
                       type="text"
-                      value={sec.title}
+                      value={siteDraft.heroTitle}
                       onChange={(e) =>
                         setSiteDraft((p) => ({
                           ...p,
-                          sections: p.sections.map((s) =>
-                            s.id === sec.id ? { ...s, title: e.target.value } : s
-                          ),
+                          heroTitle: e.target.value,
                         }))
                       }
-                      className="flex-1 min-w-[180px] px-2.5 py-1.5 text-xs font-bold bg-white border border-slate-300 rounded-lg"
+                      className="w-full px-3 py-2 text-sm bg-[#F7F8FA] border border-slate-300 rounded-xl"
                     />
-                    <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer">
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      العنوان الفرعي
+                    </label>
+                    <input
+                      type="text"
+                      value={siteDraft.heroSubtitle}
+                      onChange={(e) =>
+                        setSiteDraft((p) => ({
+                          ...p,
+                          heroSubtitle: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm bg-[#F7F8FA] border border-slate-300 rounded-xl"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    نبذة تعريفية
+                  </label>
+                  <AutoResizeTextarea
+                    minRows={3}
+                    value={siteDraft.introBio}
+                    onChange={(e) =>
+                      setSiteDraft((p) => ({ ...p, introBio: e.target.value }))
+                    }
+                    className="w-full px-3 py-2.5 text-sm bg-[#F7F8FA] border border-slate-300 rounded-xl"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      الخلفية والخبرة
+                    </label>
+                    <AutoResizeTextarea
+                      minRows={3}
+                      value={siteDraft.backgroundText}
+                      onChange={(e) =>
+                        setSiteDraft((p) => ({
+                          ...p,
+                          backgroundText: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2.5 text-sm bg-[#F7F8FA] border border-slate-300 rounded-xl"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      فلسفة التعلّم
+                    </label>
+                    <AutoResizeTextarea
+                      minRows={3}
+                      value={siteDraft.philosophyText}
+                      onChange={(e) =>
+                        setSiteDraft((p) => ({
+                          ...p,
+                          philosophyText: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2.5 text-sm bg-[#F7F8FA] border border-slate-300 rounded-xl"
+                    />
+                  </div>
+                </div>
+
+                {/* Skills & Interests */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2.5">
+                    <p className="text-xs font-bold text-slate-800">
+                      المهارات الظاهرة
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {siteDraft.skills.map((sk, idx) =>
+                        editingSkillIdx === idx ? (
+                          <div
+                            key={`edit-sk-${idx}`}
+                            className="inline-flex items-center gap-1 bg-white border border-[#1E3A5F] rounded-md px-1.5 py-0.5"
+                          >
+                            <input
+                              type="text"
+                              autoFocus
+                              value={editingSkillVal}
+                              onChange={(e) =>
+                                setEditingSkillVal(e.target.value)
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  const clean = editingSkillVal.trim();
+                                  if (clean) {
+                                    setSiteDraft((p) => ({
+                                      ...p,
+                                      skills: p.skills.map((s, i) =>
+                                        i === idx ? clean : s
+                                      ),
+                                    }));
+                                  }
+                                  setEditingSkillIdx(null);
+                                } else if (e.key === 'Escape') {
+                                  setEditingSkillIdx(null);
+                                }
+                              }}
+                              className="w-28 text-xs focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const clean = editingSkillVal.trim();
+                                if (clean) {
+                                  setSiteDraft((p) => ({
+                                    ...p,
+                                    skills: p.skills.map((s, i) =>
+                                      i === idx ? clean : s
+                                    ),
+                                  }));
+                                }
+                                setEditingSkillIdx(null);
+                              }}
+                              className="text-emerald-700 cursor-pointer"
+                            >
+                              <Check className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ) : (
+                          <span
+                            key={`${sk}-${idx}`}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-md"
+                          >
+                            <span>{sk}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingSkillIdx(idx);
+                                setEditingSkillVal(sk);
+                              }}
+                              className="text-slate-400 hover:text-[#1E3A5F] cursor-pointer"
+                            >
+                              <PenLine className="w-2.5 h-2.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSiteDraft((p) => ({
+                                  ...p,
+                                  skills: p.skills.filter((_, i) => i !== idx),
+                                }))
+                              }
+                              className="text-slate-400 hover:text-red-700 cursor-pointer"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        )
+                      )}
+                    </div>
+                    <div className="flex gap-2">
                       <input
-                        type="checkbox"
-                        checked={sec.visible}
-                        onChange={(e) =>
+                        type="text"
+                        value={newSkill}
+                        onChange={(e) => setNewSkill(e.target.value)}
+                        placeholder="أضف مهارة..."
+                        className="flex-1 px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const clean = newSkill.trim();
+                          if (!clean || siteDraft.skills.includes(clean)) return;
                           setSiteDraft((p) => ({
                             ...p,
-                            sections: p.sections.map((s) =>
-                              s.id === sec.id ? { ...s, visible: e.target.checked } : s
-                            ),
-                          }))
-                        }
+                            skills: [...p.skills, clean],
+                          }));
+                          setNewSkill('');
+                        }}
+                        className="px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                      >
+                        إضافة
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2.5">
+                    <p className="text-xs font-bold text-slate-800">
+                      الاهتمامات الظاهرة
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {siteDraft.interests.map((intr, idx) =>
+                        editingInterestIdx === idx ? (
+                          <div
+                            key={`edit-intr-${idx}`}
+                            className="inline-flex items-center gap-1 bg-white border border-[#1E3A5F] rounded-md px-1.5 py-0.5"
+                          >
+                            <input
+                              type="text"
+                              autoFocus
+                              value={editingInterestVal}
+                              onChange={(e) =>
+                                setEditingInterestVal(e.target.value)
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  const clean = editingInterestVal.trim();
+                                  if (clean) {
+                                    setSiteDraft((p) => ({
+                                      ...p,
+                                      interests: p.interests.map((s, i) =>
+                                        i === idx ? clean : s
+                                      ),
+                                    }));
+                                  }
+                                  setEditingInterestIdx(null);
+                                } else if (e.key === 'Escape') {
+                                  setEditingInterestIdx(null);
+                                }
+                              }}
+                              className="w-28 text-xs focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const clean = editingInterestVal.trim();
+                                if (clean) {
+                                  setSiteDraft((p) => ({
+                                    ...p,
+                                    interests: p.interests.map((s, i) =>
+                                      i === idx ? clean : s
+                                    ),
+                                  }));
+                                }
+                                setEditingInterestIdx(null);
+                              }}
+                              className="text-emerald-700 cursor-pointer"
+                            >
+                              <Check className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ) : (
+                          <span
+                            key={`${intr}-${idx}`}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-md"
+                          >
+                            <span>{intr}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingInterestIdx(idx);
+                                setEditingInterestVal(intr);
+                              }}
+                              className="text-slate-400 hover:text-[#1E3A5F] cursor-pointer"
+                            >
+                              <PenLine className="w-2.5 h-2.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSiteDraft((p) => ({
+                                  ...p,
+                                  interests: p.interests.filter(
+                                    (_, i) => i !== idx
+                                  ),
+                                }))
+                              }
+                              className="text-slate-400 hover:text-red-700 cursor-pointer"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        )
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newInterest}
+                        onChange={(e) => setNewInterest(e.target.value)}
+                        placeholder="أضف اهتمامًا..."
+                        className="flex-1 px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
                       />
-                      <span>ظاهر</span>
-                    </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const clean = newInterest.trim();
+                          if (!clean || siteDraft.interests.includes(clean))
+                            return;
+                          setSiteDraft((p) => ({
+                            ...p,
+                            interests: [...p.interests, clean],
+                          }));
+                          setNewInterest('');
+                        }}
+                        className="px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                      >
+                        إضافة
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Visibility Toggles including Blogs & Reflections */}
+                <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-3">
+                  <p className="text-xs font-bold text-slate-800">
+                    إظهار / إخفاء الأقسام والصفحات في الموقع العام
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 text-xs">
+                    {(
+                      [
+                        ['showHero', 'الواجهة التعريفية'],
+                        ['showBackground', 'الخلفية المهنية'],
+                        ['showPhilosophy', 'فلسفة التعلّم'],
+                        ['showSkills', 'المهارات'],
+                        ['showInterests', 'الاهتمامات'],
+                        ['showCourses', 'الكورسات'],
+                        ['showPaths', 'المسارات'],
+                        ['showBooks', 'الكتب'],
+                        ['showReflections', 'صفحة الخواطر'],
+                        ['showBlogs', 'صفحة المدونة'],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <label
+                        key={key}
+                        className="inline-flex items-center gap-2 p-2 bg-white border border-slate-200 rounded-lg cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={siteDraft.visibilityFlags[key] !== false}
+                          onChange={(e) =>
+                            setSiteDraft((p) => ({
+                              ...p,
+                              visibilityFlags: {
+                                ...p.visibilityFlags,
+                                [key]: e.target.checked,
+                              },
+                            }))
+                          }
+                        />
+                        <span>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+
+                  {allReflectionCats.length > 0 && (
+                    <div className="pt-3 border-t border-slate-200/80 space-y-2">
+                      <p className="text-xs font-bold text-slate-800">
+                        تصنيفات الخواطر المنشورة تلقائيًا للعامة:
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {allReflectionCats.map((cat) => {
+                          const pubCats =
+                            siteDraft.publicReflectionCategories ?? [];
+                          const checked = pubCats.includes(cat);
+                          return (
+                            <label
+                              key={cat}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border cursor-pointer ${
+                                checked
+                                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900 font-semibold'
+                                  : 'bg-white border-slate-200 text-slate-700'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) =>
+                                  setSiteDraft((p) => {
+                                    const prev =
+                                      p.publicReflectionCategories ?? [];
+                                    const next = e.target.checked
+                                      ? Array.from(new Set([...prev, cat]))
+                                      : prev.filter((c) => c !== cat);
+                                    return {
+                                      ...p,
+                                      publicReflectionCategories: next,
+                                    };
+                                  })
+                                }
+                              />
+                              <span>{cat}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Custom Sections with AutoResizeTextarea */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-bold text-slate-800">
+                      الأقسام المخصّصة ({siteDraft.sections.length})
+                    </p>
                     <button
                       type="button"
                       onClick={() =>
                         setSiteDraft((p) => ({
                           ...p,
-                          sections: p.sections.filter((s) => s.id !== sec.id),
+                          sections: [
+                            ...p.sections,
+                            {
+                              id: `sec-${Date.now()}`,
+                              title: 'قسم جديد',
+                              body: '',
+                              visible: true,
+                            },
+                          ],
                         }))
                       }
-                      className="p-1 text-slate-400 hover:text-red-700 cursor-pointer"
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-slate-100 rounded-lg cursor-pointer"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>إضافة قسم</span>
                     </button>
                   </div>
-                  <textarea
-                    rows={2}
-                    value={sec.body}
-                    onChange={(e) =>
-                      setSiteDraft((p) => ({
-                        ...p,
-                        sections: p.sections.map((s) =>
-                          s.id === sec.id ? { ...s, body: e.target.value } : s
-                        ),
-                      }))
-                    }
-                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
-                  />
-                </div>
-              ))}
-            </div>
-          </form>
-
-          {/* Quick Publish Controls */}
-          <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
-            <h2 className="font-editorial text-xl font-bold text-slate-900">
-              التحكم السريع في نشر الكورسات والمسارات والكتب للعامة
-            </h2>
-            <p className="text-xs text-slate-500">
-              لا يظهر للزوار إلا ما تُفعّل نشره هنا (ملاحظاتك الخاصة ومهامك وتأملاتك تبقى محمية بالكامل ولا تنشر أبدًا).
-            </p>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <div className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2 max-h-[340px] overflow-y-auto">
-                <p className="text-xs font-bold text-slate-900">
-                  الكورسات ({props.courses.filter((c) => c.isPublic).length} منشور)
-                </p>
-                {props.courses.map((c) => {
-                  const docId = c.docId || `course-${c.id}`;
-                  return (
-                    <label
-                      key={docId}
-                      className="flex items-center justify-between gap-2 p-2 bg-white border border-slate-200 rounded-lg text-xs cursor-pointer"
+                  {siteDraft.sections.map((sec) => (
+                    <div
+                      key={sec.id}
+                      className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2"
                     >
-                      <span className="truncate">{c.title}</span>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(c.isPublic)}
-                        onChange={(e) =>
-                          props.onToggleCoursePublic(docId, e.target.checked)
-                        }
-                      />
-                    </label>
-                  );
-                })}
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2 max-h-[340px] overflow-y-auto">
-                <p className="text-xs font-bold text-slate-900">
-                  المسارات ({props.learningPaths.filter((p) => p.isPublic).length} منشور)
-                </p>
-                {props.learningPaths.map((p) => (
-                  <label
-                    key={p.id}
-                    className="flex items-center justify-between gap-2 p-2 bg-white border border-slate-200 rounded-lg text-xs cursor-pointer"
-                  >
-                    <span className="truncate">{p.title}</span>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(p.isPublic)}
-                      onChange={(e) => props.onTogglePathPublic(p.id, e.target.checked)}
-                    />
-                  </label>
-                ))}
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2 max-h-[340px] overflow-y-auto">
-                <p className="text-xs font-bold text-slate-900">
-                  المكتبة ({props.readingItems.filter((b) => b.isPublic).length} منشور)
-                </p>
-                {props.readingItems.map((b) => (
-                  <label
-                    key={b.id}
-                    className="flex items-center justify-between gap-2 p-2 bg-white border border-slate-200 rounded-lg text-xs cursor-pointer"
-                  >
-                    <span className="truncate">{b.title}</span>
-                    <input
-                      type="checkbox"
-                      checked={Boolean(b.isPublic)}
-                      onChange={(e) => props.onToggleBookPublic(b.id, e.target.checked)}
-                    />
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {(props.reflections?.length ?? 0) > 0 && props.onToggleReflectionPublic && (
-              <div className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2 max-h-[260px] overflow-y-auto">
-                <p className="text-xs font-bold text-slate-900">
-                  الخواطر الفردية ({(props.reflections || []).filter((r) => r.isPublic).length} منشورة فرديًا)
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                  {(props.reflections || []).map((r) => (
-                    <label
-                      key={r.id}
-                      className="flex items-center justify-between gap-2 p-2 bg-white border border-slate-200 rounded-lg text-xs cursor-pointer"
-                    >
-                      <span className="truncate">
-                        {r.title || r.moodTag}
-                        {r.categoryTag ? ` (${r.categoryTag})` : ''}
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={Boolean(r.isPublic)}
-                        onChange={(e) =>
-                          props.onToggleReflectionPublic?.(r.id, e.target.checked)
-                        }
-                      />
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-          </section>
-        </div>
-      )}
-
-      {/* Sub-tab 5: Users, Roles & Granular Content Access Control */}
-      {subTab === 'users' && (
-        <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="font-editorial text-xl font-bold text-slate-900">
-                المستخدمون والصلاحيات والمحتوى المخصّص
-              </h2>
-              <p className="text-xs text-slate-500">
-                تحكم في أدوار الحسابات، وامنح كل حساب صلاحية الوصول إلى كورسات أو تلخيصات أو مسارات أو كتب أو خواطر محددة. يظل ({OWNER_ADMIN_EMAIL}) محميًا كمسؤول.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => void loadProfiles()}
-              disabled={loadingProfiles}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
-            >
-              <RefreshCw
-                className={`w-3.5 h-3.5 ${loadingProfiles ? 'animate-spin' : ''}`}
-              />
-              <span>تحديث</span>
-            </button>
-          </div>
-
-          {profilesError && (
-            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
-              {profilesError}
-            </div>
-          )}
-
-          {loadingProfiles ? (
-            <div className="py-8 flex items-center justify-center gap-2 text-xs text-slate-500">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span>جاري تحميل المستخدمين...</span>
-            </div>
-          ) : profiles.length === 0 ? (
-            <p className="text-xs text-slate-500 py-4">لا توجد ملفات مستخدمين مسجّلة.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-right text-xs border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500">
-                    <th className="py-2.5 px-3 font-semibold">المستخدم</th>
-                    <th className="py-2.5 px-3 font-semibold">البريد</th>
-                    <th className="py-2.5 px-3 font-semibold">الدور</th>
-                    <th className="py-2.5 px-3 font-semibold">الحالة</th>
-                    <th className="py-2.5 px-3 font-semibold">صلاحيات المحتوى المخصّصة</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {profiles.map((prof) => {
-                    const isPrimaryOwner =
-                      prof.email.toLowerCase() === OWNER_ADMIN_EMAIL.toLowerCase();
-                    const g = grantsByUid[prof.uid];
-                    const grantParts: string[] = [];
-                    if (g?.courseDocIds.length)
-                      grantParts.push(`${g.courseDocIds.length} كورس`);
-                    if (g?.noteIds.length) grantParts.push(`${g.noteIds.length} تلخيص`);
-                    if (g?.pathIds.length) grantParts.push(`${g.pathIds.length} مسار`);
-                    if (g?.bookIds.length) grantParts.push(`${g.bookIds.length} كتاب`);
-                    if ((g?.reflectionIds.length || 0) + (g?.reflectionCategories.length || 0) > 0)
-                      grantParts.push('خواطر');
-
-                    return (
-                      <tr key={prof.uid}>
-                        <td className="py-3 px-3 font-semibold text-slate-900">
-                          {prof.displayName || 'مستخدم'}
-                          {isPrimaryOwner && (
-                            <span className="mr-2 text-[10px] font-bold text-[#1E3A5F]">
-                              (المالك الأساسي)
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-slate-600">{prof.email}</td>
-                        <td className="py-3 px-3">
-                          <select
-                            disabled={isPrimaryOwner}
-                            value={prof.role}
-                            onChange={(e) =>
-                              void handleRoleUpdate(
-                                prof,
-                                e.target.value as 'user' | 'admin',
-                                prof.approvalStatus
-                              )
-                            }
-                            className="px-2 py-1 bg-[#F7F8FA] border border-slate-300 rounded-md disabled:opacity-60"
-                          >
-                            <option value="user">مستخدم عادي (عام + مخصّص)</option>
-                            <option value="admin">مسؤول (Admin)</option>
-                          </select>
-                        </td>
-                        <td className="py-3 px-3">
-                          <select
-                            disabled={isPrimaryOwner}
-                            value={prof.approvalStatus}
-                            onChange={(e) =>
-                              void handleRoleUpdate(
-                                prof,
-                                prof.role,
-                                e.target.value as UserProfileItem['approvalStatus']
-                              )
-                            }
-                            className="px-2 py-1 bg-[#F7F8FA] border border-slate-300 rounded-md disabled:opacity-60"
-                          >
-                            <option value="pending">قيد الانتظار</option>
-                            <option value="approved">مفعّل</option>
-                            <option value="suspended">معلّق</option>
-                            <option value="rejected">مرفوض</option>
-                          </select>
-                        </td>
-                        <td className="py-3 px-3">
-                          {isPrimaryOwner ? (
-                            <span className="text-[11px] text-slate-500">صلاحية كاملة للمالك</span>
-                          ) : (
-                            <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => openGrantModalForUser(prof)}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold text-[#1E3A5F] bg-[#F7F8FA] hover:bg-slate-200 border border-slate-200 rounded-lg cursor-pointer"
-                              >
-                                <KeyRound className="w-3 h-3" aria-hidden="true" />
-                                <span>تخصيص المحتوى</span>
-                              </button>
-                              <span className="text-[11px] text-slate-500 tabular-nums">
-                                {grantParts.length > 0 ? grantParts.join(' · ') : 'عام فقط'}
-                              </span>
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Per-Account Content Access Grants Modal */}
-          {grantModalUser && (
-            <div
-              className="fixed inset-0 z-[75] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
-              role="dialog"
-              aria-modal="true"
-              onClick={() => setGrantModalUser(null)}
-            >
-              <div
-                onClick={(e) => e.stopPropagation()}
-                className="w-full max-w-4xl max-h-[90dvh] flex flex-col bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
-              >
-                <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-sm sm:text-base font-bold text-slate-900">
-                      تخصيص المحتوى لحساب: {grantModalUser.displayName || grantModalUser.email}
-                    </h3>
-                    <p className="text-[11px] text-slate-500">{grantModalUser.email}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setGrantModalUser(null)}
-                    aria-label="إغلاق"
-                    className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-5 space-y-5 text-xs">
-                  <div className="p-3.5 bg-[#F7F8FA] border border-slate-200 rounded-xl space-y-2.5">
-                    <label className="inline-flex items-center gap-2 font-semibold text-[#1E3A5F] cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={grantDraft.includeCourseNotes}
-                        onChange={(e) =>
-                          setGrantDraft((p) => ({
-                            ...p,
-                            includeCourseNotes: e.target.checked,
-                          }))
-                        }
-                      />
-                      <span>
-                        منح جميع التلخيصات والملاحظات المرتبطة بالكورسات المختارة تلقائيًا
-                      </span>
-                    </label>
-                    <input
-                      type="text"
-                      value={grantDraft.notesForUser}
-                      onChange={(e) =>
-                        setGrantDraft((p) => ({ ...p, notesForUser: e.target.value }))
-                      }
-                      placeholder="رسالة ترحيب أو ملاحظة قصيرة لهذا الحساب (اختياري)..."
-                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Courses */}
-                    <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-64 overflow-y-auto">
-                      <p className="font-bold text-slate-900">
-                        الكورسات ({grantDraft.courseDocIds.length} محدد)
-                      </p>
-                      {props.courses.map((c) => {
-                        const docId = c.docId || `course-${c.id}`;
-                        const checked = grantDraft.courseDocIds.includes(docId);
-                        return (
-                          <label
-                            key={docId}
-                            className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
-                          >
-                            <span className="truncate">{c.title}</span>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(e) =>
-                                setGrantDraft((p) => ({
-                                  ...p,
-                                  courseDocIds: e.target.checked
-                                    ? Array.from(new Set([...p.courseDocIds, docId]))
-                                    : p.courseDocIds.filter((id) => id !== docId),
-                                }))
-                              }
-                            />
-                          </label>
-                        );
-                      })}
-                    </div>
-
-                    {/* BookNotes / Summaries */}
-                    <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-64 overflow-y-auto">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="font-bold text-slate-900">
-                          التلخيصات والملاحظات ({grantDraft.noteIds.length} محدد)
-                        </p>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <input
                           type="text"
-                          value={grantNoteSearch}
-                          onChange={(e) => setGrantNoteSearch(e.target.value)}
-                          placeholder="بحث..."
-                          className="w-32 px-2 py-1 text-[11px] bg-[#F7F8FA] border border-slate-300 rounded"
+                          value={sec.title}
+                          onChange={(e) =>
+                            setSiteDraft((p) => ({
+                              ...p,
+                              sections: p.sections.map((s) =>
+                                s.id === sec.id
+                                  ? { ...s, title: e.target.value }
+                                  : s
+                              ),
+                            }))
+                          }
+                          className="flex-1 min-w-[180px] px-2.5 py-1.5 text-xs font-bold bg-white border border-slate-300 rounded-lg"
                         />
+                        <label className="inline-flex items-center gap-1.5 text-xs cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={sec.visible}
+                            onChange={(e) =>
+                              setSiteDraft((p) => ({
+                                ...p,
+                                sections: p.sections.map((s) =>
+                                  s.id === sec.id
+                                    ? { ...s, visible: e.target.checked }
+                                    : s
+                                ),
+                              }))
+                            }
+                          />
+                          <span>ظاهر</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSiteDraft((p) => ({
+                              ...p,
+                              sections: p.sections.filter(
+                                (s) => s.id !== sec.id
+                              ),
+                            }))
+                          }
+                          className="p-1 text-slate-400 hover:text-red-700 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
-                      {(props.bookNotes || [])
-                        .filter((bn) => {
-                          const q = grantNoteSearch.trim().toLowerCase();
-                          if (!q) return true;
-                          return (
-                            bn.bookTitle.toLowerCase().includes(q) ||
-                            (bn.courseTitle || '').toLowerCase().includes(q)
-                          );
-                        })
-                        .map((bn) => {
-                          const checked = grantDraft.noteIds.includes(bn.id);
-                          return (
-                            <label
-                              key={bn.id}
-                              className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
-                            >
-                              <span className="truncate">
-                                {bn.bookTitle}
-                                {bn.courseTitle ? ` — ${bn.courseTitle}` : ''}
-                              </span>
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={(e) =>
-                                  setGrantDraft((p) => ({
-                                    ...p,
-                                    noteIds: e.target.checked
-                                      ? Array.from(new Set([...p.noteIds, bn.id]))
-                                      : p.noteIds.filter((id) => id !== bn.id),
-                                  }))
-                                }
-                              />
-                            </label>
-                          );
-                        })}
+                      <AutoResizeTextarea
+                        minRows={2}
+                        value={sec.body}
+                        onChange={(e) =>
+                          setSiteDraft((p) => ({
+                            ...p,
+                            sections: p.sections.map((s) =>
+                              s.id === sec.id
+                                ? { ...s, body: e.target.value }
+                                : s
+                            ),
+                          }))
+                        }
+                        className="w-full px-2.5 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                      />
                     </div>
+                  ))}
+                </div>
+              </form>
 
-                    {/* Learning Paths */}
-                    <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-56 overflow-y-auto">
-                      <p className="font-bold text-slate-900">
-                        مسارات التعلّم ({grantDraft.pathIds.length} محدد)
-                      </p>
-                      {props.learningPaths.map((lp) => {
-                        const checked = grantDraft.pathIds.includes(lp.id);
-                        return (
-                          <label
-                            key={lp.id}
-                            className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
-                          >
-                            <span className="truncate">{lp.title}</span>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(e) =>
-                                setGrantDraft((p) => ({
-                                  ...p,
-                                  pathIds: e.target.checked
-                                    ? Array.from(new Set([...p.pathIds, lp.id]))
-                                    : p.pathIds.filter((id) => id !== lp.id),
-                                }))
-                              }
-                            />
-                          </label>
-                        );
-                      })}
-                    </div>
+              {/* Quick Publish Controls including Blog Posts */}
+              <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
+                <h2 className="font-editorial text-xl font-bold text-slate-900">
+                  التحكم السريع في نشر المحتوى للعامة
+                </h2>
+                <p className="text-xs text-slate-500">
+                  لا يظهر للزوار إلا ما تُفعّل نشره هنا أو في صفحة المقالات والخواطر.
+                </p>
 
-                    {/* Reading Library Books */}
-                    <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-56 overflow-y-auto">
-                      <p className="font-bold text-slate-900">
-                        الكتب ومصادر المكتبة ({grantDraft.bookIds.length} محدد)
-                      </p>
-                      {props.readingItems.map((b) => {
-                        const checked = grantDraft.bookIds.includes(b.id);
-                        return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {(props.blogPosts?.length ?? 0) > 0 &&
+                    props.onToggleBlogPublic && (
+                      <div className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2 max-h-[300px] overflow-y-auto">
+                        <p className="text-xs font-bold text-slate-900">
+                          المقالات ({(props.blogPosts || []).filter((b) => b.isPublic).length} منشور)
+                        </p>
+                        {(props.blogPosts || []).map((b) => (
                           <label
                             key={b.id}
-                            className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                            className="flex items-center justify-between gap-2 p-2 bg-white border border-slate-200 rounded-lg text-xs cursor-pointer"
                           >
                             <span className="truncate">{b.title}</span>
                             <input
                               type="checkbox"
-                              checked={checked}
+                              checked={Boolean(b.isPublic)}
                               onChange={(e) =>
-                                setGrantDraft((p) => ({
-                                  ...p,
-                                  bookIds: e.target.checked
-                                    ? Array.from(new Set([...p.bookIds, b.id]))
-                                    : p.bookIds.filter((id) => id !== b.id),
-                                }))
+                                props.onToggleBlogPublic?.(
+                                  b.id,
+                                  e.target.checked
+                                )
                               }
                             />
                           </label>
-                        );
-                      })}
-                    </div>
-                  </div>
+                        ))}
+                      </div>
+                    )}
 
-                  {/* Reflections & Reflection Categories */}
-                  <div className="p-3.5 rounded-xl border border-slate-200 space-y-3">
-                    <p className="font-bold text-slate-900">
-                      منح خواطر وتصنيفات خواطر ({grantDraft.reflectionIds.length} خاطرة ·{' '}
-                      {grantDraft.reflectionCategories.length} تصنيف)
+                  <div className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2 max-h-[300px] overflow-y-auto">
+                    <p className="text-xs font-bold text-slate-900">
+                      الكورسات ({props.courses.filter((c) => c.isPublic).length}{' '}
+                      منشور)
                     </p>
-                    {allReflectionCats.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {allReflectionCats.map((cat) => {
-                          const checked = grantDraft.reflectionCategories.includes(cat);
-                          return (
-                            <label
-                              key={cat}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#F7F8FA] border border-slate-200 rounded-lg cursor-pointer"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={(e) =>
-                                  setGrantDraft((p) => ({
-                                    ...p,
-                                    reflectionCategories: e.target.checked
-                                      ? Array.from(
-                                          new Set([...p.reflectionCategories, cat])
-                                        )
-                                      : p.reflectionCategories.filter((c) => c !== cat),
-                                  }))
-                                }
-                              />
-                              <span>تصنيف: {cat}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
-                    {(props.reflections?.length ?? 0) > 0 && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-40 overflow-y-auto">
-                        {(props.reflections || []).map((r) => {
-                          const checked = grantDraft.reflectionIds.includes(r.id);
-                          return (
-                            <label
-                              key={r.id}
-                              className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
-                            >
-                              <span className="truncate">{r.title || r.moodTag}</span>
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={(e) =>
-                                  setGrantDraft((p) => ({
-                                    ...p,
-                                    reflectionIds: e.target.checked
-                                      ? Array.from(new Set([...p.reflectionIds, r.id]))
-                                      : p.reflectionIds.filter((id) => id !== r.id),
-                                  }))
-                                }
-                              />
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
-                  {grantsByUid[grantModalUser.uid] ? (
-                    <button
-                      type="button"
-                      disabled={savingGrant}
-                      onClick={() => void handleRevokeUserGrant()}
-                      className="px-3.5 py-2 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
-                    >
-                      إلغاء كل الصلاحيات المخصّصة
-                    </button>
-                  ) : (
-                    <span />
-                  )}
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setGrantModalUser(null)}
-                      className="px-4 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg cursor-pointer"
-                    >
-                      إلغاء
-                    </button>
-                    <button
-                      type="button"
-                      disabled={savingGrant}
-                      onClick={() => void handleSaveUserGrant()}
-                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
-                    >
-                      {savingGrant && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      <span>حفظ الصلاحيات</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Sub-tab 6: Data, Excel Export, Sync & Technical Diagnostics */}
-      {subTab === 'data' && (
-        <div className="space-y-5">
-          {isPending007Migration() && (
-            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
-              توجد حقول حديثة (مثل أهداف التعلّم والترتيب المخصّص وربط المهام والواجهة العامة) بانتظار تشغيل الترحيل{' '}
-              <code className="font-mono font-bold">007_rbac_public_site_objectives_rhythm_sorting.sql</code>{' '}
-              في محرر SQL بلوحة Supabase لتُحفظ سحابيًا بالكامل.
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
-              <div className="flex items-center gap-2">
-                <Download className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-                <h2 className="text-base font-bold text-slate-900">
-                  تصدير البيانات إلى Excel
-                </h2>
-              </div>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                تنزيل نسخة منظمة من الخطة السنوية والكورسات والملخصات بصيغة Excel للمراجعة والأرشفة.
-              </p>
-              <button
-                type="button"
-                onClick={() =>
-                  exportPlanToExcel(
-                    props.months,
-                    props.courses,
-                    props.bookNotesForExcel,
-                    props.domains
-                  )
-                }
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>تصدير Excel الكامل</span>
-              </button>
-            </div>
-
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
-              <div className="flex items-center gap-2">
-                <RefreshCw className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-                <h2 className="text-base font-bold text-slate-900">
-                  مزامنة السحابة وإعادة التهيئة
-                </h2>
-              </div>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                حدّث البيانات فورًا من السحابة أو أعد ضبط الخطة الافتراضية عند الحاجة.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  disabled={syncingManual}
-                  onClick={async () => {
-                    setSyncingManual(true);
-                    try {
-                      await props.onForceSync();
-                    } finally {
-                      setSyncingManual(false);
-                    }
-                  }}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg cursor-pointer"
-                >
-                  <RefreshCw
-                    className={`w-3.5 h-3.5 ${syncingManual ? 'animate-spin' : ''}`}
-                  />
-                  <span>مزامنة فورية الآن</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setConfirmResetOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>إعادة ضبط الخطة الافتراضية</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Admin Collapsible Technical Diagnostics */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Shield className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-                <h2 className="text-sm font-bold text-slate-900">
-                  تشخيص الاتصال بالخادم (للمسؤول فقط)
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const next = !diagOpen;
-                  setDiagOpen(next);
-                  if (next && !diagResult) void handleRunDiagnostics();
-                }}
-                className="px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-[#F7F8FA] border border-slate-200 rounded-lg cursor-pointer"
-              >
-                {diagOpen ? 'إخفاء التشخيص' : 'فحص حالة الربط'}
-              </button>
-            </div>
-
-            {diagOpen && (
-              <div className="space-y-3 pt-2 border-t border-slate-100">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-slate-500">
-                    يتحقق من توثيق Firebase وحماية RLS وصلاحيات الحاويات دون عرض أسرار.
-                  </span>
-                  <button
-                    type="button"
-                    disabled={diagRunning}
-                    onClick={() => void handleRunDiagnostics()}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-slate-100 rounded-lg cursor-pointer"
-                  >
-                    <RefreshCw
-                      className={`w-3 h-3 ${diagRunning ? 'animate-spin' : ''}`}
-                    />
-                    <span>إعادة الفحص</span>
-                  </button>
-                </div>
-
-                {diagResult && (
-                  <div className="space-y-2">
-                    {diagResult.checks.map((chk) => (
-                      <div
-                        key={chk.id}
-                        className="p-2.5 rounded-lg bg-[#F7F8FA] border border-slate-200 flex items-start justify-between gap-2 text-xs"
-                      >
-                        <div>
-                          <p className="font-semibold text-slate-900">{chk.label}</p>
-                          <p className="text-[11px] text-slate-600">{chk.detail}</p>
-                        </div>
-                        <span
-                          className={`font-semibold shrink-0 ${
-                            chk.ok ? 'text-emerald-700' : 'text-amber-700'
-                          }`}
+                    {props.courses.map((c) => {
+                      const docId = c.docId || `course-${c.id}`;
+                      return (
+                        <label
+                          key={docId}
+                          className="flex items-center justify-between gap-2 p-2 bg-white border border-slate-200 rounded-lg text-xs cursor-pointer"
                         >
-                          {chk.ok ? 'سليم' : 'تنبيه'}
-                        </span>
+                          <span className="truncate">{c.title}</span>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(c.isPublic)}
+                            onChange={(e) =>
+                              props.onToggleCoursePublic(
+                                docId,
+                                e.target.checked
+                              )
+                            }
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2 max-h-[300px] overflow-y-auto">
+                    <p className="text-xs font-bold text-slate-900">
+                      المسارات (
+                      {props.learningPaths.filter((p) => p.isPublic).length}{' '}
+                      منشور)
+                    </p>
+                    {props.learningPaths.map((p) => (
+                      <label
+                        key={p.id}
+                        className="flex items-center justify-between gap-2 p-2 bg-white border border-slate-200 rounded-lg text-xs cursor-pointer"
+                      >
+                        <span className="truncate">{p.title}</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(p.isPublic)}
+                          onChange={(e) =>
+                            props.onTogglePathPublic(p.id, e.target.checked)
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2 max-h-[300px] overflow-y-auto">
+                    <p className="text-xs font-bold text-slate-900">
+                      المكتبة (
+                      {props.readingItems.filter((b) => b.isPublic).length}{' '}
+                      منشور)
+                    </p>
+                    {props.readingItems.map((b) => (
+                      <label
+                        key={b.id}
+                        className="flex items-center justify-between gap-2 p-2 bg-white border border-slate-200 rounded-lg text-xs cursor-pointer"
+                      >
+                        <span className="truncate">{b.title}</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(b.isPublic)}
+                          onChange={(e) =>
+                            props.onToggleBookPublic(b.id, e.target.checked)
+                          }
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {(props.reflections?.length ?? 0) > 0 &&
+                  props.onToggleReflectionPublic && (
+                    <div className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2 max-h-[260px] overflow-y-auto">
+                      <p className="text-xs font-bold text-slate-900">
+                        الخواطر الفردية (
+                        {
+                          (props.reflections || []).filter((r) => r.isPublic)
+                            .length
+                        }{' '}
+                        منشورة فرديًا)
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                        {(props.reflections || []).map((r) => (
+                          <label
+                            key={r.id}
+                            className="flex items-center justify-between gap-2 p-2 bg-white border border-slate-200 rounded-lg text-xs cursor-pointer"
+                          >
+                            <span className="truncate">
+                              {r.title || r.moodTag}
+                              {r.categoryTag ? ` (${r.categoryTag})` : ''}
+                            </span>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(r.isPublic)}
+                              onChange={(e) =>
+                                props.onToggleReflectionPublic?.(
+                                  r.id,
+                                  e.target.checked
+                                )
+                              }
+                            />
+                          </label>
+                        ))}
                       </div>
+                    </div>
+                  )}
+              </section>
+            </div>
+          )}
+
+          {/* SECTION 3: Domains & 12-Month Plan */}
+          {subTab === 'plan' && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPlanSubMode('domains')}
+                  className={`px-4 py-2 text-xs font-semibold rounded-xl border cursor-pointer ${
+                    planSubMode === 'domains'
+                      ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                      : 'bg-white text-slate-700 border-slate-200'
+                  }`}
+                >
+                  المحاور المعرفية والمفكرون ({props.domains.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPlanSubMode('months')}
+                  className={`px-4 py-2 text-xs font-semibold rounded-xl border cursor-pointer ${
+                    planSubMode === 'months'
+                      ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                      : 'bg-white text-slate-700 border-slate-200'
+                  }`}
+                >
+                  الخطة الشهرية والوحدات ({props.months.length} وحدة)
+                </button>
+              </div>
+
+              {planSubMode === 'months' ? (
+                <TwelveMonthPlanView
+                  uid={props.uid}
+                  canEdit={props.canEdit}
+                  onRequireAuth={props.onRequireAuth}
+                  voiceDialect={props.voiceDialect}
+                  quarters={props.quarters}
+                  months={props.months}
+                  domains={props.domains}
+                  courses={props.courses}
+                  selectedMonthId={props.selectedMonthId}
+                  domainFilter={props.domainFilter}
+                  onSelectMonth={props.onSelectMonth}
+                  onChangeDomainFilter={props.onChangeDomainFilter}
+                  onOpenPdf={props.onOpenPdf}
+                  onAddQuarter={props.onAddQuarter}
+                  onUpdateQuarter={props.onUpdateQuarter}
+                  onDeleteQuarter={props.onDeleteQuarter}
+                  onAddMonth={props.onAddMonth}
+                  onUpdateMonth={props.onUpdateMonth}
+                  onDeleteMonth={props.onDeleteMonth}
+                  onUpdateMonthStatus={props.onUpdateMonthStatus}
+                  onToggleActivity={props.onToggleActivity}
+                  onUpdateMonthNotes={props.onUpdateMonthNotes}
+                  onUpdateTrackItem={props.onUpdateTrackItem}
+                  onToggleMonthTask={props.onToggleMonthTask}
+                  onAddMonthTask={props.onAddMonthTask}
+                  onDeleteMonthTask={props.onDeleteMonthTask}
+                  onAddMonthResource={props.onAddMonthResource}
+                  onUpdateMonthResource={props.onUpdateMonthResource}
+                  onDeleteMonthResource={props.onDeleteMonthResource}
+                  onOpenBookNote={props.onOpenBookNote ?? (() => {})}
+                  customReadingModes={props.customReadingModes}
+                  onUpdateReadingModes={props.onUpdateReadingModes}
+                />
+              ) : (
+                <DomainsView
+                  canEdit={props.canEdit}
+                  domains={props.domains}
+                  months={props.months}
+                  onFilterMonthsByDomain={(dId) => {
+                    props.onChangeDomainFilter(dId);
+                    setPlanSubMode('months');
+                  }}
+                  onAddDomain={props.onAddDomain}
+                  onUpdateDomain={props.onUpdateDomain}
+                  onDeleteDomain={props.onDeleteDomain}
+                />
+              )}
+            </div>
+          )}
+
+          {/* SECTION 4: Cumulative Stats & Weekly Meetings */}
+          {subTab === 'meetings' && (
+            <div className="space-y-6">
+              <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
+                <h2 className="font-editorial text-xl font-bold text-slate-900">
+                  التقدم التراكمي عبر المجالات
+                </h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                  {domainBreakdown.map(({ domain, total, completed }) => {
+                    const pct =
+                      total > 0 ? Math.round((completed / total) * 100) : 0;
+                    return (
+                      <div
+                        key={domain.id}
+                        className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-slate-900 truncate">
+                            {domain.title}
+                          </span>
+                          <span className="text-xs font-semibold text-[#1E3A5F] tabular-nums">
+                            {completed} / {total}
+                          </span>
+                        </div>
+                        <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-[#1E3A5F]"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <WeeklyMeetingsPanel
+                canEdit={props.canEdit}
+                onRequireAuth={props.onRequireAuth}
+                meetings={props.weeklyMeetings}
+                onAddMeeting={props.onAddWeeklyMeeting}
+                onUpdateMeeting={props.onUpdateWeeklyMeeting}
+                onDeleteMeeting={props.onDeleteWeeklyMeeting}
+                onCreateTaskFromFollowUp={(t) => props.onAddUnifiedTask(t)}
+                onOpenCalendar={props.onOpenCalendar}
+              />
+            </div>
+          )}
+
+          {/* SECTION 5: Custom Categories & Activity History */}
+          {subTab === 'categories' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
+                <h2 className="font-editorial text-xl font-bold text-slate-900">
+                  التصنيفات المخصّصة
+                </h2>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!catTitle.trim()) return;
+                    props.onAddCustomCategory(
+                      catTitle.trim(),
+                      catDesc.trim(),
+                      catColor,
+                      catHub
+                    );
+                    setCatTitle('');
+                    setCatDesc('');
+                  }}
+                  className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-3"
+                >
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <input
+                      type="text"
+                      value={catTitle}
+                      onChange={(e) => setCatTitle(e.target.value)}
+                      placeholder="اسم التصنيف..."
+                      className="px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                    />
+                    <select
+                      value={catHub}
+                      onChange={(e) =>
+                        setCatHub(e.target.value as CustomCategory['hubId'])
+                      }
+                      className="px-2.5 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                    >
+                      <option value="all">جميع المحاور</option>
+                      {hubs.map((h) => (
+                        <option key={h.id} value={h.id}>
+                          {h.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <input
+                      type="text"
+                      value={catDesc}
+                      onChange={(e) => setCatDesc(e.target.value)}
+                      placeholder="وصف مختصر..."
+                      className="flex-1 min-w-[160px] px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                    />
+                    <select
+                      value={catColor}
+                      onChange={(e) =>
+                        setCatColor(e.target.value as CustomCategory['color'])
+                      }
+                      className="px-2.5 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                    >
+                      <option value="navy">كحلي</option>
+                      <option value="emerald">أخضر</option>
+                      <option value="amber">ذهبي</option>
+                      <option value="slate">رمادي</option>
+                    </select>
+                    <button
+                      type="submit"
+                      disabled={!catTitle.trim()}
+                      className="px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg disabled:opacity-45 cursor-pointer"
+                    >
+                      إضافة
+                    </button>
+                  </div>
+                </form>
+
+                <div className="space-y-2">
+                  {props.customCategories.map((cat) => (
+                    <div
+                      key={cat.id}
+                      className="p-3 bg-[#F7F8FA] border border-slate-200 rounded-lg flex items-center justify-between gap-2"
+                    >
+                      <div>
+                        <p className="text-xs font-bold text-slate-900">
+                          {cat.title}
+                        </p>
+                        {cat.description && (
+                          <p className="text-[11px] text-slate-500">
+                            {cat.description}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => props.onDeleteCustomCategory(cat.id)}
+                        aria-label="حذف التصنيف"
+                        className="p-1.5 text-slate-400 hover:text-red-700 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="font-editorial text-xl font-bold text-slate-900">
+                    سجل النشاط والدراسة ({props.history.length})
+                  </h2>
+                  {props.history.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={props.onClearHistory}
+                      className="text-xs text-red-700 hover:underline cursor-pointer"
+                    >
+                      مسح السجل
+                    </button>
+                  )}
+                </div>
+
+                {props.history.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-4">
+                    لا يوجد نشاط مسجّل بعد.
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-[460px] overflow-y-auto">
+                    {props.history.map((entry) => (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        onClick={() => props.onNavigateFromHistory(entry)}
+                        className="w-full text-right p-3 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors cursor-pointer"
+                      >
+                        <div className="flex items-center justify-between text-[11px] text-slate-500">
+                          <span className="font-semibold text-[#1E3A5F]">
+                            {entry.title}
+                          </span>
+                          <span>{entry.timestampLabel}</span>
+                        </div>
+                        {entry.detail && (
+                          <p className="text-xs text-slate-700 mt-1 truncate">
+                            {entry.detail}
+                          </p>
+                        )}
+                      </button>
                     ))}
                   </div>
                 )}
-              </div>
-            )}
-          </div>
+              </section>
+            </div>
+          )}
 
-          <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 flex flex-wrap items-center gap-4 text-xs text-slate-600">
-            <span className="inline-flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-              <span>عدد الملخصات المحفوظة: {props.bookNotesCount}</span>
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <BookOpen className="w-4 h-4 text-[#1E3A5F]" />
-              <span>عدد الكتب في المكتبة: {props.readingItems.length}</span>
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <Users className="w-4 h-4 text-[#1E3A5F]" />
-              <span>عدد المحاور: {getHubMeta('knowledge').title} وأخواتها</span>
-            </span>
-          </div>
+          {/* SECTION 6: Users, Roles & Granular Content Access */}
+          {subTab === 'users' && (
+            <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-editorial text-xl font-bold text-slate-900">
+                    المستخدمون والصلاحيات والمحتوى المخصّص
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    تحكم في أدوار الحسابات، وامنح كل حساب صلاحية الوصول إلى كورسات أو تلخيصات أو مسارات أو كتب أو خواطر محددة. يظل ({OWNER_ADMIN_EMAIL}) محميًا كمسؤول.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadProfiles()}
+                  disabled={loadingProfiles}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${loadingProfiles ? 'animate-spin' : ''}`}
+                  />
+                  <span>تحديث</span>
+                </button>
+              </div>
+
+              {profilesError && (
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
+                  {profilesError}
+                </div>
+              )}
+
+              {loadingProfiles ? (
+                <div className="py-8 flex items-center justify-center gap-2 text-xs text-slate-500">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>جاري تحميل المستخدمين...</span>
+                </div>
+              ) : profiles.length === 0 ? (
+                <p className="text-xs text-slate-500 py-4">
+                  لا توجد ملفات مستخدمين مسجّلة.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-right text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-500">
+                        <th className="py-2.5 px-3 font-semibold">المستخدم</th>
+                        <th className="py-2.5 px-3 font-semibold">البريد</th>
+                        <th className="py-2.5 px-3 font-semibold">الدور</th>
+                        <th className="py-2.5 px-3 font-semibold">الحالة</th>
+                        <th className="py-2.5 px-3 font-semibold">
+                          صلاحيات المحتوى المخصّصة
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {profiles.map((prof) => {
+                        const isPrimaryOwner =
+                          prof.email.toLowerCase() ===
+                          OWNER_ADMIN_EMAIL.toLowerCase();
+                        const g = grantsByUid[prof.uid];
+                        const grantParts: string[] = [];
+                        if (g?.courseDocIds.length)
+                          grantParts.push(`${g.courseDocIds.length} كورس`);
+                        if (g?.noteIds.length)
+                          grantParts.push(`${g.noteIds.length} تلخيص`);
+                        if (g?.pathIds.length)
+                          grantParts.push(`${g.pathIds.length} مسار`);
+                        if (g?.bookIds.length)
+                          grantParts.push(`${g.bookIds.length} كتاب`);
+                        if (
+                          (g?.reflectionIds.length || 0) +
+                            (g?.reflectionCategories.length || 0) >
+                          0
+                        )
+                          grantParts.push('خواطر');
+
+                        return (
+                          <tr key={prof.uid}>
+                            <td className="py-3 px-3 font-semibold text-slate-900">
+                              {prof.displayName || 'مستخدم'}
+                              {isPrimaryOwner && (
+                                <span className="mr-2 text-[10px] font-bold text-[#1E3A5F]">
+                                  (المالك الأساسي)
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3 text-slate-600">
+                              {prof.email}
+                            </td>
+                            <td className="py-3 px-3">
+                              <select
+                                disabled={isPrimaryOwner}
+                                value={prof.role}
+                                onChange={(e) =>
+                                  void handleRoleUpdate(
+                                    prof,
+                                    e.target.value as 'user' | 'admin',
+                                    prof.approvalStatus
+                                  )
+                                }
+                                className="px-2 py-1 bg-[#F7F8FA] border border-slate-300 rounded-md disabled:opacity-60"
+                              >
+                                <option value="user">
+                                  مستخدم عادي (عام + مخصّص)
+                                </option>
+                                <option value="admin">مسؤول (Admin)</option>
+                              </select>
+                            </td>
+                            <td className="py-3 px-3">
+                              <select
+                                disabled={isPrimaryOwner}
+                                value={prof.approvalStatus}
+                                onChange={(e) =>
+                                  void handleRoleUpdate(
+                                    prof,
+                                    prof.role,
+                                    e.target
+                                      .value as UserProfileItem['approvalStatus']
+                                  )
+                                }
+                                className="px-2 py-1 bg-[#F7F8FA] border border-slate-300 rounded-md disabled:opacity-60"
+                              >
+                                <option value="pending">قيد الانتظار</option>
+                                <option value="approved">مفعّل</option>
+                                <option value="suspended">معلّق</option>
+                                <option value="rejected">مرفوض</option>
+                              </select>
+                            </td>
+                            <td className="py-3 px-3">
+                              {isPrimaryOwner ? (
+                                <span className="text-[11px] text-slate-500">
+                                  صلاحية كاملة للمالك
+                                </span>
+                              ) : (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => openGrantModalForUser(prof)}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold text-[#1E3A5F] bg-[#F7F8FA] hover:bg-slate-200 border border-slate-200 rounded-lg cursor-pointer"
+                                  >
+                                    <KeyRound
+                                      className="w-3 h-3"
+                                      aria-hidden="true"
+                                    />
+                                    <span>تخصيص المحتوى</span>
+                                  </button>
+                                  <span className="text-[11px] text-slate-500 tabular-nums">
+                                    {grantParts.length > 0
+                                      ? grantParts.join(' · ')
+                                      : 'عام فقط'}
+                                  </span>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Per-Account Content Access Grants Modal */}
+              {grantModalUser && (
+                <div
+                  className="fixed inset-0 z-[75] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
+                  role="dialog"
+                  aria-modal="true"
+                  onClick={() => setGrantModalUser(null)}
+                >
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-full max-w-4xl max-h-[90dvh] flex flex-col bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
+                  >
+                    <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                          تخصيص المحتوى لحساب:{' '}
+                          {grantModalUser.displayName || grantModalUser.email}
+                        </h3>
+                        <p className="text-[11px] text-slate-500">
+                          {grantModalUser.email}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setGrantModalUser(null)}
+                        aria-label="إغلاق"
+                        className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-5 space-y-5 text-xs">
+                      <div className="p-3.5 bg-[#F7F8FA] border border-slate-200 rounded-xl space-y-2.5">
+                        <label className="inline-flex items-center gap-2 font-semibold text-[#1E3A5F] cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={grantDraft.includeCourseNotes}
+                            onChange={(e) =>
+                              setGrantDraft((p) => ({
+                                ...p,
+                                includeCourseNotes: e.target.checked,
+                              }))
+                            }
+                          />
+                          <span>
+                            منح جميع التلخيصات والملاحظات المرتبطة بالكورسات المختارة تلقائيًا
+                          </span>
+                        </label>
+                        <input
+                          type="text"
+                          value={grantDraft.notesForUser}
+                          onChange={(e) =>
+                            setGrantDraft((p) => ({
+                              ...p,
+                              notesForUser: e.target.value,
+                            }))
+                          }
+                          placeholder="رسالة ترحيب أو ملاحظة قصيرة لهذا الحساب (اختياري)..."
+                          className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-64 overflow-y-auto">
+                          <p className="font-bold text-slate-900">
+                            الكورسات ({grantDraft.courseDocIds.length} محدد)
+                          </p>
+                          {props.courses.map((c) => {
+                            const docId = c.docId || `course-${c.id}`;
+                            const checked =
+                              grantDraft.courseDocIds.includes(docId);
+                            return (
+                              <label
+                                key={docId}
+                                className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                              >
+                                <span className="truncate">{c.title}</span>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) =>
+                                    setGrantDraft((p) => ({
+                                      ...p,
+                                      courseDocIds: e.target.checked
+                                        ? Array.from(
+                                            new Set([...p.courseDocIds, docId])
+                                          )
+                                        : p.courseDocIds.filter(
+                                            (id) => id !== docId
+                                          ),
+                                    }))
+                                  }
+                                />
+                              </label>
+                            );
+                          })}
+                        </div>
+
+                        <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-64 overflow-y-auto">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-bold text-slate-900">
+                              التلخيصات والملاحظات ({grantDraft.noteIds.length}{' '}
+                              محدد)
+                            </p>
+                            <input
+                              type="text"
+                              value={grantNoteSearch}
+                              onChange={(e) =>
+                                setGrantNoteSearch(e.target.value)
+                              }
+                              placeholder="بحث..."
+                              className="w-32 px-2 py-1 text-[11px] bg-[#F7F8FA] border border-slate-300 rounded"
+                            />
+                          </div>
+                          {(props.bookNotes || [])
+                            .filter((bn) => {
+                              const q = grantNoteSearch.trim().toLowerCase();
+                              if (!q) return true;
+                              return (
+                                bn.bookTitle.toLowerCase().includes(q) ||
+                                (bn.courseTitle || '')
+                                  .toLowerCase()
+                                  .includes(q)
+                              );
+                            })
+                            .map((bn) => {
+                              const checked = grantDraft.noteIds.includes(
+                                bn.id
+                              );
+                              return (
+                                <label
+                                  key={bn.id}
+                                  className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                                >
+                                  <span className="truncate">
+                                    {bn.bookTitle}
+                                    {bn.courseTitle
+                                      ? ` — ${bn.courseTitle}`
+                                      : ''}
+                                  </span>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(e) =>
+                                      setGrantDraft((p) => ({
+                                        ...p,
+                                        noteIds: e.target.checked
+                                          ? Array.from(
+                                              new Set([...p.noteIds, bn.id])
+                                            )
+                                          : p.noteIds.filter(
+                                              (id) => id !== bn.id
+                                            ),
+                                      }))
+                                    }
+                                  />
+                                </label>
+                              );
+                            })}
+                        </div>
+
+                        <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-56 overflow-y-auto">
+                          <p className="font-bold text-slate-900">
+                            مسارات التعلّم ({grantDraft.pathIds.length} محدد)
+                          </p>
+                          {props.learningPaths.map((lp) => {
+                            const checked = grantDraft.pathIds.includes(lp.id);
+                            return (
+                              <label
+                                key={lp.id}
+                                className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                              >
+                                <span className="truncate">{lp.title}</span>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) =>
+                                    setGrantDraft((p) => ({
+                                      ...p,
+                                      pathIds: e.target.checked
+                                        ? Array.from(
+                                            new Set([...p.pathIds, lp.id])
+                                          )
+                                        : p.pathIds.filter(
+                                            (id) => id !== lp.id
+                                          ),
+                                    }))
+                                  }
+                                />
+                              </label>
+                            );
+                          })}
+                        </div>
+
+                        <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-56 overflow-y-auto">
+                          <p className="font-bold text-slate-900">
+                            الكتب ومصادر المكتبة ({grantDraft.bookIds.length}{' '}
+                            محدد)
+                          </p>
+                          {props.readingItems.map((b) => {
+                            const checked = grantDraft.bookIds.includes(b.id);
+                            return (
+                              <label
+                                key={b.id}
+                                className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                              >
+                                <span className="truncate">{b.title}</span>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) =>
+                                    setGrantDraft((p) => ({
+                                      ...p,
+                                      bookIds: e.target.checked
+                                        ? Array.from(
+                                            new Set([...p.bookIds, b.id])
+                                          )
+                                        : p.bookIds.filter((id) => id !== b.id),
+                                    }))
+                                  }
+                                />
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="p-3.5 rounded-xl border border-slate-200 space-y-3">
+                        <p className="font-bold text-slate-900">
+                          منح خواطر وتصنيفات خواطر ({grantDraft.reflectionIds.length}{' '}
+                          خاطرة · {grantDraft.reflectionCategories.length} تصنيف)
+                        </p>
+                        {allReflectionCats.length > 0 && (
+                          <div className="flex flex-wrap gap-2">
+                            {allReflectionCats.map((cat) => {
+                              const checked =
+                                grantDraft.reflectionCategories.includes(cat);
+                              return (
+                                <label
+                                  key={cat}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#F7F8FA] border border-slate-200 rounded-lg cursor-pointer"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(e) =>
+                                      setGrantDraft((p) => ({
+                                        ...p,
+                                        reflectionCategories: e.target.checked
+                                          ? Array.from(
+                                              new Set([
+                                                ...p.reflectionCategories,
+                                                cat,
+                                              ])
+                                            )
+                                          : p.reflectionCategories.filter(
+                                              (c) => c !== cat
+                                            ),
+                                      }))
+                                    }
+                                  />
+                                  <span>تصنيف: {cat}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {(props.reflections?.length ?? 0) > 0 && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-40 overflow-y-auto">
+                            {(props.reflections || []).map((r) => {
+                              const checked = grantDraft.reflectionIds.includes(
+                                r.id
+                              );
+                              return (
+                                <label
+                                  key={r.id}
+                                  className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                                >
+                                  <span className="truncate">
+                                    {r.title || r.moodTag}
+                                  </span>
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(e) =>
+                                      setGrantDraft((p) => ({
+                                        ...p,
+                                        reflectionIds: e.target.checked
+                                          ? Array.from(
+                                              new Set([
+                                                ...p.reflectionIds,
+                                                r.id,
+                                              ])
+                                            )
+                                          : p.reflectionIds.filter(
+                                              (id) => id !== r.id
+                                            ),
+                                      }))
+                                    }
+                                  />
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                      {grantsByUid[grantModalUser.uid] ? (
+                        <button
+                          type="button"
+                          disabled={savingGrant}
+                          onClick={() => void handleRevokeUserGrant()}
+                          className="px-3.5 py-2 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
+                        >
+                          إلغاء كل الصلاحيات المخصّصة
+                        </button>
+                      ) : (
+                        <span />
+                      )}
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setGrantModalUser(null)}
+                          className="px-4 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg cursor-pointer"
+                        >
+                          إلغاء
+                        </button>
+                        <button
+                          type="button"
+                          disabled={savingGrant}
+                          onClick={() => void handleSaveUserGrant()}
+                          className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                        >
+                          {savingGrant && (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          )}
+                          <span>حفظ الصلاحيات</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* SECTION 7: Data, Excel Export & Diagnostics */}
+          {subTab === 'data' && (
+            <div className="space-y-5">
+              {isPending007Migration() && (
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                  يرجى تشغيل ملف التحديث{' '}
+                  <code className="font-mono font-bold">
+                    010_blogs_nav_pins_and_deadlock_free_fix.sql
+                  </code>{' '}
+                  في محرر SQL بلوحة Supabase لتفعيل جداول المدونة وتثبيت الشريط العلوي والمجالات المخصّصة سحابيًا بالكامل.
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Download
+                      className="w-4 h-4 text-[#1E3A5F]"
+                      aria-hidden="true"
+                    />
+                    <h2 className="text-base font-bold text-slate-900">
+                      تصدير البيانات إلى Excel
+                    </h2>
+                  </div>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    تنزيل نسخة منظمة من الخطة السنوية والكورسات والملخصات بصيغة Excel للمراجعة والأرشفة.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      exportPlanToExcel(
+                        props.months,
+                        props.courses,
+                        props.bookNotesForExcel,
+                        props.domains
+                      )
+                    }
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>تصدير Excel الكامل</span>
+                  </button>
+                </div>
+
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <RefreshCw
+                      className="w-4 h-4 text-[#1E3A5F]"
+                      aria-hidden="true"
+                    />
+                    <h2 className="text-base font-bold text-slate-900">
+                      مزامنة السحابة وإعادة التهيئة
+                    </h2>
+                  </div>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    حدّث البيانات فورًا من السحابة أو أعد ضبط الخطة الافتراضية عند الحاجة.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={syncingManual}
+                      onClick={async () => {
+                        setSyncingManual(true);
+                        try {
+                          await props.onForceSync();
+                        } finally {
+                          setSyncingManual(false);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl cursor-pointer"
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${
+                          syncingManual ? 'animate-spin' : ''
+                        }`}
+                      />
+                      <span>مزامنة فورية الآن</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setConfirmResetOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-xl cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>إعادة ضبط الخطة الافتراضية</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Shield
+                      className="w-4 h-4 text-[#1E3A5F]"
+                      aria-hidden="true"
+                    />
+                    <h2 className="text-sm font-bold text-slate-900">
+                      تشخيص الاتصال بالخادم (للمسؤول فقط)
+                    </h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !diagOpen;
+                      setDiagOpen(next);
+                      if (next && !diagResult) void handleRunDiagnostics();
+                    }}
+                    className="px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-[#F7F8FA] border border-slate-200 rounded-lg cursor-pointer"
+                  >
+                    {diagOpen ? 'إخفاء التشخيص' : 'فحص حالة الربط'}
+                  </button>
+                </div>
+
+                {diagOpen && (
+                  <div className="space-y-3 pt-2 border-t border-slate-100">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-500">
+                        يتحقق من توثيق Firebase وحماية RLS وصلاحيات الحاويات دون عرض أسرار.
+                      </span>
+                      <button
+                        type="button"
+                        disabled={diagRunning}
+                        onClick={() => void handleRunDiagnostics()}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-slate-100 rounded-lg cursor-pointer"
+                      >
+                        <RefreshCw
+                          className={`w-3 h-3 ${
+                            diagRunning ? 'animate-spin' : ''
+                          }`}
+                        />
+                        <span>إعادة الفحص</span>
+                      </button>
+                    </div>
+
+                    {diagResult && (
+                      <div className="space-y-2">
+                        {diagResult.checks.map((chk) => (
+                          <div
+                            key={chk.id}
+                            className="p-2.5 rounded-lg bg-[#F7F8FA] border border-slate-200 flex items-start justify-between gap-2 text-xs"
+                          >
+                            <div>
+                              <p className="font-semibold text-slate-900">
+                                {chk.label}
+                              </p>
+                              <p className="text-[11px] text-slate-600">
+                                {chk.detail}
+                              </p>
+                            </div>
+                            <span
+                              className={`font-semibold shrink-0 ${
+                                chk.ok ? 'text-emerald-700' : 'text-amber-700'
+                              }`}
+                            >
+                              {chk.ok ? 'سليم' : 'تنبيه'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 flex flex-wrap items-center gap-4 text-xs text-slate-600">
+                <span className="inline-flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                  <span>عدد الملخصات المحفوظة: {props.bookNotesCount}</span>
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <BookOpen className="w-4 h-4 text-[#1E3A5F]" />
+                  <span>عدد الكتب في المكتبة: {props.readingItems.length}</span>
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <Users className="w-4 h-4 text-[#1E3A5F]" />
+                  <span>إجمالي مجالات التركيز: {hubs.length}</span>
+                </span>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       <ConfirmDialog
         open={confirmResetOpen}

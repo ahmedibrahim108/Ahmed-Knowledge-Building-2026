@@ -1,6 +1,6 @@
 export type DomainId = string;
 
-export type LearningHubId = 'marketing' | 'dental_career' | 'knowledge';
+export type LearningHubId = string;
 
 export type ReadingMode = string;
 
@@ -168,7 +168,53 @@ export interface LearningHubMeta {
   defaultCategories: string[];
 }
 
-export const LEARNING_HUBS: LearningHubMeta[] = [
+export interface HubAccentPreset {
+  id: string;
+  label: string;
+  accentHex: string;
+  badgeClass: string;
+}
+
+export const HUB_ACCENT_PRESETS: HubAccentPreset[] = [
+  {
+    id: 'amber',
+    label: 'عنبري',
+    accentHex: '#B45309',
+    badgeClass: 'bg-amber-50 text-amber-900 border-amber-200',
+  },
+  {
+    id: 'emerald',
+    label: 'زمردي',
+    accentHex: '#047857',
+    badgeClass: 'bg-emerald-50 text-emerald-900 border-emerald-200',
+  },
+  {
+    id: 'navy',
+    label: 'كحلي',
+    accentHex: '#1E3A5F',
+    badgeClass: 'bg-slate-100 text-[#1E3A5F] border-slate-300',
+  },
+  {
+    id: 'indigo',
+    label: 'نيلي',
+    accentHex: '#4338CA',
+    badgeClass: 'bg-indigo-50 text-indigo-900 border-indigo-200',
+  },
+  {
+    id: 'teal',
+    label: 'بترولي',
+    accentHex: '#0F766E',
+    badgeClass: 'bg-teal-50 text-teal-900 border-teal-200',
+  },
+  {
+    id: 'rose',
+    label: 'توتي',
+    accentHex: '#BE123C',
+    badgeClass: 'bg-rose-50 text-rose-900 border-rose-200',
+  },
+];
+
+export const DEFAULT_LEARNING_HUBS: LearningHubMeta[] = [
   {
     id: 'marketing',
     title: 'الماركتينج والأعمال',
@@ -235,6 +281,13 @@ export const LEARNING_HUBS: LearningHubMeta[] = [
   },
 ];
 
+// Active synchronized hubs array (mutated safely via setActiveLearningHubs so
+// every module reading LEARNING_HUBS sees edited/4th+ hubs automatically)
+export const LEARNING_HUBS: LearningHubMeta[] = DEFAULT_LEARNING_HUBS.map((h) => ({
+  ...h,
+  defaultCategories: [...h.defaultCategories],
+}));
+
 export const READING_MODES_META: ReadingModeMeta[] = [
   {
     id: 'surface',
@@ -296,10 +349,38 @@ export function addDaysToDateKey(baseDateKey: string, days: number): string {
   return `${yy}-${mm}-${dd}`;
 }
 
-export function getHubMeta(hubId?: LearningHubId): LearningHubMeta {
+export function resolveLearningHubs(
+  customHubs?: LearningHubMeta[]
+): LearningHubMeta[] {
+  if (Array.isArray(customHubs) && customHubs.length > 0) {
+    return customHubs.map((h) => ({
+      ...h,
+      defaultCategories: Array.isArray(h.defaultCategories)
+        ? [...h.defaultCategories]
+        : [],
+    }));
+  }
+  return DEFAULT_LEARNING_HUBS.map((h) => ({
+    ...h,
+    defaultCategories: [...h.defaultCategories],
+  }));
+}
+
+export function setActiveLearningHubs(customHubs?: LearningHubMeta[]) {
+  const next = resolveLearningHubs(customHubs);
+  LEARNING_HUBS.splice(0, LEARNING_HUBS.length, ...next);
+}
+
+export function getHubMeta(
+  hubId?: LearningHubId,
+  hubsOverride?: LearningHubMeta[]
+): LearningHubMeta {
+  const list = hubsOverride && hubsOverride.length > 0 ? hubsOverride : LEARNING_HUBS;
   return (
-    LEARNING_HUBS.find((h) => h.id === hubId) ??
-    LEARNING_HUBS[2]
+    list.find((h) => h.id === hubId) ??
+    DEFAULT_LEARNING_HUBS.find((h) => h.id === hubId) ??
+    list[list.length - 1] ??
+    DEFAULT_LEARNING_HUBS[2]
   );
 }
 
@@ -613,6 +694,7 @@ export interface StudyHistoryEntry {
     | 'library'
     | 'tasks'
     | 'reflections'
+    | 'blogs'
     | 'account';
   targetNoteId?: string;
   targetMonthId?: number;
@@ -846,6 +928,44 @@ export interface PersonalReflection {
   createdAtLabel: string;
   createdAtMs: number;
 }
+
+export interface BlogPost {
+  id: string;
+  title: string;
+  subtitle?: string;
+  excerpt?: string;
+  content: string;
+  categoryLabel?: string;
+  coverImageUrl?: string;
+  coverStoragePath?: string;
+  coverFrame?: ImageFrameSpec;
+  readingTimeMinutes?: number;
+  isPublic?: boolean;
+  pinned: boolean;
+  sortOrder?: number;
+  createdAtLabel: string;
+  createdAtMs: number;
+  updatedAtLabel?: string;
+}
+
+export const DEFAULT_BLOG_CATEGORIES: string[] = [
+  'فكر ومنهج',
+  'تطوير مهني',
+  'طب الأسنان',
+  'التسويق والأعمال',
+  'قراءات ومراجعات',
+  'تجارب شخصية',
+];
+
+export function estimateReadingTimeMinutes(text: string): number {
+  const words = (text || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+  return Math.max(1, Math.round(words / 160));
+}
+
+export type PublicPageId = 'home' | 'reflections' | 'blogs';
 
 export type CalendarCategory = 'شخصي' | 'دراسة' | 'موعد' | 'مراجعة' | 'قراءة';
 export type CalendarColor = 'navy' | 'emerald' | 'amber' | 'rose';
@@ -1145,6 +1265,7 @@ export interface PublicSiteVisibilityFlags {
   showPaths: boolean;
   showBooks: boolean;
   showReflections?: boolean;
+  showBlogs?: boolean;
 }
 
 export interface PublicSiteConfig {
@@ -1204,6 +1325,7 @@ export const DEFAULT_PUBLIC_SITE_CONFIG: PublicSiteConfig = {
     showPaths: true,
     showBooks: true,
     showReflections: true,
+    showBlogs: true,
   },
   publicReflectionCategories: [],
   updatedAtMs: 0,
@@ -1270,12 +1392,59 @@ export interface UserPreferences {
   weeklyRhythm?: WeeklyRhythmItem[];
   reflectionCategories?: string[];
   customReadingModes?: ReadingModeMeta[];
+  pinnedNavTabs?: string[];
+  customHubs?: LearningHubMeta[];
 }
 
+export interface PinnableNavTabMeta {
+  id:
+    | 'focus'
+    | 'courses'
+    | 'paths'
+    | 'library'
+    | 'journal'
+    | 'reflections'
+    | 'blogs'
+    | 'gallery'
+    | 'tasks'
+    | 'calendar'
+    | 'plan'
+    | 'domains';
+  label: string;
+  description: string;
+}
+
+export const NAV_PINNABLE_TABS_META: PinnableNavTabMeta[] = [
+  { id: 'focus', label: 'التركيز', description: 'كورساتك ومهامك النشطة حاليًا.' },
+  { id: 'courses', label: 'الكورسات', description: 'إدارة الدورات والدروس وحالات الأسنان.' },
+  { id: 'paths', label: 'المسارات', description: 'خرائط التعلّم طويلة المدى ومراحلها.' },
+  { id: 'library', label: 'المكتبة', description: 'الكتب والأبحاث وملفات PDF المقروءة.' },
+  { id: 'journal', label: 'التلخيص', description: 'دفاتر التلخيص والتكرار المتباعد.' },
+  { id: 'reflections', label: 'خواطري', description: 'التأملات اليومية والمقالات السريعة.' },
+  { id: 'blogs', label: 'المدونة والمقالات', description: 'مقالاتك التحريرية والمنشورة في الموقع العام.' },
+  { id: 'gallery', label: 'معرض الصور', description: 'ألبوم صورك وإطاراتها السحابية.' },
+  { id: 'tasks', label: 'المهام', description: 'المهام العملية والمشاريع المربوطة بالتقويم.' },
+  { id: 'calendar', label: 'التقويم', description: 'الجدول الزمني الـ 24 ساعة وسحب المهام.' },
+  { id: 'plan', label: 'خطة الـ 12 شهرًا', description: 'الوحدات الشهرية والأرباع السنوية.' },
+  { id: 'domains', label: 'المحاور المعرفية', description: 'تصنيف المجالات الفكرية والمفكرين.' },
+];
+
+export const DEFAULT_PINNED_NAV_TABS: string[] = [
+  'focus',
+  'courses',
+  'paths',
+  'library',
+  'journal',
+  'reflections',
+  'blogs',
+  'tasks',
+  'calendar',
+];
+
 export const DEFAULT_HUB_CATEGORIES: Record<LearningHubId, string[]> = {
-  marketing: LEARNING_HUBS[0].defaultCategories,
-  dental_career: LEARNING_HUBS[1].defaultCategories,
-  knowledge: LEARNING_HUBS[2].defaultCategories,
+  marketing: DEFAULT_LEARNING_HUBS[0].defaultCategories,
+  dental_career: DEFAULT_LEARNING_HUBS[1].defaultCategories,
+  knowledge: DEFAULT_LEARNING_HUBS[2].defaultCategories,
 };
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
@@ -1296,6 +1465,8 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   weeklyRhythm: DEFAULT_WEEKLY_RHYTHM,
   reflectionCategories: DEFAULT_REFLECTION_CATEGORIES,
   customReadingModes: READING_MODES_META,
+  pinnedNavTabs: DEFAULT_PINNED_NAV_TABS,
+  customHubs: DEFAULT_LEARNING_HUBS,
 };
 
 export interface WeeklyRhythmSlot {
