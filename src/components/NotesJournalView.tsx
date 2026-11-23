@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
+  ArrowUpDown,
   BookOpen,
   CheckCircle2,
   CheckSquare,
   Download,
   Edit3,
-  Eye,
   FileSpreadsheet,
   FileText,
   FileUp,
@@ -27,6 +29,7 @@ import {
 import {
   BookNote,
   CustomCategory,
+  EntitySortMode,
   HighlightColorKey,
   LEARNING_HUBS,
   LearningHubId,
@@ -41,11 +44,11 @@ import {
   VoiceInsertMode,
   getHubMeta,
   getTodayDateKey,
+  sortBookNotesList,
 } from '../data/curriculumData';
 import {
-  downloadResourceAttachmentResult,
-  isPdfAttachment,
-  isViewableDocumentAttachment,
+  exportNotebookBundleAsWord,
+  exportSingleBookNoteAsWord,
   parseDocumentFile,
 } from '../utils/documentImportExport';
 import {
@@ -54,10 +57,6 @@ import {
   exportSingleBookNoteAsExcel,
   exportSingleBookNoteAsMarkdown,
 } from '../utils/excelExport';
-import {
-  exportNotebookBundleAsWord,
-  exportSingleBookNoteAsWord,
-} from '../utils/documentImportExport';
 import {
   HIGHLIGHT_SWATCHES,
   ensureRichHtml,
@@ -69,6 +68,7 @@ import {
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
+import NoteAttachmentsPanel from './NoteAttachmentsPanel';
 import type { ActivePdfTarget } from './PDFViewerModal';
 import ReadAloudButton from './ReadAloudButton';
 import RichTextNoteEditor from './RichTextNoteEditor';
@@ -207,6 +207,7 @@ export default function NotesJournalView({
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [onlyRepeated, setOnlyRepeated] = useState(false);
   const [searchNotes, setSearchNotes] = useState('');
+  const [notesSortMode, setNotesSortMode] = useState<EntitySortMode>('manual');
 
   // Composer form
   const [showComposer, setShowComposer] = useState(false);
@@ -235,7 +236,6 @@ export default function NotesJournalView({
   const [selectedExportIds, setSelectedExportIds] = useState<string[]>([]);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [importingFile, setImportingFile] = useState(false);
-  const [fileDownloadError, setFileDownloadError] = useState<string | null>(null);
   const newNoteFileInputRef = useRef<HTMLInputElement | null>(null);
   const appendFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -336,28 +336,39 @@ export default function NotesJournalView({
   }, [courses, effectiveHubFilter]);
 
   const bookOnlyNotes = useMemo(
-    () => hubFilteredNotes.filter((bn) => (bn.noteType ?? 'book') === 'book'),
-    [hubFilteredNotes]
+    () =>
+      sortBookNotesList(
+        hubFilteredNotes.filter((bn) => (bn.noteType ?? 'book') === 'book'),
+        notesSortMode
+      ),
+    [hubFilteredNotes, notesSortMode]
   );
 
   const generalNotes = useMemo(
-    () => hubFilteredNotes.filter((bn) => bn.noteType === 'general'),
-    [hubFilteredNotes]
+    () =>
+      sortBookNotesList(
+        hubFilteredNotes.filter((bn) => bn.noteType === 'general'),
+        notesSortMode
+      ),
+    [hubFilteredNotes, notesSortMode]
   );
 
   const unlinkedLectureNotes = useMemo(
     () =>
-      hubFilteredNotes.filter(
-        (bn) =>
-          bn.noteType === 'course_lecture' &&
-          !(bn.courseId && courses.some((c) => c.id === bn.courseId))
+      sortBookNotesList(
+        hubFilteredNotes.filter(
+          (bn) =>
+            bn.noteType === 'course_lecture' &&
+            !(bn.courseId && courses.some((c) => c.id === bn.courseId))
+        ),
+        notesSortMode
       ),
-    [hubFilteredNotes, courses]
+    [hubFilteredNotes, courses, notesSortMode]
   );
 
   const filteredNotes = useMemo(() => {
     const q = searchNotes.trim().toLowerCase();
-    return hubFilteredNotes.filter((bn) => {
+    const matched = hubFilteredNotes.filter((bn) => {
       const t = bn.noteType ?? 'book';
       if (typeFilter !== 'all' && t !== typeFilter) return false;
       if (courseFilterId > 0 && (bn.courseId ?? 0) !== courseFilterId) {
@@ -385,12 +396,14 @@ export default function NotesJournalView({
       }
       return true;
     });
+    return sortBookNotesList(matched, notesSortMode);
   }, [
     hubFilteredNotes,
     typeFilter,
     courseFilterId,
     categoryFilter,
     searchNotes,
+    notesSortMode,
   ]);
 
   const selectedCourse = useMemo(
@@ -403,22 +416,18 @@ export default function NotesJournalView({
 
   const selectedCourseNotes = useMemo(() => {
     if (selectedCourseNotebookId === null) return [];
-    return bookNotes.filter(
+    const list = bookNotes.filter(
       (bn) =>
         bn.noteType === 'course_lecture' &&
         (bn.courseId ?? 0) === selectedCourseNotebookId
     );
-  }, [bookNotes, selectedCourseNotebookId]);
+    return sortBookNotesList(list, notesSortMode);
+  }, [bookNotes, selectedCourseNotebookId, notesSortMode]);
 
   const standaloneNote = useMemo(() => {
     if (!standaloneNoteOpen || !activeBookNoteId) return null;
     return bookNotes.find((bn) => bn.id === activeBookNoteId) ?? null;
   }, [standaloneNoteOpen, activeBookNoteId, bookNotes]);
-
-  const standaloneCourse = useMemo(() => {
-    if (!standaloneNote?.courseId) return null;
-    return courses.find((c) => c.id === standaloneNote.courseId) ?? null;
-  }, [standaloneNote, courses]);
 
   const filteredMonths = months.filter((m) => {
     const hasNotes = m.notes.trim().length > 0;
@@ -446,6 +455,25 @@ export default function NotesJournalView({
       return false;
     }
     return true;
+  };
+
+  const handleMoveNoteOrder = (
+    list: BookNote[],
+    index: number,
+    direction: 'up' | 'down'
+  ) => {
+    if (!requireEdit()) return;
+    const targetIdx = direction === 'up' ? index - 1 : index + 1;
+    if (targetIdx < 0 || targetIdx >= list.length) return;
+    const reordered = [...list];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIdx, 0, moved);
+    reordered.forEach((item, idx) => {
+      const nextOrder = idx + 1;
+      if ((item.sortOrder ?? 0) !== nextOrder) {
+        onUpdateBookNote(item.id, { sortOrder: nextOrder });
+      }
+    });
   };
 
   const openNoteStandalone = (note: BookNote, startInEdit = false) => {
@@ -724,12 +752,6 @@ export default function NotesJournalView({
   if (standaloneNote) {
     const activeHubMeta = getHubMeta(
       isEditingNote && draftNote ? draftNote.hubId : standaloneNote.hubId
-    );
-    const linkedCoursePdfs = (standaloneCourse?.resources ?? []).filter(
-      (r) =>
-        isPdfAttachment(r.attachmentName, r.mimeType) ||
-        isViewableDocumentAttachment(r.attachmentName, r.mimeType) ||
-        Boolean(r.attachmentName || r.storagePath || r.downloadUrl)
     );
     const activeDraft = draftNote ?? buildDraftFromNote(standaloneNote);
     const activeColorKey: NoteColorKey = isEditingNote
@@ -1066,91 +1088,6 @@ export default function NotesJournalView({
             )}
           </div>
 
-          {/* Linked Course PDFs & Word Files quick viewer (opens PDFViewerModal without downloading or leaving note) */}
-          {linkedCoursePdfs.length > 0 && onOpenPdf && (
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-              <p className="text-xs font-bold text-[#1E3A5F]">
-                الملفات المرفقة بالكورس المرتبط (افتح PDF أو Word للقراءة داخل نافذة مستقلة):
-              </p>
-              {fileDownloadError && (
-                <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-center justify-between gap-2">
-                  <span>{fileDownloadError}</span>
-                  <button
-                    type="button"
-                    onClick={() => setFileDownloadError(null)}
-                    className="font-semibold text-amber-700 hover:text-amber-950 cursor-pointer"
-                  >
-                    إغلاق
-                  </button>
-                </div>
-              )}
-              <div className="flex flex-wrap gap-2">
-                {linkedCoursePdfs.map((docRes) => {
-                  const isPdf = isPdfAttachment(
-                    docRes.attachmentName,
-                    docRes.mimeType
-                  );
-                  return (
-                    <div
-                      key={docRes.id}
-                      className="inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFileDownloadError(null);
-                          onOpenPdf({
-                            uid,
-                            title: docRes.title,
-                            fileName:
-                              docRes.attachmentName ||
-                              (isPdf
-                                ? `${docRes.title}.pdf`
-                                : `${docRes.title}.docx`),
-                            resourceId: docRes.id,
-                            storagePath: docRes.storagePath,
-                            downloadUrl: docRes.downloadUrl,
-                            mimeType: docRes.mimeType,
-                            extractedPreview: docRes.extractedPreview,
-                            contextLabel: standaloneCourse?.title,
-                          });
-                        }}
-                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-                      >
-                        <Eye className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>
-                          {isPdf ? 'فتح PDF' : 'فتح الملف'}: {docRes.title}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          setFileDownloadError(null);
-                          const result = await downloadResourceAttachmentResult({
-                            uid,
-                            resourceId: docRes.id,
-                            fileName:
-                              docRes.attachmentName || `${docRes.title}.pdf`,
-                            mimeType: docRes.mimeType,
-                            storagePath: docRes.storagePath,
-                            downloadUrl: docRes.downloadUrl,
-                          });
-                          if (!result.ok && result.errorMessage) {
-                            setFileDownloadError(result.errorMessage);
-                          }
-                        }}
-                        title="تنزيل الملف"
-                        className="p-1 text-slate-500 hover:text-slate-900 cursor-pointer"
-                      >
-                        <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
           {/* Note Content Section */}
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1298,6 +1235,19 @@ export default function NotesJournalView({
               title="الصور والمخططات المرفقة بهذه الملاحظة (متزامنة عبر حسابك)"
               canEdit={canEdit}
               onRequireAuth={onRequireAuth}
+            />
+
+            <NoteAttachmentsPanel
+              uid={uid}
+              noteId={standaloneNote.id}
+              noteTitle={standaloneNote.bookTitle}
+              resources={standaloneNote.resources}
+              canEdit={canEdit}
+              onRequireAuth={onRequireAuth}
+              onUpdateResources={(next) =>
+                onUpdateBookNote(standaloneNote.id, { resources: next })
+              }
+              onOpenPdf={onOpenPdf ?? (() => {})}
             />
           </div>
 
@@ -1567,18 +1517,35 @@ export default function NotesJournalView({
             })}
           </div>
 
-          <button
-            type="button"
-            onClick={() => setOnlyRepeated((v) => !v)}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs font-medium rounded-lg border cursor-pointer ${
-              onlyRepeated
-                ? 'bg-amber-50 border-amber-300 text-amber-900 font-semibold'
-                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-            }`}
-          >
-            <Repeat className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>الملاحظات المتكررة (2+)</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+              <ArrowUpDown className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+              <select
+                aria-label="ترتيب الملاحظات"
+                value={notesSortMode}
+                onChange={(e) => setNotesSortMode(e.target.value as EntitySortMode)}
+                className="px-2.5 py-1.5 min-h-[36px] text-xs font-medium bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
+              >
+                <option value="manual">ترتيب يدوي (تحريك لأعلى/لأسفل)</option>
+                <option value="logical">ترتيب منطقي (١، ٢، ٣)</option>
+                <option value="updated">الأحدث تعديلاً</option>
+                <option value="title">ترتيب أبجدي</option>
+              </select>
+            </label>
+
+            <button
+              type="button"
+              onClick={() => setOnlyRepeated((v) => !v)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs font-medium rounded-lg border cursor-pointer ${
+                onlyRepeated
+                  ? 'bg-amber-50 border-amber-300 text-amber-900 font-semibold'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <Repeat className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>الملاحظات المتكررة (2+)</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -1940,7 +1907,7 @@ export default function NotesJournalView({
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {selectedCourseNotes.map((bn) => {
+                    {selectedCourseNotes.map((bn, idx) => {
                       const snippet = richHtmlToPlainText(bn.content);
                       return (
                         <article
@@ -1976,6 +1943,34 @@ export default function NotesJournalView({
 
                             {canEdit && (
                               <div className="flex items-center gap-1">
+                                {notesSortMode === 'manual' && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={idx === 0}
+                                      onClick={() =>
+                                        handleMoveNoteOrder(selectedCourseNotes, idx, 'up')
+                                      }
+                                      title="تقديم للأعلى"
+                                      aria-label="تقديم المحاضرة"
+                                      className="p-1.5 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
+                                    >
+                                      <ArrowUp className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={idx === selectedCourseNotes.length - 1}
+                                      onClick={() =>
+                                        handleMoveNoteOrder(selectedCourseNotes, idx, 'down')
+                                      }
+                                      title="تأخير للأسفل"
+                                      aria-label="تأخير المحاضرة"
+                                      className="p-1.5 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
+                                    >
+                                      <ArrowDown className="w-3.5 h-3.5" />
+                                    </button>
+                                  </>
+                                )}
                                 <button
                                   type="button"
                                   onClick={() => openNoteStandalone(bn, true)}
@@ -2398,7 +2393,7 @@ export default function NotesJournalView({
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {bookOnlyNotes.map((bn) => {
+                    {bookOnlyNotes.map((bn, idx) => {
                       const snippet = richHtmlToPlainText(bn.content);
                       const hubMeta = getHubMeta(bn.hubId);
                       const isDue =
@@ -2472,6 +2467,34 @@ export default function NotesJournalView({
                             <div className="flex items-center gap-1">
                               {canEdit && (
                                 <>
+                                  {notesSortMode === 'manual' && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        disabled={idx === 0}
+                                        onClick={() =>
+                                          handleMoveNoteOrder(bookOnlyNotes, idx, 'up')
+                                        }
+                                        title="تقديم للأعلى"
+                                        aria-label="تقديم الدفتر"
+                                        className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
+                                      >
+                                        <ArrowUp className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={idx === bookOnlyNotes.length - 1}
+                                        onClick={() =>
+                                          handleMoveNoteOrder(bookOnlyNotes, idx, 'down')
+                                        }
+                                        title="تأخير للأسفل"
+                                        aria-label="تأخير الدفتر"
+                                        className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
+                                      >
+                                        <ArrowDown className="w-3.5 h-3.5" />
+                                      </button>
+                                    </>
+                                  )}
                                   <button
                                     type="button"
                                     onClick={() => openNoteStandalone(bn, true)}
@@ -2771,7 +2794,7 @@ export default function NotesJournalView({
               })()}
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredNotes.map((bn) => {
+                {filteredNotes.map((bn, idx) => {
                   const isChecked = selectedExportIds.includes(bn.id);
                   const noteType = bn.noteType ?? 'book';
                   const hubMeta = getHubMeta(bn.hubId);
@@ -2847,6 +2870,34 @@ export default function NotesJournalView({
 
                         {canEdit && (
                           <div className="flex items-center gap-1">
+                            {notesSortMode === 'manual' && (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={idx === 0}
+                                  onClick={() =>
+                                    handleMoveNoteOrder(filteredNotes, idx, 'up')
+                                  }
+                                  title="تقديم للأعلى"
+                                  aria-label="تقديم الملاحظة"
+                                  className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
+                                >
+                                  <ArrowUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={idx === filteredNotes.length - 1}
+                                  onClick={() =>
+                                    handleMoveNoteOrder(filteredNotes, idx, 'down')
+                                  }
+                                  title="تأخير للأسفل"
+                                  aria-label="تأخير الملاحظة"
+                                  className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
+                                >
+                                  <ArrowDown className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
                             <button
                               type="button"
                               onClick={() => openNoteStandalone(bn, true)}

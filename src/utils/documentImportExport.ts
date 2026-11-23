@@ -433,14 +433,19 @@ async function uploadViaSupabaseTus(
 
   if (!createRes.ok) {
     const errText = await createRes.text().catch(() => '');
-    throw new Error(
-      errText || `HTTP ${createRes.status}: تعذر بدء الرفع المتقطع للملف.`
-    );
+    console.warn('TUS create upload error:', createRes.status, errText);
+    const tusErr = new Error(
+      createRes.status === 413
+        ? 'حجم الملف يتجاوز الحد الأقصى المسموح به (100 ميجابايت).'
+        : 'تعذّر بدء رفع الملف الكبير عبر الاتصال المتقطع.'
+    ) as Error & { status?: number };
+    tusErr.status = createRes.status;
+    throw tusErr;
   }
 
   const locationHeader = createRes.headers.get('location');
   if (!locationHeader) {
-    throw new Error('لم يُعد خادم التخزين رابط متابعة الرفع (Location).');
+    throw new Error('لم يُعد خادم التخزين رابط متابعة الرفع.');
   }
   const uploadUrl = new URL(locationHeader, supabaseUrl).toString();
 
@@ -488,7 +493,14 @@ async function uploadViaSupabaseTus(
 
         if (!patchRes.ok) {
           const errText = await patchRes.text().catch(() => '');
-          throw new Error(errText || `HTTP ${patchRes.status}`);
+          console.warn('TUS patch error:', patchRes.status, errText);
+          const patchErr = new Error(
+            patchRes.status === 413
+              ? 'حجم الملف يتجاوز الحد الأقصى المسموح به (100 ميجابايت).'
+              : 'انقطع رفع جزء من الملف.'
+          ) as Error & { status?: number };
+          patchErr.status = patchRes.status;
+          throw patchErr;
         }
 
         const nextOffsetHeader = patchRes.headers.get('upload-offset');
@@ -536,6 +548,16 @@ export async function uploadResourceAttachment(
     };
   }
 
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return {
+      mimeType,
+      sizeBytes: file.size,
+      uploadedToCloud: false,
+      errorMessage:
+        'لا يوجد اتصال بالإنترنت حاليًا. تم حفظ نسخة محلية مؤقتة ويمكنك إعادة الرفع للسحابة عند عودة الاتصال.',
+    };
+  }
+
   const effectiveUid = uid || auth?.currentUser?.uid;
   if (!effectiveUid) {
     return {
@@ -543,7 +565,7 @@ export async function uploadResourceAttachment(
       sizeBytes: file.size,
       uploadedToCloud: false,
       errorMessage:
-        'سجّل الدخول أولاً ليتم رفع الملف إلى التخزين السحابي (Supabase) ومزامنته بين الهاتف واللابتوب.',
+        'سجّل الدخول بحساب المسؤول أولاً ليتم رفع الملف إلى التخزين السحابي ومزامنته.',
     };
   }
 
@@ -553,7 +575,7 @@ export async function uploadResourceAttachment(
       sizeBytes: file.size,
       uploadedToCloud: false,
       errorMessage:
-        'تم حفظ الملف محليًا على هذا الجهاز. لم تُضبط إعدادات Supabase السحابية بعد.',
+        'تم حفظ الملف محليًا على هذا الجهاز. لم تُضبط إعدادات التخزين السحابي بعد.',
     };
   }
 
@@ -565,15 +587,7 @@ export async function uploadResourceAttachment(
     let signedUrl = '';
     onProgress?.(2);
 
-    if (file.size > TUS_RESUMABLE_THRESHOLD) {
-      await uploadViaSupabaseTus(
-        STUDY_FILES_BUCKET,
-        storagePath,
-        file,
-        mimeType,
-        onProgress
-      );
-    } else {
+    const standardUpload = async () => {
       await withFirebaseTokenRetry(async (client) => {
         const { error: uploadErr } = await client.storage
           .from(STUDY_FILES_BUCKET)
@@ -584,6 +598,28 @@ export async function uploadResourceAttachment(
         if (uploadErr) throw uploadErr;
       });
       onProgress?.(90);
+    };
+
+    if (file.size > TUS_RESUMABLE_THRESHOLD) {
+      try {
+        await uploadViaSupabaseTus(
+          STUDY_FILES_BUCKET,
+          storagePath,
+          file,
+          mimeType,
+          onProgress
+        );
+      } catch (tusErr) {
+        const status = (tusErr as { status?: number })?.status;
+        if (status !== 413 && file.size <= 50 * 1024 * 1024) {
+          console.warn('TUS upload failed, falling back to standard upload:', tusErr);
+          await standardUpload();
+        } else {
+          throw tusErr;
+        }
+      }
+    } else {
+      await standardUpload();
     }
 
     await withFirebaseTokenRetry(async (client) => {

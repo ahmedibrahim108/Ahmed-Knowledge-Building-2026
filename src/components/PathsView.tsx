@@ -3,11 +3,14 @@ import {
   ArrowDown,
   ArrowRight,
   ArrowUp,
+  ArrowUpDown,
   Calendar,
   CheckSquare,
   Compass,
   Edit3,
+  Globe,
   ListTodo,
+  Lock,
   Plus,
   Square,
   Trash2,
@@ -19,21 +22,28 @@ import {
   LearningPathStage,
   LearningPathStatus,
   PersonalCourse,
+  PracticalProject,
+  ReadingLibraryItem,
   TaskPriority,
   UnifiedTask,
   computeEndTimeFromMinutes,
   getHubMeta,
   getTodayDateKey,
+  sortLearningPathsList,
 } from '../data/curriculumData';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
+import LearningObjectivesPanel from './LearningObjectivesPanel';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
+import TaskFormModal from './TaskFormModal';
 
 interface PathsViewProps {
   canEdit: boolean;
   onRequireAuth: () => void;
   paths: LearningPath[];
   courses: PersonalCourse[];
+  readingItems?: ReadingLibraryItem[];
+  projects?: PracticalProject[];
   unifiedTasks?: UnifiedTask[];
   hubCategories: Record<LearningHubId, string[]>;
   activeHubFilter: LearningHubId | 'all';
@@ -46,6 +56,7 @@ interface PathsViewProps {
   onTogglePathStage?: (pathId: string, stageId: string) => void;
   onAddUnifiedTask?: (payload: Omit<UnifiedTask, 'id'>) => void;
   onUpdateUnifiedTask?: (id: string, updates: Partial<UnifiedTask>) => void;
+  onDeleteUnifiedTask?: (taskId: string) => void;
   onOpenCourse: (courseId: number) => void;
   onOpenCalendar?: () => void;
   onOpenTasks?: () => void;
@@ -62,6 +73,8 @@ export default function PathsView({
   onRequireAuth,
   paths,
   courses,
+  readingItems = [],
+  projects = [],
   unifiedTasks = [],
   hubCategories,
   activeHubFilter,
@@ -72,6 +85,7 @@ export default function PathsView({
   onTogglePathStage,
   onAddUnifiedTask,
   onUpdateUnifiedTask,
+  onDeleteUnifiedTask,
   onOpenCourse,
   onOpenCalendar,
   onOpenTasks,
@@ -80,6 +94,12 @@ export default function PathsView({
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingPath, setEditingPath] = useState(false);
   const [confirmDeletePath, setConfirmDeletePath] = useState<LearningPath | null>(null);
+  const [sortMode, setSortMode] = useState<'manual' | 'progress' | 'title'>('manual');
+  const [taskModalState, setTaskModalState] = useState<{
+    open: boolean;
+    initialTask: UnifiedTask | null;
+    prefill?: Partial<UnifiedTask>;
+  }>({ open: false, initialTask: null });
 
   // Stage & path task calendar scheduling
   const [schedStageId, setSchedStageId] = useState<string | null>(null);
@@ -106,9 +126,31 @@ export default function PathsView({
   const [newStageInput, setNewStageInput] = useState('');
 
   const filteredPaths = useMemo(() => {
-    if (activeHubFilter === 'all') return paths;
-    return paths.filter((p) => p.hubId === activeHubFilter);
-  }, [paths, activeHubFilter]);
+    const base =
+      activeHubFilter === 'all'
+        ? paths
+        : paths.filter((p) => p.hubId === activeHubFilter);
+    return sortLearningPathsList(base, sortMode);
+  }, [paths, activeHubFilter, sortMode]);
+
+  const handleMovePathOrder = (pathId: string, dir: -1 | 1) => {
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    const idx = filteredPaths.findIndex((p) => p.id === pathId);
+    const targetIdx = idx + dir;
+    if (idx < 0 || targetIdx < 0 || targetIdx >= filteredPaths.length) return;
+    const reordered = [...filteredPaths];
+    const [moved] = reordered.splice(idx, 1);
+    reordered.splice(targetIdx, 0, moved);
+    reordered.forEach((p, pos) => {
+      const nextOrder = pos + 1;
+      if ((p.sortOrder ?? 0) !== nextOrder) {
+        onUpdatePath(p.id, { sortOrder: nextOrder });
+      }
+    });
+  };
 
   const selectedPath = useMemo(
     () => paths.find((p) => p.id === selectedPathId) ?? null,
@@ -341,7 +383,29 @@ export default function PathsView({
           </button>
 
           {canEdit && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdatePath(selectedPath.id, {
+                    isPublic: !selectedPath.isPublic,
+                  })
+                }
+                className={`inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] text-xs font-semibold rounded-lg border cursor-pointer ${
+                  selectedPath.isPublic
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                {selectedPath.isPublic ? (
+                  <Globe className="w-3.5 h-3.5" aria-hidden="true" />
+                ) : (
+                  <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+                <span>
+                  {selectedPath.isPublic ? 'منشور في الموقع العام' : 'مسار خاص'}
+                </span>
+              </button>
               <button
                 type="button"
                 onClick={() => setEditingPath((v) => !v)}
@@ -419,6 +483,14 @@ export default function PathsView({
               )}
             </div>
           </div>
+
+          <LearningObjectivesPanel
+            objectives={selectedPath.learningObjectives}
+            canEdit={canEdit}
+            onChange={(next) =>
+              onUpdatePath(selectedPath.id, { learningObjectives: next })
+            }
+          />
 
           {editingPath && canEdit && (
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -766,7 +838,28 @@ export default function PathsView({
                   المهام وجدول التقويم المرتبط بالمسار ({linkedPathTasks.length})
                 </span>
               </h2>
-              <div className="flex items-center gap-3 text-xs">
+              <div className="flex flex-wrap items-center gap-2.5 text-xs">
+                {canEdit && onAddUnifiedTask && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setTaskModalState({
+                        open: true,
+                        initialTask: null,
+                        prefill: {
+                          hubId: selectedPath.hubId,
+                          linkedPathId: selectedPath.id,
+                          linkedLabel: selectedPath.title,
+                          projectId: `path:${selectedPath.id}`,
+                        },
+                      })
+                    }
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>مهمة مفصلة / مجدولة</span>
+                  </button>
+                )}
                 {onOpenTasks && (
                   <button
                     type="button"
@@ -824,13 +917,29 @@ export default function PathsView({
                           {ut.title}
                         </span>
                       </button>
-                      {(ut.scheduledDate || ut.dueDate) && (
-                        <span className="inline-flex items-center gap-1 pr-6 sm:pr-0 text-[11px] text-[#1E3A5F] font-medium tabular-nums shrink-0">
-                          <Calendar className="w-3 h-3" aria-hidden="true" />
-                          {ut.scheduledDate || ut.dueDate}
-                          {ut.startTime ? ` · ${ut.startTime}` : ''}
-                        </span>
-                      )}
+                      <div className="flex items-center gap-2 pr-6 sm:pr-0 shrink-0">
+                        {(ut.scheduledDate || ut.dueDate) && (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-[#1E3A5F] font-medium tabular-nums">
+                            <Calendar className="w-3 h-3" aria-hidden="true" />
+                            {ut.scheduledDate || ut.dueDate}
+                            {ut.startTime ? ` · ${ut.startTime}` : ''}
+                          </span>
+                        )}
+                        {canEdit && onUpdateUnifiedTask && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTaskModalState({
+                                open: true,
+                                initialTask: ut,
+                              })
+                            }
+                            className="px-2 py-1 text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                          >
+                            تعديل
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -940,6 +1049,26 @@ export default function PathsView({
           }}
           onCancel={() => setConfirmDeletePath(null)}
         />
+
+        <TaskFormModal
+          open={taskModalState.open}
+          onClose={() => setTaskModalState({ open: false, initialTask: null })}
+          initialTask={taskModalState.initialTask}
+          prefill={taskModalState.prefill}
+          courses={courses}
+          learningPaths={paths}
+          readingItems={readingItems}
+          projects={projects}
+          hubCategories={hubCategories}
+          onSubmit={(payload, existingId) => {
+            if (existingId && onUpdateUnifiedTask) {
+              onUpdateUnifiedTask(existingId, payload);
+            } else if (onAddUnifiedTask) {
+              onAddUnifiedTask(payload);
+            }
+          }}
+          onDelete={onDeleteUnifiedTask}
+        />
       </div>
     );
   }
@@ -974,36 +1103,54 @@ export default function PathsView({
         </button>
       </div>
 
-      {/* Hub Filter Tabs */}
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => onChangeHubFilter('all')}
-          className={`px-3.5 py-2 text-xs font-semibold rounded-lg border cursor-pointer ${
-            activeHubFilter === 'all'
-              ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-          }`}
-        >
-          جميع المجالات ({paths.length})
-        </button>
-        {LEARNING_HUBS.map((h) => {
-          const count = paths.filter((p) => p.hubId === h.id).length;
-          return (
-            <button
-              key={h.id}
-              type="button"
-              onClick={() => onChangeHubFilter(h.id)}
-              className={`px-3.5 py-2 text-xs font-semibold rounded-lg border cursor-pointer ${
-                activeHubFilter === h.id
-                  ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-              }`}
-            >
-              {h.title} ({count})
-            </button>
-          );
-        })}
+      {/* Hub Filter Tabs + Sort Control */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onChangeHubFilter('all')}
+            className={`px-3.5 py-2 text-xs font-semibold rounded-lg border cursor-pointer ${
+              activeHubFilter === 'all'
+                ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            جميع المجالات ({paths.length})
+          </button>
+          {LEARNING_HUBS.map((h) => {
+            const count = paths.filter((p) => p.hubId === h.id).length;
+            return (
+              <button
+                key={h.id}
+                type="button"
+                onClick={() => onChangeHubFilter(h.id)}
+                className={`px-3.5 py-2 text-xs font-semibold rounded-lg border cursor-pointer ${
+                  activeHubFilter === h.id
+                    ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                {h.title} ({count})
+              </button>
+            );
+          })}
+        </div>
+
+        <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
+          <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" aria-hidden="true" />
+          <span>الترتيب:</span>
+          <select
+            value={sortMode}
+            onChange={(e) =>
+              setSortMode(e.target.value as 'manual' | 'progress' | 'title')
+            }
+            className="bg-transparent font-semibold text-slate-900 focus:outline-none cursor-pointer"
+          >
+            <option value="manual">يدوي (الترتيب الشخصي)</option>
+            <option value="progress">نسبة التقدم</option>
+            <option value="title">أبجدي / رقمي</option>
+          </select>
+        </label>
       </div>
 
       {showAddForm && canEdit && (
@@ -1147,7 +1294,7 @@ export default function PathsView({
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {filteredPaths.map((path) => {
+          {filteredPaths.map((path, pathIdx) => {
             const hubMeta = getHubMeta(path.hubId);
             return (
               <article
@@ -1161,9 +1308,15 @@ export default function PathsView({
                     >
                       {hubMeta.shortTitle}
                     </span>
-                    <span className="text-[11px] font-medium text-slate-500">
-                      {STATUS_LABELS[path.status]}
-                    </span>
+                    <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                      {path.isPublic && (
+                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-[10px]">
+                          <Globe className="w-2.5 h-2.5" aria-hidden="true" />
+                          عام
+                        </span>
+                      )}
+                      <span>{STATUS_LABELS[path.status]}</span>
+                    </div>
                   </div>
 
                   <button
@@ -1212,14 +1365,38 @@ export default function PathsView({
                       فتح المسار والمراحل ←
                     </button>
                     {canEdit && (
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeletePath(path)}
-                        aria-label={`حذف ${path.title}`}
-                        className="p-1.5 text-slate-400 hover:text-red-600 rounded-md cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        {sortMode === 'manual' && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={pathIdx === 0}
+                              onClick={() => handleMovePathOrder(path.id, -1)}
+                              aria-label="تقديم المسار"
+                              className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={pathIdx === filteredPaths.length - 1}
+                              onClick={() => handleMovePathOrder(path.id, 1)}
+                              aria-label="تأخير المسار"
+                              className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeletePath(path)}
+                          aria-label={`حذف ${path.title}`}
+                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-md cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>

@@ -9,11 +9,15 @@ import {
   CustomCategory,
   DEFAULT_CALENDAR_PREFERENCES,
   DEFAULT_HUB_CATEGORIES,
+  DEFAULT_PUBLIC_SITE_CONFIG,
+  DEFAULT_REFLECTION_CATEGORIES,
   DEFAULT_USER_PREFERENCES,
+  DEFAULT_WEEKLY_RHYTHM,
   DentalCase,
   DentalCaseStatus,
   DomainInfo,
   LearningHubId,
+  LearningObjective,
   LearningPath,
   LearningPathStage,
   LearningPathStatus,
@@ -25,6 +29,9 @@ import {
   PersonalReflection,
   PracticalProject,
   ProjectStatus,
+  PublicSiteConfig,
+  PublicSiteSection,
+  PublicSiteVisibilityFlags,
   QuarterInfo,
   READING_MODES_META,
   ReadingItemStatus,
@@ -40,9 +47,12 @@ import {
   UnifiedTask,
   UnifiedTaskStatus,
   UserPreferences,
+  UserProfileItem,
+  WEEKLY_RHYTHM_DAYS,
   WeeklyMeeting,
   WeeklyMeetingException,
   WeeklyMeetingFollowUp,
+  WeeklyRhythmItem,
 } from '../data/curriculumData';
 import {
   ensureSupabaseRealtimeAuth,
@@ -219,6 +229,112 @@ function sanitizeResourceList(items: StudyResource[]): StudyResource[] {
   }));
 }
 
+function sanitizeLearningObjectives(raw: unknown): LearningObjective[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .slice(0, 60)
+    .map((item, idx) => ({
+      id: clip(typeof item.id === 'string' && item.id ? item.id : `obj-${idx + 1}`, 128),
+      text: clip(typeof item.text === 'string' ? item.text.trim() : '', 500),
+      achieved: Boolean(item.achieved),
+      ...(typeof item.createdAt === 'string' && item.createdAt
+        ? { createdAt: clip(item.createdAt, 60) }
+        : {}),
+    }))
+    .filter((obj) => obj.text.length > 0);
+}
+
+function sanitizeStringList(raw: unknown, maxItems = 30, maxLen = 120): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((s) => clip(typeof s === 'string' ? s.trim() : '', maxLen))
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
+function sanitizeWeeklyRhythm(raw: unknown): WeeklyRhythmItem[] {
+  if (!Array.isArray(raw) || raw.length === 0) return DEFAULT_WEEKLY_RHYTHM;
+  const validDays = new Set<string>(WEEKLY_RHYTHM_DAYS);
+  const cleaned = raw
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .slice(0, 20)
+    .map((item, idx) => {
+      const hours = Number(item.targetHours);
+      const safeHours = Number.isFinite(hours) && hours >= 0 && hours <= 80 ? hours : undefined;
+      return {
+        id: clip(typeof item.id === 'string' && item.id ? item.id : `rhythm-${idx + 1}`, 100),
+        pillar: clip(typeof item.pillar === 'string' ? item.pillar.trim() : 'نشاط أسبوعي', 160),
+        suggestedDuration: clip(
+          typeof item.suggestedDuration === 'string'
+            ? item.suggestedDuration.trim()
+            : safeHours !== undefined
+            ? `${safeHours} ساعات أسبوعيًا`
+            : '1 ساعة أسبوعيًا',
+          80
+        ),
+        ...(safeHours !== undefined ? { targetHours: safeHours } : {}),
+        focus: clip(typeof item.focus === 'string' ? item.focus.trim() : '', 240),
+        guideline: clip(typeof item.guideline === 'string' ? item.guideline.trim() : '', 500),
+        days: Array.isArray(item.days)
+          ? item.days.filter((d): d is string => typeof d === 'string' && validDays.has(d)).slice(0, 7)
+          : [],
+        active: item.active !== false,
+      };
+    })
+    .filter((item) => item.pillar.length > 0);
+  return cleaned.length > 0 ? cleaned : DEFAULT_WEEKLY_RHYTHM;
+}
+
+function mapPublicSiteConfigRow(raw: Record<string, unknown> | null | undefined): PublicSiteConfig {
+  if (!raw) return DEFAULT_PUBLIC_SITE_CONFIG;
+  const rawFlags =
+    raw.visibility_flags && typeof raw.visibility_flags === 'object'
+      ? (raw.visibility_flags as Partial<PublicSiteVisibilityFlags>)
+      : {};
+  const rawSections = Array.isArray(raw.sections) ? raw.sections : [];
+  const sections: PublicSiteSection[] = rawSections
+    .filter((s): s is Record<string, unknown> => Boolean(s) && typeof s === 'object')
+    .slice(0, 20)
+    .map((s, idx) => ({
+      id: clip(typeof s.id === 'string' && s.id ? s.id : `sec-${idx + 1}`, 100),
+      title: clip(typeof s.title === 'string' ? s.title : '', 200),
+      body: clip(typeof s.body === 'string' ? s.body : '', 4000),
+      visible: s.visible !== false,
+    }))
+    .filter((s) => s.title.trim().length > 0 || s.body.trim().length > 0);
+
+  return {
+    id: String(raw.id || 'main'),
+    ownerId: String(raw.owner_id || ''),
+    heroTitle: String(raw.hero_title ?? DEFAULT_PUBLIC_SITE_CONFIG.heroTitle),
+    heroSubtitle: String(raw.hero_subtitle ?? DEFAULT_PUBLIC_SITE_CONFIG.heroSubtitle),
+    introBio: String(raw.intro_bio ?? DEFAULT_PUBLIC_SITE_CONFIG.introBio),
+    backgroundText: String(raw.background_text ?? DEFAULT_PUBLIC_SITE_CONFIG.backgroundText),
+    skills: Array.isArray(raw.skills)
+      ? sanitizeStringList(raw.skills, 30, 100)
+      : DEFAULT_PUBLIC_SITE_CONFIG.skills,
+    interests: Array.isArray(raw.interests)
+      ? sanitizeStringList(raw.interests, 30, 100)
+      : DEFAULT_PUBLIC_SITE_CONFIG.interests,
+    philosophyText: String(raw.philosophy_text ?? DEFAULT_PUBLIC_SITE_CONFIG.philosophyText),
+    sections: sections.length > 0 || Array.isArray(raw.sections)
+      ? sections
+      : DEFAULT_PUBLIC_SITE_CONFIG.sections,
+    visibilityFlags: {
+      showHero: rawFlags.showHero !== false,
+      showBackground: rawFlags.showBackground !== false,
+      showSkills: rawFlags.showSkills !== false,
+      showInterests: rawFlags.showInterests !== false,
+      showPhilosophy: rawFlags.showPhilosophy !== false,
+      showCourses: rawFlags.showCourses !== false,
+      showPaths: rawFlags.showPaths !== false,
+      showBooks: rawFlags.showBooks !== false,
+    },
+    updatedAtMs: Number(raw.updated_at_ms ?? 0),
+  };
+}
+
 // ============================================================================
 // Payload Builders (TypeScript Domain Model -> PostgreSQL Row)
 // ============================================================================
@@ -342,6 +458,9 @@ export function buildCourseRow(uid: string, c: PersonalCourse) {
     book_author: clip(c.bookAuthor, 250),
     application_milestone: clip(c.applicationMilestone, 1000),
     completed: studyStage === 'completed' ? true : Boolean(c.completed),
+    learning_objectives: sanitizeLearningObjectives(c.learningObjectives),
+    sort_order: Math.max(0, Math.round(Number(c.sortOrder) || 0)),
+    is_public: Boolean(c.isPublic),
     resources: sanitizeResourceList(Array.isArray(c.resources) ? c.resources : []),
     tasks: (Array.isArray(c.tasks) ? c.tasks : []).slice(0, 80).map((t) => ({
       id: clip(t.id, 128),
@@ -382,6 +501,9 @@ export function buildBookNoteRow(uid: string, bn: BookNote) {
     content: clip(bn.content, 200000),
     quotes: clip(bn.quotes, 60000),
     updated_at_label: clip(bn.updatedAt, 100),
+    resources: sanitizeResourceList(Array.isArray(bn.resources) ? bn.resources : []),
+    sort_order: Math.max(0, Math.round(Number(bn.sortOrder) || 0)),
+    created_at_ms: Math.max(0, Math.round(Number(bn.createdAtMs) || 0)),
     reading_modes: sanitizeReadingModes(bn.readingModes),
     learning_methods: sanitizeLearningMethods(bn.learningMethods),
     review_count: Math.max(0, Math.min(999, Math.round(Number(bn.reviewCount) || 0))),
@@ -465,6 +587,12 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
     show_excel_export: prefs.showExcelExport !== false,
     hub_categories: cleanHubCategories,
     calendar_prefs: sanitizeCalendarPrefs(prefs.calendarPrefs),
+    weekly_rhythm: sanitizeWeeklyRhythm(prefs.weeklyRhythm),
+    reflection_categories: sanitizeStringList(
+      prefs.reflectionCategories ?? DEFAULT_REFLECTION_CATEGORIES,
+      40,
+      80
+    ),
   };
 }
 
@@ -476,6 +604,7 @@ export function buildReflectionRow(uid: string, r: PersonalReflection) {
     title: clip(r.title, 200),
     content: clip(r.content, 20000),
     mood_tag: pickEnum(r.moodTag, ['تأمل', 'فكرة', 'امتنان', 'هدف'] as const, 'تأمل'),
+    category_tag: clip(r.categoryTag, 80),
     pinned: Boolean(r.pinned),
     created_at_label: clip(r.createdAtLabel, 80),
     created_at_ms: Number.isFinite(rawMs) ? Math.round(rawMs) : 0,
@@ -512,6 +641,9 @@ export function buildLearningPathRow(uid: string, path: LearningPath) {
     hub_id: sanitizeHubId(path.hubId),
     category_label: clip(path.categoryLabel, 140),
     objectives: clip(path.objectives, 2000),
+    learning_objectives: sanitizeLearningObjectives(path.learningObjectives),
+    sort_order: Math.max(0, Math.round(Number(path.sortOrder) || 0)),
+    is_public: Boolean(path.isPublic),
     current_level: clip(path.currentLevel, 160),
     target_level: clip(path.targetLevel, 160),
     start_date: clip(path.startDate, 40),
@@ -548,6 +680,9 @@ export function buildReadingItemRow(uid: string, item: ReadingLibraryItem) {
     current_page: Math.max(0, Math.min(99999, Math.round(Number(item.currentPage) || 0))),
     total_pages: Math.max(0, Math.min(99999, Math.round(Number(item.totalPages) || 0))),
     takeaways: clip(item.takeaways, 20000),
+    learning_objectives: sanitizeLearningObjectives(item.learningObjectives),
+    sort_order: Math.max(0, Math.round(Number(item.sortOrder) || 0)),
+    is_public: Boolean(item.isPublic),
     attachment_name: clip(item.attachmentName, 240),
     attachment_resource_id: clip(item.attachmentResourceId, 160),
     storage_bucket: 'study-files',
@@ -585,6 +720,7 @@ export function buildPracticalProjectRow(uid: string, proj: PracticalProject) {
 }
 
 export function buildUnifiedTaskRow(uid: string, task: UnifiedTask) {
+  const courseIdNum = Number(task.linkedCourseId);
   return {
     owner_id: uid,
     id: sanitizeId(task.id),
@@ -605,6 +741,10 @@ export function buildUnifiedTaskRow(uid: string, task: UnifiedTask) {
     deadline: sanitizeDateKeyOrEmpty(task.deadline),
     project_id: clip(task.projectId, 160),
     linked_label: clip(task.linkedLabel, 200),
+    linked_course_id:
+      Number.isFinite(courseIdNum) && courseIdNum > 0 ? Math.round(courseIdNum) : null,
+    linked_path_id: clip(task.linkedPathId, 160),
+    linked_book_id: clip(task.linkedBookId, 160),
   };
 }
 
@@ -796,6 +936,9 @@ function mapCourseRow(raw: Record<string, unknown>): PersonalCourse {
     bookAuthor: String(raw.book_author ?? ''),
     applicationMilestone: String(raw.application_milestone ?? ''),
     completed,
+    learningObjectives: sanitizeLearningObjectives(raw.learning_objectives),
+    sortOrder: Number(raw.sort_order ?? 0),
+    isPublic: Boolean(raw.is_public),
     resources: Array.isArray(raw.resources) ? (raw.resources as StudyResource[]) : [],
     tasks: Array.isArray(raw.tasks) ? (raw.tasks as SmallTask[]) : [],
     readingModes: sanitizeReadingModes(raw.reading_modes),
@@ -827,6 +970,9 @@ function mapBookNoteRow(raw: Record<string, unknown>): BookNote {
     content: String(raw.content ?? ''),
     quotes: String(raw.quotes ?? ''),
     updatedAt: String(raw.updated_at_label ?? ''),
+    resources: Array.isArray(raw.resources) ? (raw.resources as StudyResource[]) : [],
+    sortOrder: Number(raw.sort_order ?? 0),
+    createdAtMs: Number(raw.created_at_ms ?? 0),
     readingModes: sanitizeReadingModes(raw.reading_modes),
     learningMethods: sanitizeLearningMethods(raw.learning_methods),
     reviewCount: Number(raw.review_count ?? 0),
@@ -927,6 +1073,11 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
           : DEFAULT_HUB_CATEGORIES.knowledge,
     },
     calendarPrefs: sanitizeCalendarPrefs(storedCal),
+    weeklyRhythm: sanitizeWeeklyRhythm(raw.weekly_rhythm),
+    reflectionCategories:
+      Array.isArray(raw.reflection_categories) && raw.reflection_categories.length > 0
+        ? sanitizeStringList(raw.reflection_categories, 40, 80)
+        : DEFAULT_REFLECTION_CATEGORIES,
   };
 }
 
@@ -941,6 +1092,7 @@ function mapReflectionRow(raw: Record<string, unknown>): PersonalReflection {
     title: String(raw.title ?? ''),
     content: String(raw.content ?? ''),
     moodTag,
+    categoryTag: raw.category_tag ? String(raw.category_tag) : '',
     pinned: Boolean(raw.pinned),
     createdAtLabel: String(raw.created_at_label ?? ''),
     createdAtMs: Number(raw.created_at_ms ?? 0),
@@ -986,6 +1138,9 @@ function mapLearningPathRow(raw: Record<string, unknown>): LearningPath {
     hubId: sanitizeHubId(raw.hub_id),
     categoryLabel: String(raw.category_label ?? ''),
     objectives: String(raw.objectives ?? ''),
+    learningObjectives: sanitizeLearningObjectives(raw.learning_objectives),
+    sortOrder: Number(raw.sort_order ?? 0),
+    isPublic: Boolean(raw.is_public),
     currentLevel: String(raw.current_level ?? ''),
     targetLevel: String(raw.target_level ?? ''),
     startDate: String(raw.start_date ?? ''),
@@ -1021,6 +1176,9 @@ function mapReadingItemRow(raw: Record<string, unknown>): ReadingLibraryItem {
     currentPage: Number(raw.current_page ?? 0),
     totalPages: Number(raw.total_pages ?? 0),
     takeaways: String(raw.takeaways ?? ''),
+    learningObjectives: sanitizeLearningObjectives(raw.learning_objectives),
+    sortOrder: Number(raw.sort_order ?? 0),
+    isPublic: Boolean(raw.is_public),
     attachmentName: raw.attachment_name ? String(raw.attachment_name) : undefined,
     attachmentResourceId: raw.attachment_resource_id
       ? String(raw.attachment_resource_id)
@@ -1089,6 +1247,12 @@ function mapUnifiedTaskRow(raw: Record<string, unknown>): UnifiedTask {
     deadline: raw.deadline ? String(raw.deadline) : '',
     projectId: raw.project_id ? String(raw.project_id) : '',
     linkedLabel: raw.linked_label ? String(raw.linked_label) : undefined,
+    linkedCourseId:
+      typeof raw.linked_course_id === 'number' && raw.linked_course_id > 0
+        ? raw.linked_course_id
+        : undefined,
+    linkedPathId: raw.linked_path_id ? String(raw.linked_path_id) : undefined,
+    linkedBookId: raw.linked_book_id ? String(raw.linked_book_id) : undefined,
   };
 }
 
@@ -1372,6 +1536,25 @@ export async function ensureUserDocumentAndSeed(
         );
       }
 
+      const upsertSeedBatch = async (
+        table: string,
+        rows: Record<string, unknown>[],
+        onConflict: string
+      ) => {
+        if (rows.length === 0) return { error: null };
+        const res = await client.from(table).upsert(rows, { onConflict });
+        if (
+          res.error &&
+          isMissingColumnError(res.error) &&
+          OPTIONAL_007_COLUMNS_BY_TABLE[table]
+        ) {
+          hasPending007Migration = true;
+          const legacyRows = rows.map((r) => strip007Columns(table, r));
+          return client.from(table).upsert(legacyRows, { onConflict });
+        }
+        return res;
+      };
+
       if (!existingMonths || existingMonths.length === 0) {
         const seedResults = await Promise.all([
           seedData.quarters.length > 0
@@ -1400,22 +1583,16 @@ export async function ensureUserDocumentAndSeed(
                   { onConflict: 'owner_id,id' }
                 )
             : Promise.resolve({ error: null }),
-          seedData.courses.length > 0
-            ? client
-                .from('courses')
-                .upsert(
-                  seedData.courses.map((c) => buildCourseRow(user.uid, c)),
-                  { onConflict: 'owner_id,doc_id' }
-                )
-            : Promise.resolve({ error: null }),
-          seedData.bookNotes.length > 0
-            ? client
-                .from('book_notes')
-                .upsert(
-                  seedData.bookNotes.map((bn) => buildBookNoteRow(user.uid, bn)),
-                  { onConflict: 'owner_id,id' }
-                )
-            : Promise.resolve({ error: null }),
+          upsertSeedBatch(
+            'courses',
+            seedData.courses.map((c) => buildCourseRow(user.uid, c)),
+            'owner_id,doc_id'
+          ),
+          upsertSeedBatch(
+            'book_notes',
+            seedData.bookNotes.map((bn) => buildBookNoteRow(user.uid, bn)),
+            'owner_id,id'
+          ),
           seedData.customCategories.length > 0
             ? client
                 .from('custom_categories')
@@ -1436,15 +1613,16 @@ export async function ensureUserDocumentAndSeed(
                   { onConflict: 'owner_id,id' }
                 )
             : Promise.resolve({ error: null }),
-          client
-            .from('user_preferences')
-            .upsert(
+          upsertSeedBatch(
+            'user_preferences',
+            [
               buildUserPreferencesRow(
                 user.uid,
                 seedData.preferences ?? DEFAULT_USER_PREFERENCES
               ),
-              { onConflict: 'owner_id,id' }
-            ),
+            ],
+            'owner_id,id'
+          ),
         ]);
 
         const firstSeedErr = seedResults.find((r) => r.error)?.error;
@@ -1491,15 +1669,16 @@ export async function ensureUserDocumentAndSeed(
         }
 
         if (!existingPrefs) {
-          const { error: prefErr } = await client
-            .from('user_preferences')
-            .upsert(
+          const { error: prefErr } = await upsertSeedBatch(
+            'user_preferences',
+            [
               buildUserPreferencesRow(
                 user.uid,
                 seedData.preferences ?? DEFAULT_USER_PREFERENCES
               ),
-              { onConflict: 'owner_id,id' }
-            );
+            ],
+            'owner_id,id'
+          );
           if (prefErr) {
             throw createDetailedSupabaseError(
               'Failed to seed default preferences',
@@ -1982,6 +2161,55 @@ export function subscribeUserWorkspace(
 
 type ConnectedSupabaseClient = NonNullable<typeof supabase>;
 
+let hasPending007Migration = false;
+export function isPending007Migration(): boolean {
+  return hasPending007Migration;
+}
+
+const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
+  courses: ['learning_objectives', 'sort_order', 'is_public'],
+  learning_paths: ['learning_objectives', 'sort_order', 'is_public'],
+  reading_items: ['learning_objectives', 'sort_order', 'is_public'],
+  book_notes: ['resources', 'sort_order', 'created_at_ms'],
+  unified_tasks: ['linked_course_id', 'linked_path_id', 'linked_book_id'],
+  user_preferences: ['weekly_rhythm', 'reflection_categories'],
+  reflections: ['category_tag'],
+};
+
+function isMissingColumnError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; message?: string };
+  const code = (e.code || '').toUpperCase();
+  const msg = (e.message || '').toLowerCase();
+  return (
+    code === '42703' ||
+    code === 'PGRST204' ||
+    msg.includes('schema cache') ||
+    (msg.includes('column') && msg.includes('does not exist'))
+  );
+}
+
+function isMissingTableError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; message?: string };
+  const code = (e.code || '').toUpperCase();
+  const msg = (e.message || '').toLowerCase();
+  return code === '42P01' || code === 'PGRST205' || msg.includes('could not find the table');
+}
+
+function strip007Columns(
+  table: string,
+  row: Record<string, unknown>
+): Record<string, unknown> {
+  const dropCols = OPTIONAL_007_COLUMNS_BY_TABLE[table] ?? [];
+  if (dropCols.length === 0) return row;
+  const clone: Record<string, unknown> = { ...row };
+  for (const col of dropCols) {
+    delete clone[col];
+  }
+  return clone;
+}
+
 async function runWrite(
   op: (client: ConnectedSupabaseClient) => PromiseLike<{ error: unknown }>
 ): Promise<void> {
@@ -1993,6 +2221,34 @@ async function runWrite(
       console.error('Supabase write error:', error);
       throw new Error(msg);
     }
+  });
+}
+
+async function runUpsertWith007Fallback(
+  table: string,
+  row: Record<string, unknown>,
+  onConflict: string
+): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) return;
+  await withFirebaseTokenRetry(async (client) => {
+    const { error } = await client.from(table).upsert(row, { onConflict });
+    if (!error) return;
+    if (isMissingColumnError(error) && OPTIONAL_007_COLUMNS_BY_TABLE[table]) {
+      hasPending007Migration = true;
+      console.warn(
+        `Supabase table "${table}" is missing migration 007 columns; retrying with legacy schema:`,
+        error
+      );
+      const fallbackRow = strip007Columns(table, row);
+      const { error: retryErr } = await client
+        .from(table)
+        .upsert(fallbackRow, { onConflict });
+      if (!retryErr) return;
+      console.error('Supabase fallback write error:', retryErr);
+      throw new Error(formatSupabaseErrorMessage(retryErr));
+    }
+    console.error('Supabase write error:', error);
+    throw new Error(formatSupabaseErrorMessage(error));
   });
 }
 
@@ -2044,9 +2300,7 @@ export async function deleteDomainDoc(uid: string, domainId: string): Promise<vo
 
 export async function saveCourseDoc(uid: string, cItem: PersonalCourse): Promise<void> {
   const row = buildCourseRow(uid, cItem);
-  await runWrite((c) =>
-    c.from('courses').upsert(row, { onConflict: 'owner_id,doc_id' })
-  );
+  await runUpsertWith007Fallback('courses', row, 'owner_id,doc_id');
 }
 
 export async function deleteCourseDoc(uid: string, docId: string): Promise<void> {
@@ -2058,9 +2312,7 @@ export async function deleteCourseDoc(uid: string, docId: string): Promise<void>
 
 export async function saveBookNoteDoc(uid: string, bn: BookNote): Promise<void> {
   const row = buildBookNoteRow(uid, bn);
-  await runWrite((c) =>
-    c.from('book_notes').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runUpsertWith007Fallback('book_notes', row, 'owner_id,id');
 }
 
 export async function deleteBookNoteDoc(uid: string, noteId: string): Promise<void> {
@@ -2115,9 +2367,7 @@ export async function saveUserPreferencesDoc(
   prefs: UserPreferences
 ): Promise<void> {
   const row = buildUserPreferencesRow(uid, prefs);
-  await runWrite((c) =>
-    c.from('user_preferences').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runUpsertWith007Fallback('user_preferences', row, 'owner_id,id');
 }
 
 export async function saveReflectionDoc(
@@ -2125,9 +2375,7 @@ export async function saveReflectionDoc(
   reflection: PersonalReflection
 ): Promise<void> {
   const row = buildReflectionRow(uid, reflection);
-  await runWrite((c) =>
-    c.from('reflections').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runUpsertWith007Fallback('reflections', row, 'owner_id,id');
 }
 
 export async function deleteReflectionDoc(
@@ -2165,9 +2413,7 @@ export async function saveLearningPathDoc(
   pathItem: LearningPath
 ): Promise<void> {
   const row = buildLearningPathRow(uid, pathItem);
-  await runWrite((c) =>
-    c.from('learning_paths').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runUpsertWith007Fallback('learning_paths', row, 'owner_id,id');
 }
 
 export async function deleteLearningPathDoc(
@@ -2185,9 +2431,7 @@ export async function saveReadingItemDoc(
   item: ReadingLibraryItem
 ): Promise<void> {
   const row = buildReadingItemRow(uid, item);
-  await runWrite((c) =>
-    c.from('reading_items').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runUpsertWith007Fallback('reading_items', row, 'owner_id,id');
 }
 
 export async function deleteReadingItemDoc(
@@ -2225,9 +2469,7 @@ export async function saveUnifiedTaskDoc(
   task: UnifiedTask
 ): Promise<void> {
   const row = buildUnifiedTaskRow(uid, task);
-  await runWrite((c) =>
-    c.from('unified_tasks').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runUpsertWith007Fallback('unified_tasks', row, 'owner_id,id');
 }
 
 export async function deleteUnifiedTaskDoc(
@@ -2447,3 +2689,210 @@ export function subscribeCloudAttachments(
     }
   };
 }
+
+// ============================================================================
+// Public Homepage Configuration, Public Catalog & Admin RBAC Management
+// ============================================================================
+
+export async function fetchPublicSiteConfig(): Promise<PublicSiteConfig> {
+  if (!isSupabaseConfigured || !supabase) {
+    return DEFAULT_PUBLIC_SITE_CONFIG;
+  }
+  try {
+    const { data, error } = await supabase
+      .from('public_site_config')
+      .select('*')
+      .eq('id', 'main')
+      .maybeSingle();
+    if (error) {
+      if (isMissingTableError(error)) {
+        hasPending007Migration = true;
+      }
+      console.warn('fetchPublicSiteConfig fallback:', error);
+      return DEFAULT_PUBLIC_SITE_CONFIG;
+    }
+    return mapPublicSiteConfigRow(data as Record<string, unknown> | null);
+  } catch (err) {
+    console.warn('fetchPublicSiteConfig failed:', err);
+    return DEFAULT_PUBLIC_SITE_CONFIG;
+  }
+}
+
+export async function savePublicSiteConfig(
+  uid: string,
+  cfg: PublicSiteConfig
+): Promise<void> {
+  const payload = {
+    id: 'main',
+    owner_id: uid,
+    hero_title: clip(cfg.heroTitle, 200),
+    hero_subtitle: clip(cfg.heroSubtitle, 300),
+    intro_bio: clip(cfg.introBio, 4000),
+    background_text: clip(cfg.backgroundText, 4000),
+    skills: sanitizeStringList(cfg.skills, 30, 100),
+    interests: sanitizeStringList(cfg.interests, 30, 100),
+    philosophy_text: clip(cfg.philosophyText, 4000),
+    sections: (cfg.sections || []).slice(0, 20).map((s) => ({
+      id: clip(s.id, 100),
+      title: clip(s.title, 200),
+      body: clip(s.body, 4000),
+      visible: s.visible !== false,
+    })),
+    visibility_flags: {
+      showHero: cfg.visibilityFlags?.showHero !== false,
+      showBackground: cfg.visibilityFlags?.showBackground !== false,
+      showSkills: cfg.visibilityFlags?.showSkills !== false,
+      showInterests: cfg.visibilityFlags?.showInterests !== false,
+      showPhilosophy: cfg.visibilityFlags?.showPhilosophy !== false,
+      showCourses: cfg.visibilityFlags?.showCourses !== false,
+      showPaths: cfg.visibilityFlags?.showPaths !== false,
+      showBooks: cfg.visibilityFlags?.showBooks !== false,
+    },
+    updated_at_ms: Date.now(),
+  };
+
+  await runWrite((c) =>
+    c.from('public_site_config').upsert(payload, { onConflict: 'id' })
+  );
+}
+
+export function subscribePublicSiteConfig(
+  onData: (cfg: PublicSiteConfig) => void
+): () => void {
+  if (!isSupabaseConfigured || !supabase) {
+    onData(DEFAULT_PUBLIC_SITE_CONFIG);
+    return () => {};
+  }
+  let disposed = false;
+  const load = async () => {
+    const cfg = await fetchPublicSiteConfig();
+    if (!disposed) onData(cfg);
+  };
+  void load();
+
+  const ch = supabase
+    .channel(`public_site_config_${Date.now()}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'public_site_config',
+      },
+      () => {
+        if (!disposed) void load();
+      }
+    )
+    .subscribe();
+
+  return () => {
+    disposed = true;
+    if (supabase) {
+      void supabase.removeChannel(ch);
+    }
+  };
+}
+
+export interface PublicCatalogData {
+  courses: PersonalCourse[];
+  learningPaths: LearningPath[];
+  readingItems: ReadingLibraryItem[];
+}
+
+export async function fetchPublicCatalog(): Promise<PublicCatalogData> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { courses: [], learningPaths: [], readingItems: [] };
+  }
+  try {
+    const [coursesRes, pathsRes, booksRes] = await Promise.all([
+      supabase
+        .from('courses')
+        .select('*')
+        .eq('is_public', true)
+        .order('sort_order', { ascending: true }),
+      supabase
+        .from('learning_paths')
+        .select('*')
+        .eq('is_public', true)
+        .order('sort_order', { ascending: true }),
+      supabase
+        .from('reading_items')
+        .select('*')
+        .eq('is_public', true)
+        .order('sort_order', { ascending: true }),
+    ]);
+
+    if (
+      isMissingColumnError(coursesRes.error) ||
+      isMissingColumnError(pathsRes.error) ||
+      isMissingColumnError(booksRes.error)
+    ) {
+      hasPending007Migration = true;
+      return { courses: [], learningPaths: [], readingItems: [] };
+    }
+
+    return {
+      courses: (coursesRes.data || []).map((r) =>
+        mapCourseRow(r as Record<string, unknown>)
+      ),
+      learningPaths: (pathsRes.data || []).map((r) =>
+        mapLearningPathRow(r as Record<string, unknown>)
+      ),
+      readingItems: (booksRes.data || []).map((r) =>
+        mapReadingItemRow(r as Record<string, unknown>)
+      ),
+    };
+  } catch (err) {
+    console.warn('fetchPublicCatalog failed:', err);
+    return { courses: [], learningPaths: [], readingItems: [] };
+  }
+}
+
+export async function fetchAllUserProfiles(): Promise<UserProfileItem[]> {
+  if (!isSupabaseConfigured || !supabase) return [];
+  const { data, error } = await withFirebaseTokenRetry(async (c) =>
+    c
+      .from('user_profiles')
+      .select('uid, display_name, email, photo_url, role, approval_status, created_at')
+      .order('created_at', { ascending: false })
+  );
+  if (error) {
+    console.error('fetchAllUserProfiles error:', error);
+    throw new Error(formatSupabaseErrorMessage(error, 'تعذّر تحميل قائمة المستخدمين.'));
+  }
+  return (data || []).map((r) => {
+    const row = r as Record<string, unknown>;
+    return {
+      uid: String(row.uid || ''),
+      displayName: String(row.display_name || 'مستخدم'),
+      email: String(row.email || ''),
+      photoUrl: String(row.photo_url || ''),
+      role: row.role === 'admin' ? 'admin' : 'user',
+      approvalStatus:
+        row.approval_status === 'approved' ||
+        row.approval_status === 'rejected' ||
+        row.approval_status === 'suspended'
+          ? row.approval_status
+          : 'pending',
+      createdAt: row.created_at ? String(row.created_at) : undefined,
+    };
+  });
+}
+
+export async function updateUserProfileAccess(
+  targetUid: string,
+  updates: {
+    role?: 'user' | 'admin';
+    approvalStatus?: 'pending' | 'approved' | 'rejected' | 'suspended';
+  }
+): Promise<void> {
+  const payload: Record<string, unknown> = {};
+  if (updates.role) payload.role = updates.role;
+  if (updates.approvalStatus) payload.approval_status = updates.approvalStatus;
+  if (Object.keys(payload).length === 0) return;
+
+  await runWrite((c) =>
+    c.from('user_profiles').update(payload).eq('uid', targetUid)
+  );
+}
+

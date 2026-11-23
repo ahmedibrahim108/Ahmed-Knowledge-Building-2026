@@ -3,10 +3,13 @@ import { User } from 'firebase/auth';
 import {
   ChevronDown,
   Cloud,
+  Eye,
+  Feather,
   LayoutDashboard,
   LogIn,
   LogOut,
   NotebookPen,
+  Settings2,
 } from 'lucide-react';
 import BrandMark from './BrandMark';
 
@@ -20,13 +23,19 @@ export type ActiveTab =
   | 'library'
   | 'tasks'
   | 'journal'
-  | 'calendar';
+  | 'reflections'
+  | 'calendar'
+  | 'account'
+  | 'public';
 
 interface HeaderProps {
   activeTab: ActiveTab;
   onSelectTab: (tab: ActiveTab) => void;
   user: User | null;
   authReady: boolean;
+  isAdmin: boolean;
+  isPreviewingPublic?: boolean;
+  onTogglePreviewPublic?: () => void;
   syncingCloud: boolean;
   onGoogleSignIn: () => void;
   onSignOut: () => void;
@@ -38,6 +47,7 @@ interface HeaderProps {
   libraryCount?: number;
   tasksCount?: number;
   notesCount: number;
+  reflectionsCount?: number;
 }
 
 export default function Header({
@@ -45,28 +55,36 @@ export default function Header({
   onSelectTab,
   user,
   authReady,
+  isAdmin,
+  isPreviewingPublic = false,
+  onTogglePreviewPublic,
   syncingCloud,
   onGoogleSignIn,
   onSignOut,
   focusCoursesCount = 0,
-  domainsCount,
   coursesCount,
   pathsCount = 0,
   libraryCount = 0,
   tasksCount = 0,
   notesCount,
+  reflectionsCount = 0,
 }: HeaderProps) {
-  const navItems: Array<{ id: ActiveTab; label: string }> = [
-    { id: 'overview', label: 'لوحة المتابعة' },
-    { id: 'focus', label: `التركيز الحالي (${focusCoursesCount})` },
-    { id: 'courses', label: `الكورسات (${coursesCount})` },
-    { id: 'paths', label: `المسارات (${pathsCount})` },
-    { id: 'library', label: `المكتبة (${libraryCount})` },
-    { id: 'tasks', label: `المهام والمشاريع (${tasksCount})` },
-    { id: 'journal', label: `التلخيص (${notesCount})` },
-    { id: 'domains', label: `المحاور (${domainsCount})` },
-    { id: 'calendar', label: 'التقويم' },
-  ];
+  const showAdminNav = isAdmin && !isPreviewingPublic;
+
+  const navItems: Array<{ id: ActiveTab; label: string }> = showAdminNav
+    ? [
+        { id: 'overview', label: 'لوحة المتابعة' },
+        { id: 'focus', label: `التركيز (${focusCoursesCount})` },
+        { id: 'courses', label: `الكورسات (${coursesCount})` },
+        { id: 'paths', label: `المسارات (${pathsCount})` },
+        { id: 'library', label: `المكتبة (${libraryCount})` },
+        { id: 'journal', label: `التلخيص (${notesCount})` },
+        { id: 'reflections', label: `خواطري (${reflectionsCount})` },
+        { id: 'tasks', label: `المهام (${tasksCount})` },
+        { id: 'calendar', label: 'التقويم' },
+        { id: 'account', label: 'الإدارة والحساب' },
+      ]
+    : [{ id: 'public', label: 'الواجهة العامة' }];
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -90,7 +108,7 @@ export default function Header({
         {/* Zone 1: Brand Wordmark + Custom Emblem */}
         <button
           type="button"
-          onClick={() => onSelectTab('overview')}
+          onClick={() => onSelectTab(showAdminNav ? 'overview' : 'public')}
           className="inline-flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#1E3A5F]"
         >
           <BrandMark className="w-7 h-7 sm:w-8 sm:h-8 shrink-0" />
@@ -102,7 +120,7 @@ export default function Header({
         {/* Zone 2: Horizontal Scroll-Safe Desktop Navigation */}
         <nav
           aria-label="التنقل الرئيسي"
-          className="hidden lg:flex items-center gap-4 xl:gap-5 h-full overflow-x-auto no-scrollbar"
+          className="hidden lg:flex items-center gap-3.5 xl:gap-4 h-full overflow-x-auto no-scrollbar"
         >
           {navItems.map((item) => {
             const isActive = activeTab === item.id;
@@ -130,7 +148,23 @@ export default function Header({
         </nav>
 
         {/* Zone 3: User Account / Google Auth Control */}
-        <div className="flex items-center shrink-0 relative" ref={menuRef}>
+        <div className="flex items-center gap-2 shrink-0 relative" ref={menuRef}>
+          {isAdmin && onTogglePreviewPublic && (
+            <button
+              type="button"
+              onClick={onTogglePreviewPublic}
+              className={`hidden md:inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[36px] text-xs font-semibold rounded-lg border cursor-pointer transition-colors ${
+                isPreviewingPublic
+                  ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                  : 'bg-[#F7F8FA] text-[#1E3A5F] border-slate-200 hover:bg-slate-100'
+              }`}
+              title={isPreviewingPublic ? 'العودة للوحة الإدارة' : 'معاينة الموقع العام'}
+            >
+              <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>{isPreviewingPublic ? 'لوحة الإدارة' : 'الموقع العام'}</span>
+            </button>
+          )}
+
           {!authReady ? (
             <span className="text-xs text-slate-400 px-3 py-2">
               جاري التحقق...
@@ -161,7 +195,13 @@ export default function Header({
                   </span>
                   <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700">
                     <Cloud className="w-2.5 h-2.5" aria-hidden="true" />
-                    <span>{syncingCloud ? 'جاري المزامنة...' : 'متصل'}</span>
+                    <span>
+                      {isAdmin
+                        ? syncingCloud
+                          ? 'جاري المزامنة...'
+                          : 'مسؤول'
+                        : 'حساب عام'}
+                    </span>
                   </span>
                 </div>
                 <ChevronDown
@@ -181,41 +221,71 @@ export default function Header({
                     </p>
                   </div>
 
-                  <div className="py-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onSelectTab('overview');
-                        setMenuOpen(false);
-                      }}
-                      className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
-                    >
-                      <LayoutDashboard className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-                      <span>لوحة المتابعة والمحاور الثلاثة</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onSelectTab('focus');
-                        setMenuOpen(false);
-                      }}
-                      className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
-                    >
-                      <LayoutDashboard className="w-3.5 h-3.5 text-emerald-700" aria-hidden="true" />
-                      <span>التركيز الحالي ({focusCoursesCount})</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onSelectTab('journal');
-                        setMenuOpen(false);
-                      }}
-                      className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
-                    >
-                      <NotebookPen className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-                      <span>دفتر التلخيص والنوتس</span>
-                    </button>
-                  </div>
+                  {isAdmin && (
+                    <div className="py-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectTab('overview');
+                          setMenuOpen(false);
+                        }}
+                        className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <LayoutDashboard className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                        <span>لوحة المتابعة والمحاور</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectTab('reflections');
+                          setMenuOpen(false);
+                        }}
+                        className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <Feather className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                        <span>خواطري وتأملاتي ({reflectionsCount})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectTab('journal');
+                          setMenuOpen(false);
+                        }}
+                        className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <NotebookPen className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                        <span>دفتر التلخيص والنوتس</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectTab('account');
+                          setMenuOpen(false);
+                        }}
+                        className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <Settings2 className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                        <span>مركز الحساب والإدارة</span>
+                      </button>
+                      {onTogglePreviewPublic && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onTogglePreviewPublic();
+                            setMenuOpen(false);
+                          }}
+                          className="w-full px-4 py-2.5 text-right text-xs font-medium text-[#1E3A5F] hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>
+                            {isPreviewingPublic
+                              ? 'العودة للوحة الإدارة'
+                              : 'معاينة الموقع العام للزوار'}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   <div className="pt-1 border-t border-slate-100">
                     <button
@@ -248,28 +318,30 @@ export default function Header({
       </div>
 
       {/* Tablet / Mobile Scrollable Secondary Nav */}
-      <nav
-        aria-label="تنقل الجوال والتابلت"
-        className="lg:hidden border-t border-slate-100 px-3 py-1 flex items-center gap-3 overflow-x-auto no-scrollbar snap-x"
-      >
-        {navItems.map((item) => {
-          const isActive = activeTab === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onSelectTab(item.id)}
-              className={`snap-start px-2 py-2 min-h-[40px] text-xs font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors ${
-                isActive
-                  ? 'border-[#1E3A5F] text-[#1E3A5F] font-semibold'
-                  : 'border-transparent text-slate-600'
-              }`}
-            >
-              {item.label}
-            </button>
-          );
-        })}
-      </nav>
+      {showAdminNav && (
+        <nav
+          aria-label="تنقل الجوال والتابلت"
+          className="lg:hidden border-t border-slate-100 px-3 py-1 flex items-center gap-3 overflow-x-auto no-scrollbar snap-x"
+        >
+          {navItems.map((item) => {
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onSelectTab(item.id)}
+                className={`snap-start px-2 py-2 min-h-[40px] text-xs font-medium whitespace-nowrap shrink-0 border-b-2 transition-colors ${
+                  isActive
+                    ? 'border-[#1E3A5F] text-[#1E3A5F] font-semibold'
+                    : 'border-transparent text-slate-600'
+                }`}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
+      )}
     </header>
   );
 }

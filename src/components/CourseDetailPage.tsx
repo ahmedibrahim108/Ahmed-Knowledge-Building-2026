@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
+  ArrowUpDown,
   BookMarked,
   BookOpen,
   Calendar,
@@ -16,10 +19,13 @@ import {
   FileText,
   FileUp,
   FolderKanban,
+  Globe,
   Loader2,
+  Lock,
   NotebookPen,
   PenLine,
   Plus,
+  RefreshCw,
   Save,
   Square,
   Trash2,
@@ -30,6 +36,7 @@ import {
   BookNote,
   COURSE_STUDY_STAGES_META,
   CourseStudyStage,
+  EntitySortMode,
   LEARNING_HUBS,
   LearningHubId,
   LearningPath,
@@ -37,6 +44,7 @@ import {
   NoteCategoryType,
   PersonalCourse,
   PracticalProject,
+  ReadingLibraryItem,
   StudyResource,
   TaskPriority,
   UnifiedTask,
@@ -45,6 +53,7 @@ import {
   getHubMeta,
   getTodayDateKey,
   resolveCourseStudyStage,
+  sortBookNotesList,
 } from '../data/curriculumData';
 
 const COURSE_DURATION_OPTIONS = [15, 30, 45, 60, 90, 120, 180];
@@ -57,6 +66,7 @@ function computeEndTimeFromStart(startTime: string, durationMinutes: number): st
   return `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
 }
 import { auth } from '../firebase';
+import { formatSupabaseErrorMessage } from '../services/supabaseClient';
 import {
   downloadResourceAttachmentResult,
   isPdfAttachment,
@@ -65,7 +75,6 @@ import {
   uploadResourceAttachment,
 } from '../utils/documentImportExport';
 import {
-  ensureRichHtml,
   getNoteLayoutClasses,
   renderSafeBidiHtml,
   richHtmlToPlainText,
@@ -74,10 +83,13 @@ import {
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
+import LearningObjectivesPanel from './LearningObjectivesPanel';
+import NoteAttachmentsPanel from './NoteAttachmentsPanel';
 import type { ActivePdfTarget } from './PDFViewerModal';
 import ReadAloudButton from './ReadAloudButton';
 import RichTextNoteEditor from './RichTextNoteEditor';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
+import TaskFormModal from './TaskFormModal';
 import VoiceRecorderButton from './VoiceRecorderButton';
 
 type CourseSectionFocus = 'all' | 'info' | 'tasks' | 'resources' | 'notes';
@@ -95,6 +107,10 @@ interface CourseDetailPageProps {
   linkedProjects: PracticalProject[];
   linkedUnifiedTasks: UnifiedTask[];
   linkedPaths: LearningPath[];
+  allCourses?: PersonalCourse[];
+  allLearningPaths?: LearningPath[];
+  readingItems?: ReadingLibraryItem[];
+  allProjects?: PracticalProject[];
   allMonths: MonthPlan[];
   onBack: () => void;
   onOpenPdf: (target: ActivePdfTarget) => void;
@@ -146,6 +162,7 @@ interface CourseDetailPageProps {
   onDeleteBookNote: (id: string) => void;
   onUpdateUnifiedTask: (id: string, updates: Partial<UnifiedTask>) => void;
   onAddUnifiedTask: (payload: Omit<UnifiedTask, 'id'>) => void;
+  onDeleteUnifiedTask?: (taskId: string) => void;
 }
 
 export default function CourseDetailPage({
@@ -161,6 +178,10 @@ export default function CourseDetailPage({
   linkedProjects,
   linkedUnifiedTasks,
   linkedPaths,
+  allCourses,
+  allLearningPaths,
+  readingItems,
+  allProjects,
   allMonths,
   onBack,
   onOpenPdf,
@@ -182,6 +203,7 @@ export default function CourseDetailPage({
   onDeleteBookNote,
   onUpdateUnifiedTask,
   onAddUnifiedTask,
+  onDeleteUnifiedTask,
 }: CourseDetailPageProps) {
   const noteLayout = getNoteLayoutClasses(preferences);
   const [sectionFocus, setSectionFocus] = useState<CourseSectionFocus>('all');
@@ -247,10 +269,22 @@ export default function CourseDetailPage({
   );
   const [expandedResId, setExpandedResId] = useState<string | null>(null);
   const [replacingResId, setReplacingResId] = useState<string | null>(null);
+  const [lastPickedResFile, setLastPickedResFile] = useState<File | null>(null);
+  const [lastReplaceRetry, setLastReplaceRetry] = useState<{
+    resId: string;
+    file: File;
+  } | null>(null);
   const courseResFileRef = useRef<HTMLInputElement | null>(null);
   const replaceResFileRef = useRef<HTMLInputElement | null>(null);
 
-  // Course Notes (in-page structured notes management)
+  // Unified Task Modal state
+  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [editingUnifiedTask, setEditingUnifiedTask] = useState<UnifiedTask | null>(
+    null
+  );
+
+  // Course Notes (in-page structured notes management + sorting)
+  const [notesSortMode, setNotesSortMode] = useState<EntitySortMode>('manual');
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [isEditingNote, setIsEditingNote] = useState(false);
   const [noteDraft, setNoteDraft] = useState<{
@@ -270,6 +304,11 @@ export default function CourseDetailPage({
   const [newNoteTitle, setNewNoteTitle] = useState('');
   const [newNoteLecture, setNewNoteLecture] = useState('');
 
+  const sortedCourseNotes = useMemo(
+    () => sortBookNotesList(courseNotes, notesSortMode),
+    [courseNotes, notesSortMode]
+  );
+
   useEffect(() => {
     setSectionFocus('all');
     setIsEditingCourse(false);
@@ -283,26 +322,28 @@ export default function CourseDetailPage({
     setExpandedResId(null);
     setIsEditingNote(false);
     setShowNewNoteForm(false);
+    setTaskModalOpen(false);
+    setEditingUnifiedTask(null);
   }, [requestedCourseId]);
 
   useEffect(() => {
-    if (courseNotes.length === 0) {
+    if (sortedCourseNotes.length === 0) {
       setActiveNoteId(null);
       setIsEditingNote(false);
       return;
     }
-    if (!activeNoteId || !courseNotes.some((n) => n.id === activeNoteId)) {
-      setActiveNoteId(courseNotes[0].id);
+    if (!activeNoteId || !sortedCourseNotes.some((n) => n.id === activeNoteId)) {
+      setActiveNoteId(sortedCourseNotes[0].id);
       setIsEditingNote(false);
     }
-  }, [courseNotes, activeNoteId]);
+  }, [sortedCourseNotes, activeNoteId]);
 
   const activeNote = useMemo(
     () =>
       activeNoteId
-        ? courseNotes.find((n) => n.id === activeNoteId) ?? null
-        : courseNotes[0] ?? null,
-    [courseNotes, activeNoteId]
+        ? sortedCourseNotes.find((n) => n.id === activeNoteId) ?? null
+        : sortedCourseNotes[0] ?? null,
+    [sortedCourseNotes, activeNoteId]
   );
 
   // Missing / deleted course route state
@@ -431,14 +472,9 @@ export default function CourseDetailPage({
     }
   };
 
-  const handlePickCourseResourceFile = async (
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
+  const uploadCourseResourceFile = async (file: File) => {
     if (!requireEdit()) return;
-
+    setLastPickedResFile(file);
     setUploadingFile(true);
     setUploadProgressPct(0);
     setUploadStatusMsg(null);
@@ -471,6 +507,9 @@ export default function CourseDetailPage({
       if (!newResNote.trim()) {
         setNewResNote(`ملف مرفق (${file.name})`);
       }
+      if (uploadRes.uploadedToCloud) {
+        setLastPickedResFile(null);
+      }
       setUploadStatusMsg(
         uploadRes.uploadedToCloud
           ? {
@@ -484,9 +523,24 @@ export default function CourseDetailPage({
                 'تعذر رفع الملف للسحابة وتم حفظه محليًا فقط على هذا الجهاز.',
             }
       );
+    } catch (err) {
+      console.error('Course resource upload error:', err);
+      setUploadStatusMsg({
+        ok: false,
+        text: formatSupabaseErrorMessage(err),
+      });
     } finally {
       setUploadingFile(false);
     }
+  };
+
+  const handlePickCourseResourceFile = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    await uploadCourseResourceFile(file);
   };
 
   const handleResourceSubmit = (e: React.FormEvent) => {
@@ -514,25 +568,20 @@ export default function CourseDetailPage({
     setNewResMimeType('');
     setNewResSizeBytes(undefined);
     setPendingResId('');
+    setLastPickedResFile(null);
     setUploadStatusMsg(null);
     setShowAddResource(false);
   };
 
-  const handleReplaceCourseResourceFile = async (
-    e: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const file = e.target.files?.[0];
-    const targetResId = replacingResId;
-    e.target.value = '';
-    if (!file || !targetResId || !course || !onUpdateCourseResource) {
-      setReplacingResId(null);
-      return;
-    }
+  const replaceCourseResourceWithFile = async (targetResId: string, file: File) => {
+    if (!course || !onUpdateCourseResource) return;
     if (!requireEdit()) {
       setReplacingResId(null);
       return;
     }
 
+    setLastReplaceRetry({ resId: targetResId, file });
+    setReplacingResId(targetResId);
     setUploadingFile(true);
     setUploadProgressPct(0);
     setResourceActionError(null);
@@ -559,11 +608,29 @@ export default function CourseDetailPage({
       });
       if (!uploadRes.uploadedToCloud && uploadRes.errorMessage) {
         setResourceActionError(uploadRes.errorMessage);
+      } else {
+        setLastReplaceRetry(null);
       }
+    } catch (err) {
+      console.error('Replace course resource error:', err);
+      setResourceActionError(formatSupabaseErrorMessage(err));
     } finally {
       setUploadingFile(false);
       setReplacingResId(null);
     }
+  };
+
+  const handleReplaceCourseResourceFile = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    const targetResId = replacingResId;
+    e.target.value = '';
+    if (!file || !targetResId || !course || !onUpdateCourseResource) {
+      setReplacingResId(null);
+      return;
+    }
+    await replaceCourseResourceWithFile(targetResId, file);
   };
 
   const createCourseNoteInPlace = (
@@ -693,6 +760,35 @@ export default function CourseDetailPage({
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end shrink-0">
           {canEdit && (
             <>
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateCourse(course.id, { isPublic: !course.isPublic })
+                }
+                className={`inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  course.isPublic
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                {course.isPublic ? (
+                  <Globe className="w-3.5 h-3.5" aria-hidden="true" />
+                ) : (
+                  <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+                <span>{course.isPublic ? 'منشور للعامة' : 'خاص'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingUnifiedTask(null);
+                  setTaskModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>إنشاء مهمة</span>
+              </button>
               <button
                 type="button"
                 onClick={() =>
@@ -1242,9 +1338,19 @@ export default function CourseDetailPage({
         )}
       </section>
 
-      {/* SECTION 1: Course Details, Complementary Book, Links & Spaced Repetition */}
+      {/* SECTION 1: Learning Objectives, Course Details, Complementary Book, Links & Spaced Repetition */}
       {showInfo && (
         <div className="space-y-6">
+          <LearningObjectivesPanel
+            objectives={course.learningObjectives}
+            canEdit={canEdit}
+            onChange={(next) =>
+              onUpdateCourse(course.id, { learningObjectives: next })
+            }
+            title={`أهداف التعلّم — ${course.title}`}
+            subtitle="حدّد لماذا تدرس هذا الكورس والنتائج أو المهارات العملية التي تستهدف تحقيقها."
+          />
+
           {(course.complementaryBook ||
             course.applicationMilestone ||
             course.linkedMonths.length > 0 ||
@@ -1458,15 +1564,27 @@ export default function CourseDetailPage({
                   />
 
                   {uploadStatusMsg && (
-                    <p
-                      className={`text-xs px-3 py-2 rounded-lg border ${
+                    <div
+                      className={`text-xs px-3 py-2 rounded-lg border flex flex-wrap items-center justify-between gap-2 ${
                         uploadStatusMsg.ok
                           ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
                           : 'bg-amber-50 border-amber-200 text-amber-900'
                       }`}
                     >
-                      {uploadStatusMsg.text}
-                    </p>
+                      <span>{uploadStatusMsg.text}</span>
+                      {!uploadStatusMsg.ok && lastPickedResFile && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void uploadCourseResourceFile(lastPickedResFile)
+                          }
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-amber-300 text-amber-900 rounded-md font-semibold cursor-pointer"
+                        >
+                          <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                          <span>إعادة المحاولة</span>
+                        </button>
+                      )}
+                    </div>
                   )}
 
                   <button
@@ -1480,15 +1598,35 @@ export default function CourseDetailPage({
               )}
 
               {resourceActionError && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-2">
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex flex-wrap items-center justify-between gap-2">
                   <span>{resourceActionError}</span>
-                  <button
-                    type="button"
-                    onClick={() => setResourceActionError(null)}
-                    className="text-amber-700 hover:text-amber-950 font-semibold cursor-pointer"
-                  >
-                    إغلاق
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {lastReplaceRetry && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void replaceCourseResourceWithFile(
+                            lastReplaceRetry.resId,
+                            lastReplaceRetry.file
+                          )
+                        }
+                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-amber-300 text-amber-900 rounded-md font-semibold cursor-pointer"
+                      >
+                        <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                        <span>إعادة المحاولة</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setResourceActionError(null);
+                        setLastReplaceRetry(null);
+                      }}
+                      className="text-amber-700 hover:text-amber-950 font-semibold cursor-pointer"
+                    >
+                      إغلاق
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -2131,7 +2269,20 @@ export default function CourseDetailPage({
                       {linkedProjects.length + linkedUnifiedTasks.length})
                     </h2>
                   </div>
-                  <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingUnifiedTask(null);
+                          setTaskModalOpen(true);
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>إنشاء مهمة مرتبطة</span>
+                      </button>
+                    )}
                     {onOpenCalendar && (
                       <button
                         type="button"
@@ -2247,34 +2398,46 @@ export default function CourseDetailPage({
                                 </button>
                               )}
                               {canEdit && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (isSchedulingUt) {
-                                      setSchedUnifiedTaskId(null);
-                                      return;
-                                    }
-                                    setSchedCourseTaskId(null);
-                                    setSchedUnifiedTaskId(ut.id);
-                                    setSchedDate(utSchedDate || getTodayDateKey());
-                                    setSchedTime(ut.startTime || '18:00');
-                                    setSchedDuration(ut.durationMinutes || 60);
-                                    setSchedPriority(ut.priority || 'medium');
-                                  }}
-                                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium rounded-lg border cursor-pointer ${
-                                    utSchedDate
-                                      ? 'bg-[#1E3A5F]/10 border-[#1E3A5F]/30 text-[#1E3A5F]'
-                                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-                                  }`}
-                                >
-                                  <Calendar
-                                    className="w-3 h-3"
-                                    aria-hidden="true"
-                                  />
-                                  <span>
-                                    {utSchedDate ? 'تعديل الجدول' : 'جدولة'}
-                                  </span>
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingUnifiedTask(ut);
+                                      setTaskModalOpen(true);
+                                    }}
+                                    className="px-2 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                                  >
+                                    تعديل
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (isSchedulingUt) {
+                                        setSchedUnifiedTaskId(null);
+                                        return;
+                                      }
+                                      setSchedCourseTaskId(null);
+                                      setSchedUnifiedTaskId(ut.id);
+                                      setSchedDate(utSchedDate || getTodayDateKey());
+                                      setSchedTime(ut.startTime || '18:00');
+                                      setSchedDuration(ut.durationMinutes || 60);
+                                      setSchedPriority(ut.priority || 'medium');
+                                    }}
+                                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium rounded-lg border cursor-pointer ${
+                                      utSchedDate
+                                        ? 'bg-[#1E3A5F]/10 border-[#1E3A5F]/30 text-[#1E3A5F]'
+                                        : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    <Calendar
+                                      className="w-3 h-3"
+                                      aria-hidden="true"
+                                    />
+                                    <span>
+                                      {utSchedDate ? 'تعديل الجدول' : 'جدولة'}
+                                    </span>
+                                  </button>
+                                </>
                               )}
                             </div>
                           </div>
@@ -2515,16 +2678,35 @@ export default function CourseDetailPage({
               </p>
             </div>
 
-            {canEdit && (
-              <button
-                type="button"
-                onClick={() => setShowNewNoteForm((v) => !v)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>{showNewNoteForm ? 'إلغاء' : '+ نوت محاضرة جديدة'}</span>
-              </button>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+                <ArrowUpDown className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                <select
+                  aria-label="ترتيب محاضرات الكورس"
+                  value={notesSortMode}
+                  onChange={(e) =>
+                    setNotesSortMode(e.target.value as EntitySortMode)
+                  }
+                  className="px-2.5 py-1.5 min-h-[36px] text-xs font-medium bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
+                >
+                  <option value="manual">ترتيب يدوي (تحريك لأعلى/لأسفل)</option>
+                  <option value="logical">ترتيب منطقي (١، ٢، ٣)</option>
+                  <option value="updated">الأحدث تعديلاً</option>
+                  <option value="title">ترتيب أبجدي</option>
+                </select>
+              </label>
+
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={() => setShowNewNoteForm((v) => !v)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{showNewNoteForm ? 'إلغاء' : '+ نوت محاضرة جديدة'}</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {showNewNoteForm && canEdit && (
@@ -2599,9 +2781,23 @@ export default function CourseDetailPage({
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
               {/* Course Notes List Sidebar */}
               <div className="lg:col-span-4 space-y-2">
-                {courseNotes.map((bn) => {
+                {sortedCourseNotes.map((bn, idx) => {
                   const isSelected = activeNote?.id === bn.id;
                   const snippet = richHtmlToPlainText(bn.content).slice(0, 90);
+                  const moveNote = (dir: 'up' | 'down') => {
+                    if (!requireEdit()) return;
+                    const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
+                    if (targetIdx < 0 || targetIdx >= sortedCourseNotes.length) return;
+                    const reordered = [...sortedCourseNotes];
+                    const [moved] = reordered.splice(idx, 1);
+                    reordered.splice(targetIdx, 0, moved);
+                    reordered.forEach((item, orderIdx) => {
+                      const nextOrder = orderIdx + 1;
+                      if ((item.sortOrder ?? 0) !== nextOrder) {
+                        onUpdateBookNote(item.id, { sortOrder: nextOrder });
+                      }
+                    });
+                  };
                   return (
                     <div
                       key={bn.id}
@@ -2643,17 +2839,47 @@ export default function CourseDetailPage({
                         </p>
                       )}
                       <div className="pt-1 flex items-center justify-between gap-2">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveNoteId(bn.id);
-                            setIsEditingNote(false);
-                          }}
-                          className="text-[10px] text-slate-500 hover:text-[#1E3A5F] hover:underline cursor-pointer"
-                        >
-                          {isSelected ? 'معروض بالجانب' : 'معاينة بالجانب'}
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveNoteId(bn.id);
+                              setIsEditingNote(false);
+                            }}
+                            className="text-[10px] text-slate-500 hover:text-[#1E3A5F] hover:underline cursor-pointer"
+                          >
+                            {isSelected ? 'معروض بالجانب' : 'معاينة بالجانب'}
+                          </button>
+                          {canEdit && notesSortMode === 'manual' && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={idx === 0}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  moveNote('up');
+                                }}
+                                aria-label="تقديم للأعلى"
+                                className="p-1 text-slate-400 hover:text-slate-900 disabled:opacity-30 cursor-pointer"
+                              >
+                                <ArrowUp className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={idx === sortedCourseNotes.length - 1}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  moveNote('down');
+                                }}
+                                aria-label="تأخير للأسفل"
+                                className="p-1 text-slate-400 hover:text-slate-900 disabled:opacity-30 cursor-pointer"
+                              >
+                                <ArrowDown className="w-3 h-3" />
+                              </button>
+                            </>
+                          )}
+                        </div>
                         <button
                           type="button"
                           onClick={(e) => {
@@ -2918,6 +3144,19 @@ export default function CourseDetailPage({
                         compact
                         hideEmptyWhenReadOnly
                       />
+
+                      <NoteAttachmentsPanel
+                        uid={uid}
+                        noteId={activeNote.id}
+                        noteTitle={activeNote.bookTitle}
+                        resources={activeNote.resources}
+                        canEdit={canEdit}
+                        onRequireAuth={onRequireAuth}
+                        onUpdateResources={(next) =>
+                          onUpdateBookNote(activeNote.id, { resources: next })
+                        }
+                        onOpenPdf={onOpenPdf}
+                      />
                     </div>
                   )}
                 </div>
@@ -2965,6 +3204,39 @@ export default function CourseDetailPage({
         }
         onConfirm={handleConfirmDeleteAction}
         onCancel={() => setConfirmState(null)}
+      />
+
+      <TaskFormModal
+        open={taskModalOpen}
+        onClose={() => {
+          setTaskModalOpen(false);
+          setEditingUnifiedTask(null);
+        }}
+        initialTask={editingUnifiedTask}
+        prefill={
+          editingUnifiedTask
+            ? undefined
+            : {
+                hubId: course.hubId ?? 'knowledge',
+                categoryLabel: course.category || '',
+                linkedCourseId: course.id,
+                linkedLabel: course.title,
+                projectId: `course:${course.id}`,
+              }
+        }
+        courses={allCourses ?? [course]}
+        learningPaths={allLearningPaths ?? linkedPaths}
+        readingItems={readingItems ?? []}
+        projects={allProjects ?? linkedProjects}
+        hubCategories={hubCategories}
+        onSubmit={(payload, existingId) => {
+          if (existingId) {
+            onUpdateUnifiedTask(existingId, payload);
+          } else {
+            onAddUnifiedTask(payload);
+          }
+        }}
+        onDelete={onDeleteUnifiedTask}
       />
     </div>
   );

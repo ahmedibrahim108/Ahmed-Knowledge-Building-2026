@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   CalendarClock,
+  Globe,
   GraduationCap,
   Headphones,
+  Lock,
   PenLine,
   Plus,
   Repeat,
@@ -15,13 +20,19 @@ import {
   COURSE_STUDY_STAGES_META,
   CourseStudyStage,
   DentalCase,
+  EntitySortMode,
   LEARNING_HUBS,
   LearningHubId,
+  LearningPath,
   PersonalCourse,
+  PracticalProject,
+  ReadingLibraryItem,
+  UnifiedTask,
   getCourseStageMeta,
   getHubMeta,
   getTodayDateKey,
   resolveCourseStudyStage,
+  sortCoursesList,
 } from '../data/curriculumData';
 import {
   isPdfAttachment,
@@ -30,6 +41,7 @@ import {
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import DentalCasesView from './DentalCasesView';
+import TaskFormModal from './TaskFormModal';
 
 interface CoursesViewProps {
   uid?: string;
@@ -38,6 +50,9 @@ interface CoursesViewProps {
   courses: PersonalCourse[];
   bookNotes?: BookNote[];
   dentalCases?: DentalCase[];
+  learningPaths?: LearningPath[];
+  readingItems?: ReadingLibraryItem[];
+  projects?: PracticalProject[];
   onSelectCourse: (id: number) => void;
   activeHubFilter: LearningHubId | 'all';
   onChangeHubFilter: (hub: LearningHubId | 'all') => void;
@@ -68,6 +83,7 @@ interface CoursesViewProps {
     lectureTitle?: string,
     initialContent?: string
   ) => void;
+  onAddUnifiedTask?: (payload: Omit<UnifiedTask, 'id'>) => void;
   onAddDentalCase?: (
     payload: Omit<DentalCase, 'id'>
   ) => string | undefined;
@@ -82,6 +98,9 @@ export default function CoursesView({
   courses,
   bookNotes = [],
   dentalCases = [],
+  learningPaths = [],
+  readingItems = [],
+  projects = [],
   onSelectCourse,
   activeHubFilter,
   onChangeHubFilter,
@@ -92,6 +111,7 @@ export default function CoursesView({
   onUpdateCourse,
   onDeleteCourse,
   onOpenCourseNote,
+  onAddUnifiedTask,
   onAddDentalCase,
   onUpdateDentalCase,
   onDeleteDentalCase,
@@ -102,6 +122,10 @@ export default function CoursesView({
   );
   const [onlyRepeated, setOnlyRepeated] = useState(false);
   const [onlyDueToday, setOnlyDueToday] = useState(false);
+  const [sortMode, setSortMode] = useState<EntitySortMode>('manual');
+  const [quickTaskCourse, setQuickTaskCourse] = useState<PersonalCourse | null>(
+    null
+  );
   const [localSection, setLocalSection] = useState<'courses' | 'dental_cases'>(
     activeSection ?? 'courses'
   );
@@ -171,7 +195,7 @@ export default function CoursesView({
 
   const filteredCourses = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return hubMatchedCourses.filter((c) => {
+    const list = hubMatchedCourses.filter((c) => {
       const stage = resolveCourseStudyStage(c);
       if (stageFilter !== 'all' && stage !== stageFilter) return false;
       if (onlyRepeated && (c.listenCount ?? 0) < 2 && (c.reviewCount ?? 0) < 2) {
@@ -200,6 +224,7 @@ export default function CoursesView({
       }
       return true;
     });
+    return sortCoursesList(list, sortMode);
   }, [
     hubMatchedCourses,
     stageFilter,
@@ -207,6 +232,7 @@ export default function CoursesView({
     onlyDueToday,
     searchQuery,
     todayKey,
+    sortMode,
   ]);
 
   const completedCount = courses.filter(
@@ -278,6 +304,21 @@ export default function CoursesView({
     onUpdateCourse(course.id, {
       studyStage: nextStage,
       completed: nextStage === 'completed',
+    });
+  };
+
+  const handleMoveCourseOrder = (index: number, direction: 'up' | 'down') => {
+    if (!requireEdit() || !onUpdateCourse) return;
+    const targetIdx = direction === 'up' ? index - 1 : index + 1;
+    if (targetIdx < 0 || targetIdx >= filteredCourses.length) return;
+    const reordered = [...filteredCourses];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(targetIdx, 0, moved);
+    reordered.forEach((item, idx) => {
+      const nextOrder = idx + 1;
+      if ((item.sortOrder ?? 0) !== nextOrder) {
+        onUpdateCourse(item.id, { sortOrder: nextOrder });
+      }
     });
   };
 
@@ -496,18 +537,35 @@ export default function CoursesView({
                 </button>
               </div>
 
-              <div className="relative w-full sm:w-64">
-                <Search
-                  className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                  aria-hidden="true"
-                />
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="بحث في الكورسات..."
-                  className="w-full pr-8 pl-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
-                />
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+                  <ArrowUpDown className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                  <select
+                    aria-label="ترتيب الكورسات"
+                    value={sortMode}
+                    onChange={(e) => setSortMode(e.target.value as EntitySortMode)}
+                    className="px-2.5 py-1.5 text-[11px] font-medium bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
+                  >
+                    <option value="manual">ترتيب يدوي (أسهم)</option>
+                    <option value="stage">حسب مرحلة الدراسة</option>
+                    <option value="title">ترتيب أبجدي</option>
+                    <option value="updated">الأحدث إضافة</option>
+                  </select>
+                </label>
+
+                <div className="relative flex-1 sm:w-64">
+                  <Search
+                    className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                    aria-hidden="true"
+                  />
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="بحث في الكورسات..."
+                    className="w-full pr-8 pl-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -752,7 +810,7 @@ export default function CoursesView({
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {filteredCourses.map((course) => {
+              {filteredCourses.map((course, idx) => {
                 const hubMeta = getHubMeta(course.hubId);
                 const resolvedStage = resolveCourseStudyStage(course);
                 const stageMeta = getCourseStageMeta(resolvedStage);
@@ -802,26 +860,64 @@ export default function CoursesView({
                         </div>
 
                         {canEdit && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setConfirmDeleteCourse(course);
-                            }}
-                            aria-label={`حذف ${course.title}`}
-                            className="p-1 text-slate-400 hover:text-red-600 rounded hover:bg-red-50 cursor-pointer shrink-0"
+                          <div
+                            className="flex items-center gap-0.5 shrink-0"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                          </button>
+                            {sortMode === 'manual' && onUpdateCourse && (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={idx === 0}
+                                  onClick={() => handleMoveCourseOrder(idx, 'up')}
+                                  aria-label="تقديم الكورس"
+                                  className="p-1 text-slate-400 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
+                                >
+                                  <ArrowUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={idx === filteredCourses.length - 1}
+                                  onClick={() => handleMoveCourseOrder(idx, 'down')}
+                                  aria-label="تأخير الكورس"
+                                  className="p-1 text-slate-400 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
+                                >
+                                  <ArrowDown className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteCourse(course)}
+                              aria-label={`حذف ${course.title}`}
+                              className="p-1 text-slate-400 hover:text-red-600 rounded hover:bg-red-50 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                          </div>
                         )}
                       </div>
 
-                      {/* Stage Badge & Scheduled Period */}
+                      {/* Stage Badge, Visibility & Scheduled Period */}
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span
                           className={`px-2 py-0.5 text-[10px] font-bold rounded border ${stageMeta.badgeClass}`}
                         >
                           {stageMeta.label}
+                        </span>
+                        <span
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded border ${
+                            course.isPublic
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              : 'bg-slate-50 text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {course.isPublic ? (
+                            <Globe className="w-2.5 h-2.5" aria-hidden="true" />
+                          ) : (
+                            <Lock className="w-2.5 h-2.5" aria-hidden="true" />
+                          )}
+                          <span>{course.isPublic ? 'عام' : 'خاص'}</span>
                         </span>
                         {resolvedStage === 'scheduled_later' &&
                           course.scheduledPeriod && (
@@ -937,6 +1033,20 @@ export default function CoursesView({
                         >
                           <span>عرض صفحة الكورس</span>
                         </button>
+                        {canEdit && onAddUnifiedTask && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setQuickTaskCourse(course);
+                            }}
+                            title="إنشاء مهمة مرتبطة بهذا الكورس"
+                            className="inline-flex items-center gap-1 px-2.5 py-2 text-xs font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>مهمة</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={(e) => {
@@ -975,6 +1085,30 @@ export default function CoursesView({
         }}
         onCancel={() => setConfirmDeleteCourse(null)}
       />
+
+      {onAddUnifiedTask && (
+        <TaskFormModal
+          open={Boolean(quickTaskCourse)}
+          onClose={() => setQuickTaskCourse(null)}
+          prefill={
+            quickTaskCourse
+              ? {
+                  hubId: quickTaskCourse.hubId ?? 'knowledge',
+                  categoryLabel: quickTaskCourse.category || '',
+                  linkedCourseId: quickTaskCourse.id,
+                  linkedLabel: quickTaskCourse.title,
+                  projectId: `course:${quickTaskCourse.id}`,
+                }
+              : undefined
+          }
+          courses={courses}
+          learningPaths={learningPaths}
+          readingItems={readingItems}
+          projects={projects}
+          hubCategories={hubCategories}
+          onSubmit={(payload) => onAddUnifiedTask(payload)}
+        />
+      )}
     </div>
   );
 }

@@ -152,30 +152,103 @@ export async function withFirebaseTokenRetry<T>(
 
 export function formatSupabaseErrorMessage(
   err: unknown,
-  fallback = 'تعذّر إتمام العملية مع قاعدة البيانات.'
+  fallback = 'تعذّر إتمام العملية مع قاعدة البيانات. يرجى المحاولة مرة أخرى.'
 ): string {
   if (!err) return fallback;
-  if (typeof err === 'string') return err;
-  const e = err as { message?: string; code?: string; details?: string };
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return 'لا يوجد اتصال بالإنترنت حاليًا. تحقق من الشبكة ثم حاول مجددًا.';
+  }
+
+  console.warn('[Supabase error]', err);
+
+  if (typeof err === 'string') {
+    const low = err.toLowerCase();
+    if (
+      low.includes('42501') ||
+      low.includes('row-level security') ||
+      low.includes('permission denied')
+    ) {
+      return 'ليس لديك صلاحية لتنفيذ هذه العملية.';
+    }
+    if (low.includes('network') || low.includes('failed to fetch')) {
+      return 'تعذّر الاتصال بالخادم السحابي. تحقق من اتصال الإنترنت وحاول مجددًا.';
+    }
+    if (low.includes('413') || low.includes('too large')) {
+      return 'حجم الملف يتجاوز الحد الأقصى المسموح به (100 ميجابايت).';
+    }
+    // Only return purely Arabic friendly messages directly; mask technical English/JSON traces
+    if (/^[\u0600-\u06FF\s\d.,:!?؛،\-()«»]+$/.test(err.trim())) {
+      return err;
+    }
+    return fallback;
+  }
+
+  const e = err as { message?: string; code?: string; details?: string; status?: number };
   const msg = (e.message || '').toLowerCase();
+  const code = (e.code || '').toUpperCase();
+
   if (
+    code === '42501' ||
+    e.status === 403 ||
     msg.includes('row-level security') ||
     msg.includes('permission denied') ||
-    e.code === '42501'
+    msg.includes('insufficient privileges')
   ) {
-    return 'تعذّر الحفظ بسبب صلاحيات الوصول (RLS). تأكد من تفعيل Firebase Auth في Supabase وتطبيق سياسات الجداول.';
+    return 'ليس لديك صلاحية لتنفيذ هذه العملية. هذه الميزة مخصصة لمسؤول المنصة فقط.';
   }
-  if (msg.includes('jwt') || e.code === 'PGRST301') {
-    return 'انتهت جلسة التحقق أو لم يتعرف Supabase على توكن Firebase Auth. تأكد من ربط Firebase Third-Party Auth في لوحة Supabase.';
-  }
+
   if (
+    code === 'PGRST301' ||
+    e.status === 401 ||
+    msg.includes('jwt') ||
+    msg.includes('jws') ||
+    msg.includes('unrecognized') ||
+    msg.includes('انتهت جلسة')
+  ) {
+    return 'انتهت جلسة الدخول. يرجى تحديث الصفحة أو إعادة تسجيل الدخول بحساب Google.';
+  }
+
+  if (
+    code === '42703' ||
+    code === '42P01' ||
+    code === 'PGRST204' ||
+    code === 'PGRST205' ||
+    msg.includes('schema cache') ||
+    msg.includes('does not exist')
+  ) {
+    return 'تحتاج قاعدة البيانات إلى تحديث البنية (ملف الترحيل 007) قبل حفظ هذه الحقول الجديدة.';
+  }
+
+  if (
+    e.status === 413 ||
     msg.includes('payload too large') ||
     msg.includes('exceeded the maximum allowed size') ||
     msg.includes('413')
   ) {
-    return 'حجم الملف يتجاوز الحد الأقصى المسموح به في إعدادات مشروع Supabase (تأكد من تشغيل Migration 006 ومن إعداد Global file size limit في لوحة Supabase Storage).';
+    return 'حجم الملف يتجاوز الحد الأقصى المسموح به في التخزين السحابي (100 ميجابايت).';
   }
-  return e.message || fallback;
+
+  if (
+    msg.includes('failed to fetch') ||
+    msg.includes('network') ||
+    msg.includes('timeout') ||
+    msg.includes('abort')
+  ) {
+    return 'تعذّر الاتصال بالسحابة. تأكد من استقرار الإنترنت ثم أعد المحاولة.';
+  }
+
+  if (code === '23505' || msg.includes('duplicate key')) {
+    return 'هذا السجل محفوظ مسبقًا بالفعل.';
+  }
+
+  if (
+    e.message &&
+    /^[\u0600-\u06FF\s\d.,:!?؛،\-()«»/+*]+$/.test(e.message.trim())
+  ) {
+    return e.message;
+  }
+
+  return fallback;
 }
 
 export interface SupabaseDiagnosticCheck {

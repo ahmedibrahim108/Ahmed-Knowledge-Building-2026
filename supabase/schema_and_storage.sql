@@ -134,6 +134,33 @@ CREATE TRIGGER trg_user_profiles_protect_admin_fields
   BEFORE UPDATE ON public.user_profiles
   FOR EACH ROW EXECUTE FUNCTION public.protect_user_profiles_admin_fields();
 
+CREATE OR REPLACE FUNCTION public.ensure_owner_admin_on_profile_insert()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF public.firebase_email() = 'farrag34567@gmail.com'
+     AND public.firebase_email_verified() THEN
+    NEW.role := 'admin';
+    NEW.approval_status := 'approved';
+  ELSE
+    IF current_user NOT IN ('postgres', 'supabase_admin', 'service_role')
+       AND coalesce(auth.role(), '') <> 'service_role' THEN
+      NEW.role := 'user';
+      NEW.approval_status := 'pending';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_user_profiles_owner_admin_insert ON public.user_profiles;
+CREATE TRIGGER trg_user_profiles_owner_admin_insert
+  BEFORE INSERT ON public.user_profiles
+  FOR EACH ROW EXECUTE FUNCTION public.ensure_owner_admin_on_profile_insert();
+
 DROP TRIGGER IF EXISTS trg_user_profiles_updated_at ON public.user_profiles;
 CREATE TRIGGER trg_user_profiles_updated_at
   BEFORE UPDATE ON public.user_profiles
@@ -242,6 +269,9 @@ CREATE TABLE IF NOT EXISTS public.courses (
   completed boolean NOT NULL DEFAULT false,
   resources jsonb NOT NULL DEFAULT '[]'::jsonb,
   tasks jsonb NOT NULL DEFAULT '[]'::jsonb,
+  learning_objectives jsonb NOT NULL DEFAULT '[]'::jsonb,
+  sort_order integer NOT NULL DEFAULT 0,
+  is_public boolean NOT NULL DEFAULT false,
   reading_modes text[] NOT NULL DEFAULT '{}',
   learning_methods text[] NOT NULL DEFAULT '{}',
   review_count integer NOT NULL DEFAULT 0,
@@ -256,6 +286,7 @@ CREATE TABLE IF NOT EXISTS public.courses (
 
 CREATE INDEX IF NOT EXISTS idx_courses_owner_num ON public.courses (owner_id, course_number);
 CREATE INDEX IF NOT EXISTS idx_courses_owner_stage ON public.courses (owner_id, study_stage);
+CREATE INDEX IF NOT EXISTS idx_courses_public_order ON public.courses (is_public, sort_order);
 
 DROP TRIGGER IF EXISTS trg_courses_updated_at ON public.courses;
 CREATE TRIGGER trg_courses_updated_at
@@ -278,6 +309,9 @@ CREATE TABLE IF NOT EXISTS public.book_notes (
   progress_marker text NOT NULL DEFAULT '',
   content text NOT NULL DEFAULT '',
   quotes text NOT NULL DEFAULT '',
+  resources jsonb NOT NULL DEFAULT '[]'::jsonb,
+  sort_order integer NOT NULL DEFAULT 0,
+  created_at_ms bigint NOT NULL DEFAULT 0,
   updated_at_label text NOT NULL DEFAULT '',
   reading_modes text[] NOT NULL DEFAULT '{}',
   learning_methods text[] NOT NULL DEFAULT '{}',
@@ -293,6 +327,7 @@ CREATE TABLE IF NOT EXISTS public.book_notes (
 
 CREATE INDEX IF NOT EXISTS idx_book_notes_owner_course ON public.book_notes (owner_id, course_id);
 CREATE INDEX IF NOT EXISTS idx_book_notes_owner_hub ON public.book_notes (owner_id, hub_id);
+CREATE INDEX IF NOT EXISTS idx_book_notes_owner_order ON public.book_notes (owner_id, sort_order);
 
 DROP TRIGGER IF EXISTS trg_book_notes_updated_at ON public.book_notes;
 CREATE TRIGGER trg_book_notes_updated_at
@@ -361,6 +396,8 @@ CREATE TABLE IF NOT EXISTS public.user_preferences (
   show_excel_export boolean NOT NULL DEFAULT true,
   hub_categories jsonb NOT NULL DEFAULT '{}'::jsonb,
   calendar_prefs jsonb NOT NULL DEFAULT '{}'::jsonb,
+  weekly_rhythm jsonb NOT NULL DEFAULT '[]'::jsonb,
+  reflection_categories jsonb NOT NULL DEFAULT '[]'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (owner_id, id)
@@ -378,6 +415,7 @@ CREATE TABLE IF NOT EXISTS public.reflections (
   title text NOT NULL DEFAULT '',
   content text NOT NULL DEFAULT '',
   mood_tag text NOT NULL DEFAULT 'تأمل' CHECK (mood_tag IN ('تأمل', 'فكرة', 'امتنان', 'هدف')),
+  category_tag text NOT NULL DEFAULT '',
   pinned boolean NOT NULL DEFAULT false,
   created_at_label text NOT NULL DEFAULT '',
   created_at_ms bigint NOT NULL DEFAULT 0,
@@ -436,6 +474,9 @@ CREATE TABLE IF NOT EXISTS public.learning_paths (
   progress_pct integer NOT NULL DEFAULT 0,
   status text NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'in_progress', 'completed')),
   stages jsonb NOT NULL DEFAULT '[]'::jsonb,
+  learning_objectives jsonb NOT NULL DEFAULT '[]'::jsonb,
+  sort_order integer NOT NULL DEFAULT 0,
+  is_public boolean NOT NULL DEFAULT false,
   linked_course_ids integer[] NOT NULL DEFAULT '{}',
   reading_modes text[] NOT NULL DEFAULT '{}',
   learning_methods text[] NOT NULL DEFAULT '{}',
@@ -445,6 +486,8 @@ CREATE TABLE IF NOT EXISTS public.learning_paths (
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (owner_id, id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_learning_paths_public_order ON public.learning_paths (is_public, sort_order);
 
 DROP TRIGGER IF EXISTS trg_learning_paths_updated_at ON public.learning_paths;
 CREATE TRIGGER trg_learning_paths_updated_at
@@ -470,6 +513,9 @@ CREATE TABLE IF NOT EXISTS public.reading_items (
   storage_path text NOT NULL DEFAULT '',
   download_url text NOT NULL DEFAULT '',
   external_url text NOT NULL DEFAULT '',
+  learning_objectives jsonb NOT NULL DEFAULT '[]'::jsonb,
+  sort_order integer NOT NULL DEFAULT 0,
+  is_public boolean NOT NULL DEFAULT false,
   reading_modes text[] NOT NULL DEFAULT '{}',
   learning_methods text[] NOT NULL DEFAULT '{}',
   review_count integer NOT NULL DEFAULT 0,
@@ -484,6 +530,7 @@ CREATE TABLE IF NOT EXISTS public.reading_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_reading_items_owner_hub ON public.reading_items (owner_id, hub_id);
+CREATE INDEX IF NOT EXISTS idx_reading_items_public_order ON public.reading_items (is_public, sort_order);
 
 DROP TRIGGER IF EXISTS trg_reading_items_updated_at ON public.reading_items;
 CREATE TRIGGER trg_reading_items_updated_at
@@ -536,6 +583,9 @@ CREATE TABLE IF NOT EXISTS public.unified_tasks (
   deadline text NOT NULL DEFAULT '',
   project_id text NOT NULL DEFAULT '',
   linked_label text NOT NULL DEFAULT '',
+  linked_course_id integer,
+  linked_path_id text NOT NULL DEFAULT '',
+  linked_book_id text NOT NULL DEFAULT '',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (owner_id, id)
@@ -693,6 +743,29 @@ CREATE TRIGGER trg_audio_cache_updated_at
   BEFORE UPDATE ON public.audio_cache
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
+-- 21. Public Site Config
+CREATE TABLE IF NOT EXISTS public.public_site_config (
+  id text PRIMARY KEY DEFAULT 'main',
+  owner_id text NOT NULL DEFAULT public.firebase_uid() REFERENCES public.user_profiles(uid) ON DELETE CASCADE,
+  hero_title text NOT NULL DEFAULT '',
+  hero_subtitle text NOT NULL DEFAULT '',
+  intro_bio text NOT NULL DEFAULT '',
+  background_text text NOT NULL DEFAULT '',
+  skills jsonb NOT NULL DEFAULT '[]'::jsonb,
+  interests jsonb NOT NULL DEFAULT '[]'::jsonb,
+  philosophy_text text NOT NULL DEFAULT '',
+  sections jsonb NOT NULL DEFAULT '[]'::jsonb,
+  visibility_flags jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at_ms bigint NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+DROP TRIGGER IF EXISTS trg_public_site_config_updated_at ON public.public_site_config;
+CREATE TRIGGER trg_public_site_config_updated_at
+  BEFORE UPDATE ON public.public_site_config
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
 -- Enable RLS
 ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.quarters ENABLE ROW LEVEL SECURITY;
@@ -714,9 +787,11 @@ ALTER TABLE public.dental_cases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.file_attachments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.image_attachments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audio_cache ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.public_site_config ENABLE ROW LEVEL SECURITY;
 
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.user_profiles TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.public_site_config TO anon, authenticated;
 
 REVOKE ALL ON FUNCTION public.firebase_uid() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.firebase_uid() TO anon, authenticated, service_role;
@@ -753,8 +828,15 @@ CREATE POLICY user_profiles_insert_own ON public.user_profiles
   WITH CHECK (
     public.is_verified_firebase_user()
     AND uid = public.firebase_uid()
-    AND role = 'user'
-    AND approval_status = 'pending'
+    AND (
+      (role = 'user' AND approval_status = 'pending')
+      OR (
+        public.firebase_email() = 'farrag34567@gmail.com'
+        AND public.firebase_email_verified()
+        AND role = 'admin'
+        AND approval_status = 'approved'
+      )
+    )
   );
 CREATE POLICY user_profiles_update_own_or_admin ON public.user_profiles
   FOR UPDATE TO anon, authenticated
@@ -770,22 +852,52 @@ CREATE POLICY user_profiles_delete_admin_only ON public.user_profiles
   FOR DELETE TO anon, authenticated
   USING (public.is_verified_admin());
 
+DROP POLICY IF EXISTS public_site_config_select_all ON public.public_site_config;
+DROP POLICY IF EXISTS public_site_config_insert_admin ON public.public_site_config;
+DROP POLICY IF EXISTS public_site_config_update_admin ON public.public_site_config;
+DROP POLICY IF EXISTS public_site_config_delete_admin ON public.public_site_config;
+
+CREATE POLICY public_site_config_select_all ON public.public_site_config
+  FOR SELECT TO anon, authenticated
+  USING (true);
+CREATE POLICY public_site_config_insert_admin ON public.public_site_config
+  FOR INSERT TO anon, authenticated
+  WITH CHECK (public.is_verified_admin() AND owner_id = public.firebase_uid());
+CREATE POLICY public_site_config_update_admin ON public.public_site_config
+  FOR UPDATE TO anon, authenticated
+  USING (public.is_verified_admin() AND owner_id = public.firebase_uid())
+  WITH CHECK (public.is_verified_admin() AND owner_id = public.firebase_uid());
+CREATE POLICY public_site_config_delete_admin ON public.public_site_config
+  FOR DELETE TO anon, authenticated
+  USING (public.is_verified_admin() AND owner_id = public.firebase_uid());
+
+ALTER TABLE public.user_profiles REPLICA IDENTITY FULL;
+ALTER TABLE public.public_site_config REPLICA IDENTITY FULL;
+DO $$
+BEGIN
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.public_site_config;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.user_profiles;
+  EXCEPTION WHEN duplicate_object THEN NULL;
+  END;
+END $$;
+
 DO $$
 DECLARE
   tbl text;
-  tables text[] := ARRAY[
+  private_tables text[] := ARRAY[
     'quarters',
     'domains',
     'months',
-    'courses',
     'book_notes',
     'custom_categories',
     'study_history',
     'user_preferences',
     'reflections',
     'calendar_events',
-    'learning_paths',
-    'reading_items',
     'practical_projects',
     'unified_tasks',
     'weekly_meetings',
@@ -794,38 +906,79 @@ DECLARE
     'image_attachments',
     'audio_cache'
   ];
+  catalog_tables text[] := ARRAY[
+    'courses',
+    'learning_paths',
+    'reading_items'
+  ];
 BEGIN
-  FOREACH tbl IN ARRAY tables LOOP
+  FOREACH tbl IN ARRAY private_tables LOOP
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO anon, authenticated', tbl);
-
     EXECUTE format('DROP POLICY IF EXISTS %I_select_own ON public.%I', tbl, tbl);
     EXECUTE format('DROP POLICY IF EXISTS %I_insert_own ON public.%I', tbl, tbl);
     EXECUTE format('DROP POLICY IF EXISTS %I_update_own ON public.%I', tbl, tbl);
     EXECUTE format('DROP POLICY IF EXISTS %I_delete_own ON public.%I', tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_select_admin ON public.%I', tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_insert_admin ON public.%I', tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_update_admin ON public.%I', tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_delete_admin ON public.%I', tbl, tbl);
 
     EXECUTE format(
-      'CREATE POLICY %I_select_own ON public.%I FOR SELECT TO anon, authenticated USING (public.is_verified_firebase_user() AND owner_id = public.firebase_uid())',
+      'CREATE POLICY %I_select_admin ON public.%I FOR SELECT TO anon, authenticated USING (public.is_verified_admin() AND owner_id = public.firebase_uid())',
       tbl, tbl
     );
     EXECUTE format(
-      'CREATE POLICY %I_insert_own ON public.%I FOR INSERT TO anon, authenticated WITH CHECK (public.is_verified_firebase_user() AND owner_id = public.firebase_uid())',
+      'CREATE POLICY %I_insert_admin ON public.%I FOR INSERT TO anon, authenticated WITH CHECK (public.is_verified_admin() AND owner_id = public.firebase_uid())',
       tbl, tbl
     );
     EXECUTE format(
-      'CREATE POLICY %I_update_own ON public.%I FOR UPDATE TO anon, authenticated USING (public.is_verified_firebase_user() AND owner_id = public.firebase_uid()) WITH CHECK (public.is_verified_firebase_user() AND owner_id = public.firebase_uid())',
+      'CREATE POLICY %I_update_admin ON public.%I FOR UPDATE TO anon, authenticated USING (public.is_verified_admin() AND owner_id = public.firebase_uid()) WITH CHECK (public.is_verified_admin() AND owner_id = public.firebase_uid())',
       tbl, tbl
     );
     EXECUTE format(
-      'CREATE POLICY %I_delete_own ON public.%I FOR DELETE TO anon, authenticated USING (public.is_verified_firebase_user() AND owner_id = public.firebase_uid())',
+      'CREATE POLICY %I_delete_admin ON public.%I FOR DELETE TO anon, authenticated USING (public.is_verified_admin() AND owner_id = public.firebase_uid())',
       tbl, tbl
     );
 
     EXECUTE format('ALTER TABLE public.%I REPLICA IDENTITY FULL', tbl);
-
     BEGIN
       EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', tbl);
-    EXCEPTION WHEN duplicate_object THEN
-      NULL;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END;
+  END LOOP;
+
+  FOREACH tbl IN ARRAY catalog_tables LOOP
+    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.%I TO anon, authenticated', tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_select_own ON public.%I', tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_insert_own ON public.%I', tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_update_own ON public.%I', tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_delete_own ON public.%I', tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_select_public_or_admin ON public.%I', tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_insert_admin ON public.%I', tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_update_admin ON public.%I', tbl, tbl);
+    EXECUTE format('DROP POLICY IF EXISTS %I_delete_admin ON public.%I', tbl, tbl);
+
+    EXECUTE format(
+      'CREATE POLICY %I_select_public_or_admin ON public.%I FOR SELECT TO anon, authenticated USING (is_public = true OR (public.is_verified_admin() AND owner_id = public.firebase_uid()))',
+      tbl, tbl
+    );
+    EXECUTE format(
+      'CREATE POLICY %I_insert_admin ON public.%I FOR INSERT TO anon, authenticated WITH CHECK (public.is_verified_admin() AND owner_id = public.firebase_uid())',
+      tbl, tbl
+    );
+    EXECUTE format(
+      'CREATE POLICY %I_update_admin ON public.%I FOR UPDATE TO anon, authenticated USING (public.is_verified_admin() AND owner_id = public.firebase_uid()) WITH CHECK (public.is_verified_admin() AND owner_id = public.firebase_uid())',
+      tbl, tbl
+    );
+    EXECUTE format(
+      'CREATE POLICY %I_delete_admin ON public.%I FOR DELETE TO anon, authenticated USING (public.is_verified_admin() AND owner_id = public.firebase_uid())',
+      tbl, tbl
+    );
+
+    EXECUTE format('ALTER TABLE public.%I REPLICA IDENTITY FULL', tbl);
+    BEGIN
+      EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', tbl);
+    EXCEPTION WHEN duplicate_object THEN NULL;
     END;
   END LOOP;
 END $$;
@@ -891,40 +1044,67 @@ DROP POLICY IF EXISTS mizan_storage_select_own ON storage.objects;
 DROP POLICY IF EXISTS mizan_storage_insert_own ON storage.objects;
 DROP POLICY IF EXISTS mizan_storage_update_own ON storage.objects;
 DROP POLICY IF EXISTS mizan_storage_delete_own ON storage.objects;
+DROP POLICY IF EXISTS mizan_storage_select_public_or_admin ON storage.objects;
+DROP POLICY IF EXISTS mizan_storage_insert_admin ON storage.objects;
+DROP POLICY IF EXISTS mizan_storage_update_admin ON storage.objects;
+DROP POLICY IF EXISTS mizan_storage_delete_admin ON storage.objects;
 
-CREATE POLICY mizan_storage_select_own ON storage.objects
+CREATE POLICY mizan_storage_select_public_or_admin ON storage.objects
   FOR SELECT TO anon, authenticated
   USING (
-    public.is_verified_firebase_user()
-    AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
-    AND (storage.foldername(name))[1] = public.firebase_uid()
+    (
+      public.is_verified_admin()
+      AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
+      AND (storage.foldername(name))[1] = public.firebase_uid()
+    )
+    OR (
+      bucket_id = 'study-files'
+      AND (
+        EXISTS (
+          SELECT 1
+          FROM public.reading_items AS r
+          WHERE r.is_public = true
+            AND r.storage_path = name
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM public.courses AS c
+          WHERE c.is_public = true
+            AND EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(c.resources) AS elem
+              WHERE elem->>'storagePath' = name
+            )
+        )
+      )
+    )
   );
 
-CREATE POLICY mizan_storage_insert_own ON storage.objects
+CREATE POLICY mizan_storage_insert_admin ON storage.objects
   FOR INSERT TO anon, authenticated
   WITH CHECK (
-    public.is_verified_firebase_user()
+    public.is_verified_admin()
     AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
     AND (storage.foldername(name))[1] = public.firebase_uid()
   );
 
-CREATE POLICY mizan_storage_update_own ON storage.objects
+CREATE POLICY mizan_storage_update_admin ON storage.objects
   FOR UPDATE TO anon, authenticated
   USING (
-    public.is_verified_firebase_user()
+    public.is_verified_admin()
     AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
     AND (storage.foldername(name))[1] = public.firebase_uid()
   )
   WITH CHECK (
-    public.is_verified_firebase_user()
+    public.is_verified_admin()
     AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
     AND (storage.foldername(name))[1] = public.firebase_uid()
   );
 
-CREATE POLICY mizan_storage_delete_own ON storage.objects
+CREATE POLICY mizan_storage_delete_admin ON storage.objects
   FOR DELETE TO anon, authenticated
   USING (
-    public.is_verified_firebase_user()
+    public.is_verified_admin()
     AND bucket_id IN ('study-files', 'user-images', 'audio-cache')
     AND (storage.foldername(name))[1] = public.firebase_uid()
   );

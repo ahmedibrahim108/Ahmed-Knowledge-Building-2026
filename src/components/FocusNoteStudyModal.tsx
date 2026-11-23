@@ -3,7 +3,6 @@ import {
   CheckCircle2,
   Download,
   Edit3,
-  Eye,
   FileText,
   FileUp,
   Headphones,
@@ -33,10 +32,7 @@ import {
   getTodayDateKey,
 } from '../data/curriculumData';
 import {
-  downloadResourceAttachmentResult,
   exportSingleBookNoteAsWord,
-  isPdfAttachment,
-  isViewableDocumentAttachment,
   parseDocumentFile,
 } from '../utils/documentImportExport';
 import {
@@ -52,6 +48,7 @@ import {
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
+import NoteAttachmentsPanel from './NoteAttachmentsPanel';
 import type { ActivePdfTarget } from './PDFViewerModal';
 import ReadAloudButton from './ReadAloudButton';
 import RichTextNoteEditor from './RichTextNoteEditor';
@@ -158,7 +155,6 @@ export default function FocusNoteStudyModal({
     string | null
   >(null);
   const [importingFile, setImportingFile] = useState(false);
-  const [fileError, setFileError] = useState<string | null>(null);
 
   const appendFileInputRef = useRef<HTMLInputElement | null>(null);
   const activeNoteIdRef = useRef<string | null>(null);
@@ -185,7 +181,6 @@ export default function FocusNoteStudyModal({
       setQuickMainCapture('');
       setStudyFeedback(null);
       setDiscussionSavedNotice(null);
-      setFileError(null);
       setShowExportMenu(false);
       setConfirmDeleteOpen(false);
       setMobilePane('note');
@@ -269,15 +264,6 @@ export default function FocusNoteStudyModal({
     }
     return months.find((m) => m.courseId === linkedCourse.id) ?? null;
   }, [linkedCourse, months, note]);
-
-  const linkedCourseDocs = useMemo(() => {
-    return (linkedCourse?.resources ?? []).filter(
-      (r) =>
-        isPdfAttachment(r.attachmentName, r.mimeType) ||
-        isViewableDocumentAttachment(r.attachmentName, r.mimeType) ||
-        Boolean(r.attachmentName || r.storagePath || r.downloadUrl)
-    );
-  }, [linkedCourse]);
 
   const allCategoryChoices = useMemo(() => {
     const set = new Set<string>();
@@ -821,83 +807,6 @@ export default function FocusNoteStudyModal({
                 </button>
               </div>
             </div>
-            {/* Linked Course PDFs / Word quick viewer */}
-            {linkedCourseDocs.length > 0 && onOpenPdf && (
-              <div className={`${noteLayout.widthClass} space-y-2`}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-600">
-                    ملفات الكورس المرتبط:
-                  </span>
-                  {linkedCourseDocs.map((docRes) => {
-                    const isPdf = isPdfAttachment(
-                      docRes.attachmentName,
-                      docRes.mimeType
-                    );
-                    return (
-                      <div
-                        key={docRes.id}
-                        className="inline-flex items-center gap-1 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setFileError(null);
-                            onOpenPdf({
-                              uid: uid ?? undefined,
-                              title: docRes.title,
-                              fileName:
-                                docRes.attachmentName ||
-                                (isPdf
-                                  ? `${docRes.title}.pdf`
-                                  : `${docRes.title}.docx`),
-                              resourceId: docRes.id,
-                              storagePath: docRes.storagePath,
-                              downloadUrl: docRes.downloadUrl,
-                              mimeType: docRes.mimeType,
-                              extractedPreview: docRes.extractedPreview,
-                              contextLabel: linkedCourse?.title,
-                            });
-                          }}
-                          className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-                        >
-                          <Eye className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>{docRes.title}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            setFileError(null);
-                            const res = await downloadResourceAttachmentResult({
-                              uid: uid ?? undefined,
-                              resourceId: docRes.id,
-                              fileName:
-                                docRes.attachmentName || `${docRes.title}.pdf`,
-                              mimeType: docRes.mimeType,
-                              storagePath: docRes.storagePath,
-                              downloadUrl: docRes.downloadUrl,
-                            });
-                            if (!res.ok && res.errorMessage) {
-                              setFileError(res.errorMessage);
-                            }
-                          }}
-                          title="تنزيل الملف"
-                          aria-label={`تنزيل ${docRes.title}`}
-                          className="p-1 text-slate-400 hover:text-slate-800 cursor-pointer"
-                        >
-                          <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-                {fileError && (
-                  <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                    {fileError}
-                  </p>
-                )}
-              </div>
-            )}
-
             {/* Main Paper Container */}
             <div className={`${noteLayout.widthClass} space-y-5`}>
               {/* Paper Card Header Controls (Color Theme + Author/Marker) */}
@@ -1035,6 +944,19 @@ export default function FocusNoteStudyModal({
                     onRequireAuth={onRequireAuth}
                     compact
                     hideEmptyWhenReadOnly
+                  />
+
+                  <NoteAttachmentsPanel
+                    uid={uid ?? undefined}
+                    noteId={note.id}
+                    noteTitle={note.bookTitle}
+                    resources={note.resources}
+                    canEdit={canEdit}
+                    onRequireAuth={onRequireAuth}
+                    onUpdateResources={(next) =>
+                      onUpdateBookNote(note.id, { resources: next })
+                    }
+                    onOpenPdf={onOpenPdf ?? (() => {})}
                   />
                 </div>
               ) : (
@@ -1264,6 +1186,19 @@ export default function FocusNoteStudyModal({
                     canEdit={canEdit}
                     onRequireAuth={onRequireAuth}
                     compact
+                  />
+
+                  <NoteAttachmentsPanel
+                    uid={uid ?? undefined}
+                    noteId={note.id}
+                    noteTitle={note.bookTitle}
+                    resources={note.resources}
+                    canEdit={canEdit}
+                    onRequireAuth={onRequireAuth}
+                    onUpdateResources={(next) =>
+                      onUpdateBookNote(note.id, { resources: next })
+                    }
+                    onOpenPdf={onOpenPdf ?? (() => {})}
                   />
 
                   <div className="pt-3 border-t border-slate-200 flex items-center justify-end gap-2">

@@ -406,6 +406,13 @@ export interface DomainInfo {
   thinkers: ThinkerInfo[];
 }
 
+export interface LearningObjective {
+  id: string;
+  text: string;
+  achieved: boolean;
+  createdAt?: string;
+}
+
 export interface PersonalCourse {
   id: number;
   docId?: string;
@@ -426,6 +433,9 @@ export interface PersonalCourse {
   completed: boolean;
   studyStage?: CourseStudyStage;
   scheduledPeriod?: string;
+  learningObjectives?: LearningObjective[];
+  sortOrder?: number;
+  isPublic?: boolean;
   resources: StudyResource[];
   tasks: SmallTask[];
   readingModes?: ReadingMode[];
@@ -454,6 +464,9 @@ export interface BookNote {
   content: string;
   quotes: string;
   updatedAt: string;
+  resources?: StudyResource[];
+  sortOrder?: number;
+  createdAtMs?: number;
   readingModes?: ReadingMode[];
   learningMethods?: string[];
   reviewCount?: number;
@@ -488,6 +501,9 @@ export interface LearningPath {
   hubId: LearningHubId;
   categoryLabel: string;
   objectives: string;
+  learningObjectives?: LearningObjective[];
+  sortOrder?: number;
+  isPublic?: boolean;
   currentLevel: string;
   targetLevel: string;
   startDate: string;
@@ -523,6 +539,9 @@ export interface ReadingLibraryItem {
   currentPage: number;
   totalPages: number;
   takeaways: string;
+  learningObjectives?: LearningObjective[];
+  sortOrder?: number;
+  isPublic?: boolean;
   attachmentName?: string;
   attachmentResourceId?: string;
   storagePath?: string;
@@ -575,6 +594,9 @@ export interface UnifiedTask {
   deadline?: string; // YYYY-MM-DD optional deadline
   projectId?: string;
   linkedLabel?: string;
+  linkedCourseId?: number;
+  linkedPathId?: string;
+  linkedBookId?: string;
 }
 
 export interface StudyHistoryEntry {
@@ -592,7 +614,9 @@ export interface StudyHistoryEntry {
     | 'calendar'
     | 'paths'
     | 'library'
-    | 'tasks';
+    | 'tasks'
+    | 'reflections'
+    | 'account';
   targetNoteId?: string;
   targetMonthId?: number;
   targetCourseId?: number;
@@ -607,6 +631,7 @@ export interface PersonalReflection {
   title: string;
   content: string;
   moodTag: ReflectionMood;
+  categoryTag?: string;
   pinned: boolean;
   createdAtLabel: string;
   createdAtMs: number;
@@ -821,6 +846,173 @@ export type VoiceDialectMode = 'standard_arabic' | 'egyptian_arabic' | 'bilingua
 export type VoiceInsertMode = 'append_paragraph' | 'append_bullet' | 'append_quote';
 export type ReadAloudVoiceName = 'Kore' | 'Puck' | 'Charon' | 'Fenrir' | 'Zephyr';
 
+export interface WeeklyRhythmItem {
+  id: string;
+  pillar: string;
+  suggestedDuration: string;
+  targetHours?: number;
+  focus: string;
+  guideline: string;
+  days?: string[];
+  active?: boolean;
+}
+
+export const WEEKLY_RHYTHM_DAYS = [
+  'السبت',
+  'الأحد',
+  'الإثنين',
+  'الثلاثاء',
+  'الأربعاء',
+  'الخميس',
+  'الجمعة',
+] as const;
+
+export const DEFAULT_WEEKLY_RHYTHM: WeeklyRhythmItem[] = [
+  {
+    id: 'reading',
+    pillar: 'القراءة المتأنية',
+    suggestedDuration: '3.5 ساعات أسبوعيًا',
+    targetHours: 3.5,
+    focus: 'كتاب المسار التأسيسي + كتاب المسار الاستكشافي',
+    guideline: '30–40 دقيقة يوميًا بوتيرة هادئة دون التزام بعدد صفحات قسري.',
+    days: ['السبت', 'الأحد', 'الثلاثاء', 'الخميس'],
+    active: true,
+  },
+  {
+    id: 'listening',
+    pillar: 'الاستماع والمحاضرات',
+    suggestedDuration: '1.5 ساعة أسبوعيًا',
+    targetHours: 1.5,
+    focus: 'سلاسل البناء المنهجي أو المحاضرات الفلسفية والتاريخية',
+    guideline: 'استغلال أوقات التنقل مع تدوين نقطة محورية واحدة بعد كل محاضرة.',
+    days: ['الأحد', 'الإثنين', 'الأربعاء'],
+    active: true,
+  },
+  {
+    id: 'summarizing',
+    pillar: 'التلخيص والبطاقات الفكرية',
+    suggestedDuration: '1 ساعة أسبوعيًا',
+    targetHours: 1,
+    focus: 'تحويل المقروء والمسموع إلى أفكار خاصة بك',
+    guideline: 'كتابة خلاصة من 5 أسطر بلغتك الخاصة لا بنقل العبارات حرفيًا.',
+    days: ['الخميس'],
+    active: true,
+  },
+  {
+    id: 'discussing',
+    pillar: 'المناقشة والتطبيق',
+    suggestedDuration: '1 ساعة أسبوعيًا',
+    targetHours: 1,
+    focus: 'حوار مع صديق أو ربط بكورس التطوير الشخصي',
+    guideline: 'اختبار الفكرة في الواقع: سؤال نقاشي + خطوة عملية من الكورس المرتبط.',
+    days: ['الجمعة'],
+    active: true,
+  },
+];
+
+export const DEFAULT_REFLECTION_CATEGORIES: string[] = [
+  'فكر ومنهج',
+  'طب الأسنان',
+  'التسويق والأعمال',
+  'تطوير ذاتي',
+  'كتب ومحاضرات',
+];
+
+export interface PublicSiteSection {
+  id: string;
+  title: string;
+  body: string;
+  visible: boolean;
+}
+
+export interface PublicSiteVisibilityFlags {
+  showHero: boolean;
+  showBackground: boolean;
+  showSkills: boolean;
+  showInterests: boolean;
+  showPhilosophy: boolean;
+  showCourses: boolean;
+  showPaths: boolean;
+  showBooks: boolean;
+}
+
+export interface PublicSiteConfig {
+  id: string;
+  ownerId: string;
+  heroTitle: string;
+  heroSubtitle: string;
+  introBio: string;
+  backgroundText: string;
+  skills: string[];
+  interests: string[];
+  philosophyText: string;
+  sections: PublicSiteSection[];
+  visibilityFlags: PublicSiteVisibilityFlags;
+  updatedAtMs: number;
+}
+
+export const DEFAULT_PUBLIC_SITE_CONFIG: PublicSiteConfig = {
+  id: 'main',
+  ownerId: '',
+  heroTitle: 'ميزان المعرفة — الرحلة الفكرية والمهنية',
+  heroSubtitle: 'مساحة معرفية للتعلّم المنضبط، القراءة العميقة، وبناء المشاريع الواقعية.',
+  introBio:
+    'أهلاً بكم في واجهة ميزان المعرفة العامة. تجمع هذه المساحة خلاصة الكورسات والمسارات والكتب المختارة التي أشاركها للقرّاء والمهتمين بالتعلّم المنهجي والتطوير المهني.',
+  backgroundText:
+    'الجمع بين الممارسة الإكلينيكية في طب الأسنان، والعمل في التسويق الرقمي وبناء المشاريع، والتأسيس الفكري والمنهجي طويل الأمد.',
+  skills: [
+    'طب الأسنان الإكلينيكي',
+    'استراتيجية التسويق الرقمي',
+    'التلخيص المنهجي والبحث',
+    'إدارة المشاريع المعرفية',
+  ],
+  interests: [
+    'الفكر الإسلامي وبناء المنهج',
+    'علم النفس المعرفي واتخاذ القرار',
+    'التاريخ والحضارة',
+    'الأدب العربي الرفيع',
+  ],
+  philosophyText:
+    'المعرفة الحقيقية ليست جمعًا عشوائيًا للمعلومات، بل بناء متدرج يوازن بين التأصيل النظري والتطبيق العملي الهادئ.',
+  sections: [
+    {
+      id: 'sec-methodology',
+      title: 'منهجية القراءة والتلخيص',
+      body: 'تعتمد الخطة على التوازن بين مسار تأسيسي يرسّخ الأصول ومسار استكشافي يوسّع الأفق، مع تحويل كل مادة مقروءة إلى خلاصة وأسئلة وتطبيق عملي.',
+      visible: true,
+    },
+  ],
+  visibilityFlags: {
+    showHero: true,
+    showBackground: true,
+    showSkills: true,
+    showInterests: true,
+    showPhilosophy: true,
+    showCourses: true,
+    showPaths: true,
+    showBooks: true,
+  },
+  updatedAtMs: 0,
+};
+
+export interface UserProfileItem {
+  uid: string;
+  displayName: string;
+  email: string;
+  photoUrl: string;
+  role: 'user' | 'admin';
+  approvalStatus: 'pending' | 'approved' | 'rejected' | 'suspended';
+  createdAt?: string;
+}
+
+export type EntitySortMode =
+  | 'manual'
+  | 'logical'
+  | 'updated'
+  | 'title'
+  | 'stage'
+  | 'progress';
+
 export interface UserPreferences {
   noteFontSize: 'sm' | 'base' | 'lg';
   noteHighlightColor: HighlightColorKey;
@@ -836,6 +1028,8 @@ export interface UserPreferences {
   showExcelExport?: boolean;
   hubCategories?: Record<LearningHubId, string[]>;
   calendarPrefs?: CalendarPreferences;
+  weeklyRhythm?: WeeklyRhythmItem[];
+  reflectionCategories?: string[];
 }
 
 export const DEFAULT_HUB_CATEGORIES: Record<LearningHubId, string[]> = {
@@ -859,6 +1053,8 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   showExcelExport: true,
   hubCategories: DEFAULT_HUB_CATEGORIES,
   calendarPrefs: DEFAULT_CALENDAR_PREFERENCES,
+  weeklyRhythm: DEFAULT_WEEKLY_RHYTHM,
+  reflectionCategories: DEFAULT_REFLECTION_CATEGORIES,
 };
 
 export interface WeeklyRhythmSlot {
@@ -1984,3 +2180,160 @@ export const WEEKLY_RHYTHM: WeeklyRhythmSlot[] = [
     guideline: 'اختبار الفكرة في الواقع: سؤال نقاشي + خطوة عملية من الكورس المرتبط.',
   },
 ];
+
+// ============================================================================
+// Natural Arabic/English & Manual Sorting Helpers
+// ============================================================================
+
+export function normalizeArabicDigits(input: string): string {
+  return (input || '').replace(/[٠-٩]/g, (ch) =>
+    String('٠١٢٣٤٥٦٧٨٩'.indexOf(ch))
+  );
+}
+
+export function extractNaturalSortNumber(title: string): number | null {
+  const normalized = normalizeArabicDigits(title);
+  const m = normalized.match(/(\d+)/);
+  if (m) {
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+  }
+  const ordinals: Array<[RegExp, number]> = [
+    [/الأول|الاول|أولى|اولى/, 1],
+    [/الثاني|الثانية/, 2],
+    [/الثالث|الثالثة/, 3],
+    [/الرابع|الرابعة/, 4],
+    [/الخامس|الخامسة/, 5],
+    [/السادس|السادسة/, 6],
+    [/السابع|السابعة/, 7],
+    [/الثامن|الثامنة/, 8],
+    [/التاسع|التاسعة/, 9],
+    [/العاشر|العاشرة/, 10],
+  ];
+  for (const [rx, num] of ordinals) {
+    if (rx.test(normalized)) return num;
+  }
+  return null;
+}
+
+export function compareNaturalArabic(a: string, b: string): number {
+  const na = normalizeArabicDigits(a).trim();
+  const nb = normalizeArabicDigits(b).trim();
+  return na.localeCompare(nb, 'ar', { numeric: true, sensitivity: 'base' });
+}
+
+export function sortCoursesList(
+  items: PersonalCourse[],
+  mode: EntitySortMode
+): PersonalCourse[] {
+  const list = [...items];
+  if (mode === 'title') {
+    return list.sort((a, b) => compareNaturalArabic(a.title, b.title));
+  }
+  if (mode === 'stage') {
+    const order: Record<CourseStudyStage, number> = {
+      focus_now: 0,
+      in_progress: 1,
+      scheduled_later: 2,
+      heard_before: 3,
+      deferred: 4,
+      completed: 5,
+    };
+    return list.sort((a, b) => {
+      const sa = order[resolveCourseStudyStage(a)] ?? 9;
+      const sb = order[resolveCourseStudyStage(b)] ?? 9;
+      if (sa !== sb) return sa - sb;
+      return compareNaturalArabic(a.title, b.title);
+    });
+  }
+  if (mode === 'updated') {
+    return list.sort((a, b) => b.id - a.id);
+  }
+  return list.sort((a, b) => {
+    const oa = a.sortOrder ?? 0;
+    const ob = b.sortOrder ?? 0;
+    if (oa !== ob) return oa - ob;
+    return a.id - b.id;
+  });
+}
+
+export function sortBookNotesList(
+  items: BookNote[],
+  mode: EntitySortMode
+): BookNote[] {
+  const list = [...items];
+  if (mode === 'logical') {
+    return list.sort((a, b) => {
+      const ta = a.lectureTitle || a.bookTitle;
+      const tb = b.lectureTitle || b.bookTitle;
+      const na = extractNaturalSortNumber(ta);
+      const nb = extractNaturalSortNumber(tb);
+      if (na !== null && nb !== null && na !== nb) return na - nb;
+      if (na !== null && nb === null) return -1;
+      if (na === null && nb !== null) return 1;
+      return compareNaturalArabic(ta, tb);
+    });
+  }
+  if (mode === 'title') {
+    return list.sort((a, b) =>
+      compareNaturalArabic(a.lectureTitle || a.bookTitle, b.lectureTitle || b.bookTitle)
+    );
+  }
+  if (mode === 'updated') {
+    return list.sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0));
+  }
+  // manual default: explicit sortOrder ascending, then fallback logical/created
+  return list.sort((a, b) => {
+    const oa = a.sortOrder ?? 0;
+    const ob = b.sortOrder ?? 0;
+    if (oa !== ob) return oa - ob;
+    return (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0);
+  });
+}
+
+export function sortLearningPathsList(
+  items: LearningPath[],
+  mode: EntitySortMode
+): LearningPath[] {
+  const list = [...items];
+  if (mode === 'title') {
+    return list.sort((a, b) => compareNaturalArabic(a.title, b.title));
+  }
+  if (mode === 'progress') {
+    return list.sort((a, b) => (b.progressPct ?? 0) - (a.progressPct ?? 0));
+  }
+  return list.sort((a, b) => {
+    const oa = a.sortOrder ?? 0;
+    const ob = b.sortOrder ?? 0;
+    if (oa !== ob) return oa - ob;
+    return compareNaturalArabic(a.title, b.title);
+  });
+}
+
+export function sortReadingItemsList(
+  items: ReadingLibraryItem[],
+  mode: EntitySortMode
+): ReadingLibraryItem[] {
+  const list = [...items];
+  if (mode === 'title') {
+    return list.sort((a, b) => compareNaturalArabic(a.title, b.title));
+  }
+  if (mode === 'stage') {
+    const order: Record<ReadingItemStatus, number> = {
+      reading: 0,
+      to_read: 1,
+      completed: 2,
+    };
+    return list.sort((a, b) => {
+      const d = (order[a.status] ?? 9) - (order[b.status] ?? 9);
+      if (d !== 0) return d;
+      return compareNaturalArabic(a.title, b.title);
+    });
+  }
+  return list.sort((a, b) => {
+    const oa = a.sortOrder ?? 0;
+    const ob = b.sortOrder ?? 0;
+    if (oa !== ob) return oa - ob;
+    return compareNaturalArabic(a.title, b.title);
+  });
+}

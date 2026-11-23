@@ -16,6 +16,7 @@ import {
   NotebookPen,
   Target,
 } from 'lucide-react';
+import AccountCenterView from './components/AccountCenterView';
 import CalendarView from './components/CalendarView';
 import ConfirmDialog from './components/ConfirmDialog';
 import CourseDetailPage from './components/CourseDetailPage';
@@ -31,7 +32,9 @@ import OfflineIndicator from './components/OfflineIndicator';
 import OverviewView from './components/OverviewView';
 import PathsView from './components/PathsView';
 import type { ActivePdfTarget } from './components/PDFViewerModal';
+import PublicHomeView from './components/PublicHomeView';
 import PWAInstallButton from './components/PWAInstallButton';
+import ReflectionsView from './components/ReflectionsView';
 import TasksProjectsView from './components/TasksProjectsView';
 import TwelveMonthPlanView from './components/TwelveMonthPlanView';
 
@@ -42,6 +45,7 @@ import {
   CourseStudyStage,
   CustomCategory,
   DEFAULT_HUB_CATEGORIES,
+  DEFAULT_PUBLIC_SITE_CONFIG,
   DEFAULT_USER_PREFERENCES,
   DOMAINS,
   DentalCase,
@@ -61,6 +65,7 @@ import {
   PersonalCourse,
   PersonalReflection,
   PracticalProject,
+  PublicSiteConfig,
   QuarterInfo,
   ReadingLibraryItem,
   ReflectionMood,
@@ -73,12 +78,14 @@ import {
   resolveCourseStudyStage,
 } from './data/curriculumData';
 import {
+  OWNER_ADMIN_EMAIL,
   auth,
   completeGoogleRedirectIfAny,
   firebaseInitError,
   signInWithGoogle,
   signOutUser,
 } from './firebase';
+import { formatSupabaseErrorMessage } from './services/supabaseClient';
 import {
   deleteCloudAttachment,
   rescueLocalAttachmentToCloud,
@@ -86,6 +93,8 @@ import {
 import { deleteDentalCaseCoverStorage } from './utils/imageStorage';
 import {
   CloudAttachmentItem,
+  PublicCatalogData,
+  UserProfileRecord,
   deleteBookNoteDoc,
   deleteCalendarEventDoc,
   deleteCourseDoc,
@@ -102,6 +111,8 @@ import {
   deleteUnifiedTaskDoc,
   deleteWeeklyMeetingDoc,
   ensureUserDocumentAndSeed,
+  ensureUserProfileExists,
+  fetchPublicCatalog,
   sanitizeId,
   saveBookNoteDoc,
   saveCalendarEventDoc,
@@ -113,6 +124,7 @@ import {
   saveLearningPathDoc,
   saveMonthDoc,
   savePracticalProjectDoc,
+  savePublicSiteConfig,
   saveQuarterDoc,
   saveReadingItemDoc,
   saveReflectionDoc,
@@ -120,6 +132,7 @@ import {
   saveUserPreferencesDoc,
   saveWeeklyMeetingDoc,
   subscribeCloudAttachments,
+  subscribePublicSiteConfig,
   subscribeUserWorkspace,
 } from './services/supabaseSync';
 import { exportPlanToExcel } from './utils/excelExport';
@@ -159,7 +172,10 @@ const VALID_TABS: ActiveTab[] = [
   'library',
   'tasks',
   'journal',
+  'reflections',
   'calendar',
+  'account',
+  'public',
 ];
 
 const TAB_DISPLAY_LABELS: Record<ActiveTab, string> = {
@@ -172,8 +188,26 @@ const TAB_DISPLAY_LABELS: Record<ActiveTab, string> = {
   library: 'المكتبة',
   tasks: 'المهام والمشاريع',
   journal: 'دفتر التلخيص',
+  reflections: 'خواطري وتأملاتي',
   calendar: 'التقويم',
+  account: 'الإدارة والحساب',
+  public: 'الواجهة العامة',
 };
+
+function checkIsAdminAccess(
+  u: User | null,
+  prof: UserProfileRecord | null
+): boolean {
+  if (!u) return false;
+  if (prof?.role === 'admin' && prof?.approval_status === 'approved') {
+    return true;
+  }
+  return Boolean(
+    u.email &&
+      u.emailVerified &&
+      u.email.toLowerCase() === OWNER_ADMIN_EMAIL.toLowerCase()
+  );
+}
 
 interface NavStepSnapshot {
   tab: ActiveTab;
@@ -190,7 +224,7 @@ function parseAppRouteFromLocation(): {
   noteId: string | null;
 } {
   if (typeof window === 'undefined') {
-    return { tab: 'overview', courseId: null, noteId: null };
+    return { tab: 'public', courseId: null, noteId: null };
   }
   const rawHash = window.location.hash.replace(/^#\/?/, '').trim();
   const rawPath = window.location.pathname.replace(/^\/+/, '').trim();
@@ -224,7 +258,7 @@ function parseAppRouteFromLocation(): {
     return { tab: tabSegment, courseId: null, noteId: null };
   }
 
-  return { tab: 'overview', courseId: null, noteId: null };
+  return { tab: 'public', courseId: null, noteId: null };
 }
 
 function safeScrollToTop() {
@@ -291,13 +325,26 @@ export default function App() {
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [authPromptNotice, setAuthPromptNotice] = useState<string | null>(null);
 
-  // Firebase Auth & Sync state
+  // Firebase Auth, RBAC & Public Catalog state
   const [user, setUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfileRecord | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [syncingCloud, setSyncingCloud] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [isPreviewingPublic, setIsPreviewingPublic] = useState(false);
+  const [syncRefreshTick, setSyncRefreshTick] = useState(0);
+  const [publicSiteConfig, setPublicSiteConfig] = useState<PublicSiteConfig>(
+    DEFAULT_PUBLIC_SITE_CONFIG
+  );
+  const [publicCatalog, setPublicCatalog] = useState<PublicCatalogData>({
+    courses: [],
+    learningPaths: [],
+    readingItems: [],
+  });
+  const [loadingPublicCatalog, setLoadingPublicCatalog] = useState(false);
 
-  const canEdit = Boolean(user);
+  const isAdmin = checkIsAdminAccess(user, userProfile);
+  const canEdit = isAdmin && !isPreviewingPublic;
 
   const buildCurrentSnapshot = (): NavStepSnapshot => {
     let label = TAB_DISPLAY_LABELS[activeTab] || 'لوحة المتابعة';
@@ -489,10 +536,32 @@ export default function App() {
     void completeGoogleRedirectIfAny();
   }, []);
 
-  // Listen to Firebase Auth state & attach strict per-user Supabase workspace listeners ONLY when authenticated
+  // Subscribe to public homepage config and load public catalog
+  const refreshPublicCatalog = async () => {
+    setLoadingPublicCatalog(true);
+    try {
+      const cat = await fetchPublicCatalog();
+      setPublicCatalog(cat);
+    } finally {
+      setLoadingPublicCatalog(false);
+    }
+  };
+
+  useEffect(() => {
+    const unsubConfig = subscribePublicSiteConfig((cfg) => {
+      setPublicSiteConfig(cfg);
+    });
+    void refreshPublicCatalog();
+    return () => {
+      unsubConfig();
+    };
+  }, []);
+
+  // Listen to Firebase Auth state & enforce strict RBAC before seeding or subscribing to private workspace
   useEffect(() => {
     if (!auth) {
       setAuthReady(true);
+      setActiveTab('public');
       if (firebaseInitError) {
         setAuthError(firebaseInitError);
       }
@@ -501,11 +570,9 @@ export default function App() {
 
     let unsubWorkspace: (() => void) | null = null;
     let unsubAttachments: (() => void) | null = null;
+    let isMounted = true;
 
     const unsubAuth = onAuthStateChanged(auth, async (nextUser) => {
-      setUser(nextUser);
-      setAuthReady(true);
-
       if (unsubWorkspace) {
         unsubWorkspace();
         unsubWorkspace = null;
@@ -517,98 +584,149 @@ export default function App() {
 
       // Always reset in-memory state first so switching accounts or signing out never bleeds prior account data
       resetToDefaultView(true);
+      setUserProfile(null);
+      setIsPreviewingPublic(false);
+      setUser(nextUser);
 
-      if (nextUser) {
-        setSyncingCloud(true);
-        setAuthError(null);
-        setAuthPromptNotice(null);
-        try {
-          await ensureUserDocumentAndSeed(nextUser, {
-            quarters: INITIAL_QUARTERS,
-            months: INITIAL_MONTHS,
-            domains: DOMAINS,
-            courses: INITIAL_COURSES,
-            bookNotes: INITIAL_BOOK_NOTES,
-            customCategories: INITIAL_CUSTOM_CATEGORIES,
-            history: [],
-            preferences: DEFAULT_USER_PREFERENCES,
-          });
-          unsubAttachments = subscribeCloudAttachments(nextUser.uid, (items) => {
-            setCloudAttachments(items);
-          });
-          unsubWorkspace = subscribeUserWorkspace(nextUser.uid, {
-            onQuarters: (items) => {
-              if (items.length > 0) setQuarters(items);
-            },
-            onMonths: (items) => {
-              if (items.length > 0) setMonths(items);
-            },
-            onDomains: (items) => {
-              if (items.length > 0) setDomains(items);
-            },
-            onCourses: (items) => {
-              if (items.length > 0) setCourses(items);
-            },
-            onBookNotes: (items) => {
-              setBookNotes(items);
-            },
-            onCustomCategories: (items) => {
-              if (items.length > 0) setCustomCategories(items);
-            },
-            onHistory: (items) => {
-              setHistory(items);
-            },
-            onPreferences: (prefs) => {
-              setPreferences(prefs);
-            },
-            onReflections: (items) => {
-              setReflections(items);
-            },
-            onCalendarEvents: (items) => {
-              setCalendarEvents(items);
-            },
-            onLearningPaths: (items) => {
-              setLearningPaths(items);
-            },
-            onReadingItems: (items) => {
-              setReadingItems(items);
-            },
-            onProjects: (items) => {
-              setProjects(items);
-            },
-            onUnifiedTasks: (items) => {
-              setUnifiedTasks(items);
-            },
-            onDentalCases: (items) => {
-              setDentalCases(items);
-            },
-            onWeeklyMeetings: (items) => {
-              setWeeklyMeetings(items);
-            },
-          });
-        } catch (err) {
-          setAuthError(
-            err instanceof Error
-              ? err.message
-              : 'تعذرت المزامنة مع قاعدة البيانات.'
-          );
-        } finally {
-          setSyncingCloud(false);
+      if (!nextUser) {
+        setAuthReady(true);
+        setActiveTab('public');
+        setSelectedCourseId(null);
+        setStudyModalState(null);
+        void refreshPublicCatalog();
+        return;
+      }
+
+      setSyncingCloud(true);
+      setAuthError(null);
+      setAuthPromptNotice(null);
+      try {
+        const profile = await ensureUserProfileExists(nextUser);
+        if (!isMounted) return;
+        setUserProfile(profile);
+
+        const adminAllowed = checkIsAdminAccess(nextUser, profile);
+        setAuthReady(true);
+
+        if (!adminAllowed) {
+          // Strict RBAC: Non-admin users never seed or access admin workspace data
+          setActiveTab('public');
+          setSelectedCourseId(null);
+          setStudyModalState(null);
+          syncLocationHash('public', null, null);
+          void refreshPublicCatalog();
+          return;
         }
+
+        await ensureUserDocumentAndSeed(nextUser, {
+          quarters: INITIAL_QUARTERS,
+          months: INITIAL_MONTHS,
+          domains: DOMAINS,
+          courses: INITIAL_COURSES,
+          bookNotes: INITIAL_BOOK_NOTES,
+          customCategories: INITIAL_CUSTOM_CATEGORIES,
+          history: [],
+          preferences: DEFAULT_USER_PREFERENCES,
+        });
+        if (!isMounted) return;
+
+        unsubAttachments = subscribeCloudAttachments(nextUser.uid, (items) => {
+          setCloudAttachments(items);
+        });
+        unsubWorkspace = subscribeUserWorkspace(nextUser.uid, {
+          onQuarters: (items) => {
+            if (items.length > 0) setQuarters(items);
+          },
+          onMonths: (items) => {
+            if (items.length > 0) setMonths(items);
+          },
+          onDomains: (items) => {
+            if (items.length > 0) setDomains(items);
+          },
+          onCourses: (items) => {
+            if (items.length > 0) setCourses(items);
+          },
+          onBookNotes: (items) => {
+            setBookNotes(items);
+          },
+          onCustomCategories: (items) => {
+            if (items.length > 0) setCustomCategories(items);
+          },
+          onHistory: (items) => {
+            setHistory(items);
+          },
+          onPreferences: (prefs) => {
+            setPreferences(prefs);
+          },
+          onReflections: (items) => {
+            setReflections(items);
+          },
+          onCalendarEvents: (items) => {
+            setCalendarEvents(items);
+          },
+          onLearningPaths: (items) => {
+            setLearningPaths(items);
+          },
+          onReadingItems: (items) => {
+            setReadingItems(items);
+          },
+          onProjects: (items) => {
+            setProjects(items);
+          },
+          onUnifiedTasks: (items) => {
+            setUnifiedTasks(items);
+          },
+          onDentalCases: (items) => {
+            setDentalCases(items);
+          },
+          onWeeklyMeetings: (items) => {
+            setWeeklyMeetings(items);
+          },
+        });
+
+        setActiveTab((prev) => {
+          if (prev === 'public') {
+            syncLocationHash('overview', null, null);
+            return 'overview';
+          }
+          return prev;
+        });
+      } catch (err) {
+        if (!isMounted) return;
+        setAuthReady(true);
+        setAuthError(
+          formatSupabaseErrorMessage(err, 'تعذرت المزامنة مع قاعدة البيانات.')
+        );
+      } finally {
+        if (isMounted) setSyncingCloud(false);
       }
     });
 
     return () => {
+      isMounted = false;
       unsubAuth();
       if (unsubWorkspace) unsubWorkspace();
       if (unsubAttachments) unsubAttachments();
     };
-  }, []);
+  }, [syncRefreshTick]);
+
+  // Route guard: guests, non-admins, and public preview mode are locked strictly to public view
+  useEffect(() => {
+    if (!authReady) return;
+    if (!isAdmin || isPreviewingPublic) {
+      if (activeTab !== 'public') {
+        setActiveTab('public');
+        syncLocationHash('public', null, null);
+      }
+      if (selectedCourseId !== null) setSelectedCourseId(null);
+      if (studyModalState !== null) setStudyModalState(null);
+    }
+  }, [authReady, isAdmin, isPreviewingPublic, activeTab, selectedCourseId, studyModalState]);
 
   // Automatically rescue stranded local-only IndexedDB attachments (or reconcile from cloudAttachments) to Supabase Storage
   const rescuedAttachmentKeysRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!user) {
+    if (!user || !isAdmin) {
       rescuedAttachmentKeysRef.current.clear();
       return;
     }
@@ -628,10 +746,7 @@ export default function App() {
 
             const safeId = res.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
             const cloudMatch = cloudAttachments.find(
-              (a) =>
-                a.id === safeId ||
-                a.id === res.id ||
-                (res.attachmentName && a.fileName === res.attachmentName)
+              (a) => a.id === safeId || a.id === res.id
             );
             if (cloudMatch?.storagePath) {
               courseChanged = true;
@@ -690,10 +805,7 @@ export default function App() {
 
             const safeId = res.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
             const cloudMatch = cloudAttachments.find(
-              (a) =>
-                a.id === safeId ||
-                a.id === res.id ||
-                (res.attachmentName && a.fileName === res.attachmentName)
+              (a) => a.id === safeId || a.id === res.id
             );
             if (cloudMatch?.storagePath) {
               monthChanged = true;
@@ -750,10 +862,7 @@ export default function App() {
         const targetResId = item.attachmentResourceId || item.id;
         const safeId = targetResId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
         const cloudMatch = cloudAttachments.find(
-          (a) =>
-            a.id === safeId ||
-            a.id === targetResId ||
-            (item.attachmentName && a.fileName === item.attachmentName)
+          (a) => a.id === safeId || a.id === targetResId
         );
         if (cloudMatch?.storagePath) {
           const updatedItem: ReadingLibraryItem = {
@@ -790,13 +899,72 @@ export default function App() {
           void saveReadingItemDoc(user.uid, updatedItem);
         }
       }
+
+      // 4) Book/Lecture notes isolated resources
+      for (const bn of bookNotes) {
+        if (cancelled) return;
+        let noteChanged = false;
+        const nextResources = await Promise.all(
+          (bn.resources || []).map(async (res) => {
+            const needsCloudSync =
+              Boolean(res.attachmentName) &&
+              (!res.storagePath || res.storagePath.startsWith('users/'));
+            if (!needsCloudSync) return res;
+
+            const safeId = res.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+            const cloudMatch = cloudAttachments.find(
+              (a) => a.id === safeId || a.id === res.id
+            );
+            if (cloudMatch?.storagePath) {
+              noteChanged = true;
+              return {
+                ...res,
+                storagePath: cloudMatch.storagePath,
+                downloadUrl: res.downloadUrl,
+                mimeType: cloudMatch.mimeType || res.mimeType,
+                sizeBytes: cloudMatch.sizeBytes || res.sizeBytes,
+              };
+            }
+
+            const attemptKey = `note:${bn.id}:${res.id}`;
+            if (rescuedAttachmentKeysRef.current.has(attemptKey)) return res;
+            rescuedAttachmentKeysRef.current.add(attemptKey);
+
+            const rescued = await rescueLocalAttachmentToCloud(
+              user.uid,
+              res.id,
+              res.attachmentName,
+              res.extractedPreview
+            );
+            if (rescued?.uploadedToCloud && rescued.storagePath) {
+              noteChanged = true;
+              return {
+                ...res,
+                storagePath: rescued.storagePath,
+                downloadUrl: rescued.downloadUrl || res.downloadUrl,
+                mimeType: rescued.mimeType || res.mimeType,
+                sizeBytes: rescued.sizeBytes || res.sizeBytes,
+              };
+            }
+            return res;
+          })
+        );
+
+        if (!cancelled && noteChanged) {
+          const updatedNote = { ...bn, resources: nextResources };
+          setBookNotes((prev) =>
+            prev.map((n) => (n.id === bn.id ? updatedNote : n))
+          );
+          void saveBookNoteDoc(user.uid, updatedNote);
+        }
+      }
     };
 
     void runRescue();
     return () => {
       cancelled = true;
     };
-  }, [user, courses, months, readingItems, cloudAttachments]);
+  }, [user, isAdmin, courses, months, readingItems, bookNotes, cloudAttachments]);
 
   const handleGoogleSignIn = async () => {
     setAuthError(null);
@@ -1813,9 +1981,17 @@ export default function App() {
   };
 
   const handleDeleteBookNote = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
+    }
+    const targetNote = bookNotes.find((bn) => bn.id === id);
+    if (targetNote?.resources) {
+      for (const res of targetNote.resources) {
+        if (res.storagePath || res.attachmentName) {
+          void deleteCloudAttachment(user.uid, res.id, res.storagePath);
+        }
+      }
     }
     setBookNotes((prev) => {
       const next = prev.filter((bn) => bn.id !== id);
@@ -1834,9 +2010,10 @@ export default function App() {
   const handleAddCustomCategory = (
     title: string,
     description: string,
-    color: CustomCategory['color']
+    color: CustomCategory['color'],
+    hubId: CustomCategory['hubId'] = 'all'
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1845,6 +2022,7 @@ export default function App() {
       title,
       description,
       color,
+      hubId,
       createdAtLabel: formatArabicDate(),
     };
     setCustomCategories((prev) => [newCat, ...prev]);
@@ -1853,12 +2031,12 @@ export default function App() {
       actionType: 'note',
       title: `أضفت تصنيفًا شخصيًا جديدًا: ${title}`,
       detail: description,
-      targetTab: 'overview',
+      targetTab: 'account',
     });
   };
 
   const handleDeleteCustomCategory = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1867,7 +2045,7 @@ export default function App() {
   };
 
   const handleDeleteHistoryEntry = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1875,13 +2053,25 @@ export default function App() {
     void deleteHistoryEntryDoc(user.uid, id);
   };
 
+  const handleClearHistory = () => {
+    if (!user || !isAdmin) {
+      handleRequireAuth();
+      return;
+    }
+    for (const h of history) {
+      void deleteHistoryEntryDoc(user.uid, h.id);
+    }
+    setHistory([]);
+  };
+
   // --- Personal Reflections («خواطري») CRUD ---
   const handleAddReflection = (payload: {
     title: string;
     content: string;
     moodTag: ReflectionMood;
+    categoryTag?: string;
   }): string | undefined => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return undefined;
     }
@@ -1892,6 +2082,7 @@ export default function App() {
       title: payload.title,
       content: payload.content,
       moodTag: payload.moodTag,
+      categoryTag: payload.categoryTag || '',
       pinned: false,
       createdAtLabel: formatArabicDateTime(),
       createdAtMs: now,
@@ -1902,7 +2093,7 @@ export default function App() {
       actionType: 'note',
       title: `دوّنت خاطرة جديدة: ${payload.title || payload.moodTag}`,
       detail: `الوسم: ${payload.moodTag}`,
-      targetTab: 'overview',
+      targetTab: 'reflections',
     });
     return newId;
   };
@@ -1911,7 +2102,7 @@ export default function App() {
     id: string,
     updates: Partial<PersonalReflection>
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1931,7 +2122,7 @@ export default function App() {
   };
 
   const handleDeleteReflection = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2460,10 +2651,31 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA] text-slate-900">
       <Header
-        activeTab={activeTab}
-        onSelectTab={navigateToTab}
+        activeTab={isAdmin && !isPreviewingPublic ? activeTab : 'public'}
+        onSelectTab={(tab) => {
+          if (tab === 'public') {
+            setIsPreviewingPublic(true);
+            void refreshPublicCatalog();
+            navigateToTab('public', false);
+          } else {
+            setIsPreviewingPublic(false);
+            navigateToTab(tab);
+          }
+        }}
         user={user}
         authReady={authReady}
+        isAdmin={isAdmin}
+        isPreviewingPublic={isPreviewingPublic}
+        onTogglePreviewPublic={() => {
+          const next = !isPreviewingPublic;
+          setIsPreviewingPublic(next);
+          if (next) {
+            void refreshPublicCatalog();
+            navigateToTab('public', false);
+          } else {
+            navigateToTab('overview', false);
+          }
+        }}
         syncingCloud={syncingCloud}
         onGoogleSignIn={handleGoogleSignIn}
         onSignOut={handleSignOut}
@@ -2478,29 +2690,23 @@ export default function App() {
         libraryCount={readingItems.length}
         tasksCount={unifiedTasks.length}
         notesCount={bookNotes.length}
+        reflectionsCount={reflections.length}
       />
 
-      {/* Read-Only Guest Mode Banner */}
-      {authReady && !user && (
+      {/* Auth Prompt Notice when a read-only trigger is fired */}
+      {authReady && authPromptNotice && isAdmin && (
         <div className="max-w-[1280px] w-full mx-auto px-4 sm:px-8 pt-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 bg-white border border-slate-200 rounded-xl text-xs text-slate-700">
-            <div className="flex items-start sm:items-center gap-2.5">
-              <Lock
-                className="w-4 h-4 text-[#1E3A5F] shrink-0 mt-0.5 sm:mt-0"
-                aria-hidden="true"
-              />
-              <span className="leading-relaxed">
-                {authPromptNotice ||
-                  'وضع التصفح (للقراءة فقط): يمكنك استعراض الخطة كاملة. لتخصيص خطتك أو إضافة محاور وكورسات وملاحظات في حسابك الشخصي فقط دون التأثير على الآخرين، سجّل الدخول بحساب Google.'}
-              </span>
+          <div className="flex items-center justify-between gap-3 px-4 py-3 bg-white border border-slate-200 rounded-xl text-xs text-slate-700">
+            <div className="flex items-center gap-2">
+              <Lock className="w-4 h-4 text-[#1E3A5F] shrink-0" aria-hidden="true" />
+              <span>{authPromptNotice}</span>
             </div>
             <button
               type="button"
-              onClick={handleGoogleSignIn}
-              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              onClick={() => setAuthPromptNotice(null)}
+              className="text-xs font-medium text-[#1E3A5F] hover:underline cursor-pointer"
             >
-              <LogIn className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>دخول بحساب Google</span>
+              إغلاق
             </button>
           </div>
         </div>
@@ -2573,8 +2779,47 @@ export default function App() {
           inline
           key={`${activeTab}-${selectedCourseId ?? ''}`}
           fallbackTitle="تعذّر عرض هذه الصفحة مؤقتًا"
-          onReset={() => navigateToTab('overview', false)}
+          onReset={() =>
+            navigateToTab(isAdmin && !isPreviewingPublic ? 'overview' : 'public', false)
+          }
         >
+        {(!isAdmin || isPreviewingPublic || activeTab === 'public') ? (
+          <PublicHomeView
+            siteConfig={publicSiteConfig}
+            publicCourses={
+              isAdmin && isPreviewingPublic
+                ? courses.filter((c) => c.isPublic)
+                : publicCatalog.courses
+            }
+            publicPaths={
+              isAdmin && isPreviewingPublic
+                ? learningPaths.filter((p) => p.isPublic)
+                : publicCatalog.learningPaths
+            }
+            publicBooks={
+              isAdmin && isPreviewingPublic
+                ? readingItems.filter((b) => b.isPublic)
+                : publicCatalog.readingItems
+            }
+            loadingCatalog={loadingPublicCatalog}
+            user={user}
+            isAdmin={isAdmin}
+            userProfile={userProfile}
+            authError={authError}
+            onGoogleSignIn={handleGoogleSignIn}
+            onSignOut={handleSignOut}
+            onReturnToAdmin={
+              isAdmin
+                ? () => {
+                    setIsPreviewingPublic(false);
+                    navigateToTab('overview', false);
+                  }
+                : undefined
+            }
+            onOpenPdf={setActivePdfTarget}
+          />
+        ) : (
+          <>
         {activeTab === 'overview' && (
           <OverviewView
             user={user}
@@ -2613,6 +2858,7 @@ export default function App() {
             onOpenPdf={setActivePdfTarget}
             onAddUnifiedTask={handleAddUnifiedTask}
             onUpdateUnifiedTask={handleUpdateUnifiedTask}
+            onDeleteUnifiedTask={handleDeleteUnifiedTask}
             onAddWeeklyMeeting={handleAddWeeklyMeeting}
             onUpdateWeeklyMeeting={handleUpdateWeeklyMeeting}
             onDeleteWeeklyMeeting={handleDeleteWeeklyMeeting}
@@ -2622,6 +2868,11 @@ export default function App() {
             onAddReflection={handleAddReflection}
             onUpdateReflection={handleUpdateReflection}
             onDeleteReflection={handleDeleteReflection}
+            onPreviewPublicSite={() => {
+              setIsPreviewingPublic(true);
+              void refreshPublicCatalog();
+              navigateToTab('public', false);
+            }}
           />
         )}
 
@@ -2715,6 +2966,7 @@ export default function App() {
               if (!target) return [];
               return unifiedTasks.filter(
                 (t) =>
+                  t.linkedCourseId === target.id ||
                   t.projectId === `course:${target.id}` ||
                   t.projectId?.startsWith(`course:${target.id}:`) ||
                   (t.linkedLabel &&
@@ -2725,6 +2977,10 @@ export default function App() {
             linkedPaths={learningPaths.filter((p) =>
               p.linkedCourseIds.includes(selectedCourseId)
             )}
+            allCourses={courses}
+            allLearningPaths={learningPaths}
+            readingItems={readingItems}
+            allProjects={projects}
             allMonths={months}
             onBack={handleStepBack}
             onOpenPdf={setActivePdfTarget}
@@ -2746,6 +3002,7 @@ export default function App() {
             onDeleteBookNote={handleDeleteBookNote}
             onUpdateUnifiedTask={handleUpdateUnifiedTask}
             onAddUnifiedTask={handleAddUnifiedTask}
+            onDeleteUnifiedTask={handleDeleteUnifiedTask}
           />
         )}
 
@@ -2757,6 +3014,9 @@ export default function App() {
             courses={courses}
             bookNotes={bookNotes}
             dentalCases={dentalCases}
+            learningPaths={learningPaths}
+            readingItems={readingItems}
+            projects={projects}
             onSelectCourse={(courseId) => navigateToCourseRoute(courseId)}
             activeHubFilter={activeHubFilter}
             onChangeHubFilter={setActiveHubFilter}
@@ -2767,6 +3027,7 @@ export default function App() {
             onUpdateCourse={handleUpdateCourse}
             onDeleteCourse={handleDeleteCourse}
             onOpenCourseNote={handleOpenCourseNote}
+            onAddUnifiedTask={handleAddUnifiedTask}
             onAddDentalCase={handleAddDentalCase}
             onUpdateDentalCase={handleUpdateDentalCase}
             onDeleteDentalCase={handleDeleteDentalCase}
@@ -2779,6 +3040,8 @@ export default function App() {
             onRequireAuth={handleRequireAuth}
             paths={learningPaths}
             courses={courses}
+            readingItems={readingItems}
+            projects={projects}
             unifiedTasks={unifiedTasks}
             hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
             activeHubFilter={activeHubFilter}
@@ -2789,6 +3052,7 @@ export default function App() {
             onTogglePathStage={handleTogglePathStage}
             onAddUnifiedTask={handleAddUnifiedTask}
             onUpdateUnifiedTask={handleUpdateUnifiedTask}
+            onDeleteUnifiedTask={handleDeleteUnifiedTask}
             onOpenCourse={(courseId) => navigateToCourseRoute(courseId)}
             onOpenCalendar={() => navigateToTab('calendar')}
             onOpenTasks={() => navigateToTab('tasks')}
@@ -2803,6 +3067,9 @@ export default function App() {
             items={readingItems}
             cloudAttachments={cloudAttachments}
             courses={courses}
+            learningPaths={learningPaths}
+            projects={projects}
+            unifiedTasks={unifiedTasks}
             months={months}
             hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
             activeHubFilter={activeHubFilter}
@@ -2810,6 +3077,11 @@ export default function App() {
             onAddItem={handleAddReadingItem}
             onUpdateItem={handleUpdateReadingItem}
             onDeleteItem={handleDeleteReadingItem}
+            onAddUnifiedTask={handleAddUnifiedTask}
+            onUpdateUnifiedTask={handleUpdateUnifiedTask}
+            onDeleteUnifiedTask={handleDeleteUnifiedTask}
+            onOpenCalendar={() => navigateToTab('calendar')}
+            onOpenTasksTab={() => navigateToTab('tasks')}
             onOpenPdf={setActivePdfTarget}
           />
         )}
@@ -2823,6 +3095,7 @@ export default function App() {
             months={months}
             courses={courses}
             learningPaths={learningPaths}
+            readingItems={readingItems}
             hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
             activeHubFilter={activeHubFilter}
             onChangeHubFilter={setActiveHubFilter}
@@ -2887,6 +3160,25 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'reflections' && (
+          <ReflectionsView
+            uid={user?.uid}
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            reflections={reflections}
+            reflectionCategories={preferences.reflectionCategories}
+            voiceDialect={preferences.voiceDialect}
+            onAddReflection={(title, content, moodTag, categoryTag) =>
+              handleAddReflection({ title, content, moodTag, categoryTag })
+            }
+            onUpdateReflection={handleUpdateReflection}
+            onDeleteReflection={handleDeleteReflection}
+            onSaveCategories={(nextCats) =>
+              handleUpdatePreferences({ reflectionCategories: nextCats })
+            }
+          />
+        )}
+
         {activeTab === 'calendar' && (
           <CalendarView
             uid={user?.uid}
@@ -2896,6 +3188,7 @@ export default function App() {
             months={months}
             courses={courses}
             learningPaths={learningPaths}
+            readingItems={readingItems}
             unifiedTasks={unifiedTasks}
             projects={projects}
             weeklyMeetings={weeklyMeetings}
@@ -2913,14 +3206,107 @@ export default function App() {
             onToggleMonthTask={handleToggleMonthTask}
             onJumpToMonth={handleJumpToMonth}
             onOpenMeetingsSection={() => {
-              navigateToTab('overview');
-              window.setTimeout(() => {
-                document
-                  .getElementById('weekly-meetings-section')
-                  ?.scrollIntoView({ behavior: 'smooth' });
-              }, 160);
+              navigateToTab('account');
             }}
           />
+        )}
+
+        {activeTab === 'account' && (
+          <AccountCenterView
+            uid={user?.uid}
+            canEdit={canEdit}
+            onRequireAuth={handleRequireAuth}
+            voiceDialect={preferences.voiceDialect}
+            quarters={quarters}
+            months={months}
+            domains={domains}
+            courses={courses}
+            learningPaths={learningPaths}
+            readingItems={readingItems}
+            bookNotesCount={bookNotes.length}
+            selectedMonthId={selectedMonthId}
+            domainFilter={domainFilter}
+            onSelectMonth={setSelectedMonthId}
+            onChangeDomainFilter={setDomainFilter}
+            onOpenPdf={setActivePdfTarget}
+            onAddQuarter={handleAddQuarter}
+            onUpdateQuarter={handleUpdateQuarter}
+            onDeleteQuarter={handleDeleteQuarter}
+            onAddMonth={handleAddMonth}
+            onUpdateMonth={handleUpdateMonth}
+            onDeleteMonth={handleDeleteMonth}
+            onUpdateMonthStatus={handleUpdateMonthStatus}
+            onToggleActivity={handleToggleActivity}
+            onUpdateMonthNotes={handleUpdateMonthNotes}
+            onUpdateTrackItem={handleUpdateTrackItem}
+            onToggleMonthTask={handleToggleMonthTask}
+            onAddMonthTask={handleAddMonthTask}
+            onDeleteMonthTask={handleDeleteMonthTask}
+            onAddMonthResource={handleAddMonthResource}
+            onUpdateMonthResource={handleUpdateMonthResource}
+            onDeleteMonthResource={handleDeleteMonthResource}
+            onOpenBookNote={handleAddOrOpenBookNote}
+            onLogMonthStudyMetric={(id, metric) => {
+              const target = months.find((m) => m.id === id);
+              if (!target) return;
+              if (metric === 'review') {
+                handleUpdateMonth(id, { reviewCount: (target.reviewCount ?? 0) + 1 });
+              } else {
+                handleUpdateMonth(id, { listenCount: (target.listenCount ?? 0) + 1 });
+              }
+            }}
+            onAddDomain={handleAddDomain}
+            onUpdateDomain={handleUpdateDomain}
+            onDeleteDomain={handleDeleteDomain}
+            weeklyMeetings={weeklyMeetings}
+            onAddWeeklyMeeting={handleAddWeeklyMeeting}
+            onUpdateWeeklyMeeting={handleUpdateWeeklyMeeting}
+            onDeleteWeeklyMeeting={handleDeleteWeeklyMeeting}
+            onAddUnifiedTask={(task) => handleAddUnifiedTask(task) || ''}
+            onOpenCalendar={() => navigateToTab('calendar')}
+            customCategories={customCategories}
+            onAddCustomCategory={handleAddCustomCategory}
+            onDeleteCustomCategory={handleDeleteCustomCategory}
+            history={history}
+            onClearHistory={handleClearHistory}
+            onNavigateFromHistory={(entry) => {
+              if (entry.targetNoteId) {
+                handleOpenNoteById(entry.targetNoteId, false);
+              } else if (entry.targetMonthId) {
+                handleJumpToMonth(entry.targetMonthId);
+              } else if (entry.targetTab) {
+                navigateToTab(entry.targetTab as ActiveTab);
+              }
+            }}
+            onResetWorkspace={handleResetPlan}
+            onForceSync={() => {
+              setSyncRefreshTick((t) => t + 1);
+            }}
+            publicSiteConfig={publicSiteConfig}
+            onSavePublicSiteConfig={async (nextCfg) => {
+              if (!user || !isAdmin) return;
+              await savePublicSiteConfig(user.uid, nextCfg);
+              setPublicSiteConfig(nextCfg);
+            }}
+            onToggleCoursePublic={(docId, isPub) => {
+              const target = courses.find((c) => c.docId === docId);
+              if (target) handleUpdateCourse(target.id, { isPublic: isPub });
+            }}
+            onTogglePathPublic={(pathId, isPub) => {
+              handleUpdateLearningPath(pathId, { isPublic: isPub });
+            }}
+            onToggleBookPublic={(bookId, isPub) => {
+              handleUpdateReadingItem(bookId, { isPublic: isPub });
+            }}
+            onPreviewPublicSite={() => {
+              setIsPreviewingPublic(true);
+              void refreshPublicCatalog();
+              navigateToTab('public', false);
+            }}
+            bookNotesForExcel={bookNotes}
+          />
+        )}
+          </>
         )}
         </ErrorBoundary>
       </main>
@@ -2932,18 +3318,6 @@ export default function App() {
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4">
             <PWAInstallButton compact />
-            {preferences.showExcelExport !== false && (
-              <>
-                <span aria-hidden="true" className="hidden sm:inline">·</span>
-                <button
-                  type="button"
-                  onClick={handleExportExcel}
-                  className="text-slate-700 font-medium hover:text-[#1E3A5F] hover:underline cursor-pointer"
-                >
-                  تنزيل نسخة Excel
-                </button>
-              </>
-            )}
             {canEdit && (
               <>
                 <span aria-hidden="true">·</span>
@@ -3029,47 +3403,49 @@ export default function App() {
 
       <OfflineIndicator />
 
-      {/* Mobile-First Thumb-Friendly Bottom Navigation Bar */}
-      <nav
-        aria-label="التنقل السريع على الهاتف"
-        className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 mobile-safe-bottom"
-      >
-        <div className="grid grid-cols-5 max-w-lg mx-auto">
-          {(
-            [
-              { id: 'overview', label: 'الرئيسية', icon: LayoutDashboard },
-              { id: 'focus', label: 'التركيز', icon: Target },
-              { id: 'courses', label: 'الكورسات', icon: GraduationCap },
-              { id: 'journal', label: 'التلخيص', icon: NotebookPen },
-              { id: 'calendar', label: 'التقويم', icon: CalendarDays },
-            ] as const
-          ).map((item) => {
-            const Icon = item.icon;
-            const active = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => {
-                  navigateToTab(item.id);
-                  safeScrollToTop();
-                }}
-                className={`flex flex-col items-center justify-center gap-0.5 py-2 min-h-[54px] text-[10px] font-medium transition-colors cursor-pointer ${
-                  active
-                    ? 'text-[#1E3A5F] font-bold'
-                    : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <Icon
-                  className={`w-4 h-4 ${active ? 'text-[#1E3A5F]' : 'text-slate-400'}`}
-                  aria-hidden="true"
-                />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </nav>
+      {/* Mobile-First Thumb-Friendly Bottom Navigation Bar (Admin Workspace Only) */}
+      {isAdmin && !isPreviewingPublic && (
+        <nav
+          aria-label="التنقل السريع على الهاتف"
+          className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200 mobile-safe-bottom"
+        >
+          <div className="grid grid-cols-5 max-w-lg mx-auto">
+            {(
+              [
+                { id: 'overview', label: 'الرئيسية', icon: LayoutDashboard },
+                { id: 'focus', label: 'التركيز', icon: Target },
+                { id: 'courses', label: 'الكورسات', icon: GraduationCap },
+                { id: 'journal', label: 'التلخيص', icon: NotebookPen },
+                { id: 'calendar', label: 'التقويم', icon: CalendarDays },
+              ] as const
+            ).map((item) => {
+              const Icon = item.icon;
+              const active = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    navigateToTab(item.id);
+                    safeScrollToTop();
+                  }}
+                  className={`flex flex-col items-center justify-center gap-0.5 py-2 min-h-[54px] text-[10px] font-medium transition-colors cursor-pointer ${
+                    active
+                      ? 'text-[#1E3A5F] font-bold'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <Icon
+                    className={`w-4 h-4 ${active ? 'text-[#1E3A5F]' : 'text-slate-400'}`}
+                    aria-hidden="true"
+                  />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      )}
     </div>
   );
 }

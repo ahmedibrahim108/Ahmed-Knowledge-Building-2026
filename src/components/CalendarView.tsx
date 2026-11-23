@@ -38,6 +38,7 @@ import {
   MonthPlan,
   PersonalCourse,
   PracticalProject,
+  ReadingLibraryItem,
   TaskPriority,
   UnifiedTask,
   UnifiedTaskStatus,
@@ -50,6 +51,7 @@ import {
   getHubMeta,
   getTodayDateKey,
 } from '../data/curriculumData';
+import TaskFormModal from './TaskFormModal';
 
 interface CalendarViewProps {
   uid?: string;
@@ -59,6 +61,7 @@ interface CalendarViewProps {
   months: MonthPlan[];
   courses: PersonalCourse[];
   learningPaths?: LearningPath[];
+  readingItems?: ReadingLibraryItem[];
   unifiedTasks: UnifiedTask[];
   projects: PracticalProject[];
   weeklyMeetings: WeeklyMeeting[];
@@ -312,6 +315,7 @@ export default function CalendarView({
   months,
   courses,
   learningPaths = [],
+  readingItems = [],
   unifiedTasks,
   projects,
   weeklyMeetings,
@@ -552,6 +556,16 @@ export default function CalendarView({
     id: string;
     title: string;
   } | null>(null);
+
+  // Unified TaskFormModal state (supports linking to Course / Path / Book / Project)
+  const [taskFormModal, setTaskFormModal] = useState<{
+    open: boolean;
+    initialTask: UnifiedTask | null;
+    prefill?: Partial<UnifiedTask>;
+  }>({
+    open: false,
+    initialTask: null,
+  });
 
   const HOUR_HEIGHT = density === 'compact' ? 46 : 62;
 
@@ -1166,17 +1180,40 @@ export default function CalendarView({
 
     if (activeItem.kind === 'task') {
       let nextLinkedLabel = activeItem.raw.linkedLabel || '';
+      let nextCourseId = activeItem.raw.linkedCourseId;
+      let nextPathId = activeItem.raw.linkedPathId;
+      let nextBookId = activeItem.raw.linkedBookId;
+      let normalizedProjectId = editProjectId;
       if (editProjectId !== (activeItem.raw.projectId || '')) {
         if (!editProjectId) {
           nextLinkedLabel = '';
+          nextCourseId = undefined;
+          nextPathId = undefined;
+          nextBookId = undefined;
         } else if (editProjectId.startsWith('course:')) {
           const cid = parseInt(editProjectId.split(':')[1] || '', 10);
           nextLinkedLabel = courses.find((c) => c.id === cid)?.title || nextLinkedLabel;
+          nextCourseId = Number.isFinite(cid) ? cid : undefined;
+          nextPathId = undefined;
+          nextBookId = undefined;
         } else if (editProjectId.startsWith('path:')) {
           const pid = editProjectId.split(':')[1] || '';
           nextLinkedLabel = learningPaths.find((p) => p.id === pid)?.title || nextLinkedLabel;
+          nextPathId = pid;
+          nextCourseId = undefined;
+          nextBookId = undefined;
+        } else if (editProjectId.startsWith('book:')) {
+          const bid = editProjectId.slice(5);
+          nextLinkedLabel = readingItems.find((b) => b.id === bid)?.title || nextLinkedLabel;
+          nextBookId = bid;
+          nextCourseId = undefined;
+          nextPathId = undefined;
+          normalizedProjectId = '';
         } else {
           nextLinkedLabel = projects.find((p) => p.id === editProjectId)?.title || nextLinkedLabel;
+          nextCourseId = undefined;
+          nextPathId = undefined;
+          nextBookId = undefined;
         }
       }
       onUpdateUnifiedTask(activeItem.id, {
@@ -1190,7 +1227,10 @@ export default function CalendarView({
         priority: editPriority,
         status: editStatus,
         hubId: editHub,
-        projectId: editProjectId,
+        projectId: normalizedProjectId,
+        linkedCourseId: nextCourseId,
+        linkedPathId: nextPathId,
+        linkedBookId: nextBookId,
         linkedLabel: nextLinkedLabel,
         description: editNotes.trim(),
       });
@@ -1510,6 +1550,9 @@ export default function CalendarView({
                       <p className="text-[10px] opacity-75 tabular-nums truncate">
                         {item.startTime}
                         {item.endTime ? `–${item.endTime}` : ''} · {activeDur}د
+                        {item.kind === 'task' && item.raw.linkedLabel
+                          ? ` · ${item.raw.linkedLabel}`
+                          : ''}
                       </p>
                     )}
                   </div>
@@ -1614,6 +1657,27 @@ export default function CalendarView({
                 <span>اللقاءات الأسبوعية ({weeklyMeetings.length})</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={() => {
+                if (!canEdit) return onRequireAuth();
+                setTaskFormModal({
+                  open: true,
+                  initialTask: null,
+                  prefill: {
+                    scheduledDate: selectedDateKey,
+                    dueDate: selectedDateKey,
+                    startTime: '09:00',
+                    durationMinutes: 45,
+                  },
+                });
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[38px] text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+            >
+              <ListTodo className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>مهمة مرتبطة</span>
+            </button>
 
             <button
               type="button"
@@ -2071,23 +2135,38 @@ export default function CalendarView({
                         </div>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!canEdit) return onRequireAuth();
-                          if (isQuickSchedOpen) {
-                            setQuickScheduleTargetId(null);
-                          } else {
-                            setQuickScheduleTargetId(task.id);
-                            setQuickSchedDate(selectedDateKey);
-                            setQuickSchedTime('09:00');
-                            setQuickSchedDuration(task.durationMinutes || 60);
-                          }
-                        }}
-                        className="px-2 py-1 min-h-[32px] text-[11px] font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-md shrink-0 cursor-pointer"
-                      >
-                        {isQuickSchedOpen ? 'إغلاق' : 'جدولة'}
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!canEdit) return onRequireAuth();
+                            setTaskFormModal({
+                              open: true,
+                              initialTask: task,
+                            });
+                          }}
+                          className="px-2 py-1 min-h-[32px] text-[11px] font-medium text-slate-700 bg-slate-50 hover:bg-slate-200 border border-slate-200 rounded-md cursor-pointer"
+                        >
+                          تعديل
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!canEdit) return onRequireAuth();
+                            if (isQuickSchedOpen) {
+                              setQuickScheduleTargetId(null);
+                            } else {
+                              setQuickScheduleTargetId(task.id);
+                              setQuickSchedDate(selectedDateKey);
+                              setQuickSchedTime('09:00');
+                              setQuickSchedDuration(task.durationMinutes || 60);
+                            }
+                          }}
+                          className="px-2 py-1 min-h-[32px] text-[11px] font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
+                        >
+                          {isQuickSchedOpen ? 'إغلاق' : 'جدولة'}
+                        </button>
+                      </div>
                     </div>
 
                     {isQuickSchedOpen && canEdit && (
@@ -2848,11 +2927,14 @@ export default function CalendarView({
                           <p className="text-xs font-semibold truncate">
                             {item.title}
                           </p>
-                          <p className="text-[10px] opacity-75 tabular-nums">
+                          <p className="text-[10px] opacity-75 tabular-nums truncate">
                             {item.startTime
                               ? `${item.startTime}${item.endTime ? `–${item.endTime}` : ''}`
                               : 'بدون وقت'}{' '}
                             · {item.kind === 'meeting' ? 'لقاء أسبوعي' : item.categoryLabel}
+                            {item.kind === 'task' && item.raw.linkedLabel
+                              ? ` · ${item.raw.linkedLabel}`
+                              : ''}
                           </p>
                         </div>
                       </div>
@@ -3235,10 +3317,15 @@ export default function CalendarView({
                   />
                 </label>
                 <label className="block text-[11px] text-slate-600">
-                  الربط (مشروع / كورس / مسار)
+                  الربط (مشروع / كورس / مسار / كتاب)
                   <select
                     disabled={!canEdit}
-                    value={editProjectId}
+                    value={
+                      editProjectId ||
+                      (activeItem.kind === 'task' && activeItem.raw.linkedBookId
+                        ? `book:${activeItem.raw.linkedBookId}`
+                        : '')
+                    }
                     onChange={(e) => setEditProjectId(e.target.value)}
                     className="mt-1 w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
                   >
@@ -3246,7 +3333,8 @@ export default function CalendarView({
                     {editProjectId &&
                       !projects.some((p) => p.id === editProjectId) &&
                       !courses.some((c) => `course:${c.id}` === editProjectId) &&
-                      !learningPaths.some((lp) => `path:${lp.id}` === editProjectId) && (
+                      !learningPaths.some((lp) => `path:${lp.id}` === editProjectId) &&
+                      !readingItems.some((b) => `book:${b.id}` === editProjectId) && (
                         <option value={editProjectId}>
                           {activeItem.kind === 'task' && activeItem.raw.linkedLabel
                             ? `مرتبط: ${activeItem.raw.linkedLabel}`
@@ -3276,6 +3364,15 @@ export default function CalendarView({
                         {learningPaths.map((lp) => (
                           <option key={`path:${lp.id}`} value={`path:${lp.id}`}>
                             {lp.title}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {readingItems.length > 0 && (
+                      <optgroup label="الكتب والمكتبة">
+                        {readingItems.map((b) => (
+                          <option key={`book:${b.id}`} value={`book:${b.id}`}>
+                            {b.title}
                           </option>
                         ))}
                       </optgroup>
@@ -3336,23 +3433,40 @@ export default function CalendarView({
             />
 
             <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 {canEdit && activeItem.kind === 'task' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onUpdateUnifiedTask(activeItem.id, {
-                        scheduledDate: '',
-                        startTime: '',
-                        endTime: '',
-                      });
-                      setActiveItem(null);
-                    }}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
-                  >
-                    <Unlink className="w-3.5 h-3.5" />
-                    <span>إلغاء الجدولة</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const rawTask = activeItem.raw;
+                        setActiveItem(null);
+                        setTaskFormModal({
+                          open: true,
+                          initialTask: rawTask,
+                        });
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                    >
+                      <Link2 className="w-3.5 h-3.5" />
+                      <span>ربط وتعديل متقدم</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onUpdateUnifiedTask(activeItem.id, {
+                          scheduledDate: '',
+                          startTime: '',
+                          endTime: '',
+                        });
+                        setActiveItem(null);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                    >
+                      <Unlink className="w-3.5 h-3.5" />
+                      <span>إلغاء الجدولة</span>
+                    </button>
+                  </>
                 )}
 
                 {canEdit && activeItem.kind !== 'meeting' && (
@@ -3410,6 +3524,34 @@ export default function CalendarView({
           </form>
         </div>
       )}
+
+      <TaskFormModal
+        open={taskFormModal.open}
+        onClose={() =>
+          setTaskFormModal({ open: false, initialTask: null, prefill: undefined })
+        }
+        initialTask={taskFormModal.initialTask}
+        prefill={taskFormModal.prefill}
+        courses={courses}
+        learningPaths={learningPaths}
+        readingItems={readingItems}
+        projects={projects}
+        onSubmit={(payload, existingId) => {
+          if (existingId) {
+            onUpdateUnifiedTask(existingId, payload);
+          } else {
+            onAddUnifiedTask(payload);
+            if (payload.scheduledDate) {
+              setSelectedDateKey(payload.scheduledDate);
+            }
+          }
+          setTaskFormModal({ open: false, initialTask: null, prefill: undefined });
+        }}
+        onDelete={(taskId) => {
+          onDeleteUnifiedTask(taskId);
+          setTaskFormModal({ open: false, initialTask: null, prefill: undefined });
+        }}
+      />
 
       <ConfirmDialog
         open={Boolean(pendingDelete)}

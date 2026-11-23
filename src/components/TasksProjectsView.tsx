@@ -11,7 +11,6 @@ import {
   Link2,
   ListTodo,
   Plus,
-  Save,
   Square,
   Trash2,
   X,
@@ -24,6 +23,7 @@ import {
   PersonalCourse,
   PracticalProject,
   ProjectStatus,
+  ReadingLibraryItem,
   TaskPriority,
   UnifiedTask,
   UnifiedTaskStatus,
@@ -33,6 +33,7 @@ import {
 } from '../data/curriculumData';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
+import TaskFormModal from './TaskFormModal';
 
 interface TasksProjectsViewProps {
   canEdit: boolean;
@@ -42,6 +43,7 @@ interface TasksProjectsViewProps {
   months: MonthPlan[];
   courses: PersonalCourse[];
   learningPaths?: LearningPath[];
+  readingItems?: ReadingLibraryItem[];
   hubCategories: Record<LearningHubId, string[]>;
   activeHubFilter: LearningHubId | 'all';
   onChangeHubFilter: (hub: LearningHubId | 'all') => void;
@@ -86,6 +88,7 @@ export default function TasksProjectsView({
   months,
   courses,
   learningPaths = [],
+  readingItems = [],
   hubCategories,
   activeHubFilter,
   onChangeHubFilter,
@@ -109,36 +112,12 @@ export default function TasksProjectsView({
     UnifiedTaskStatus | 'all' | 'unscheduled' | 'scheduled' | 'overdue'
   >('all');
 
-  // New Task Form (title required, scheduling optional!)
-  const [showAddTask, setShowAddTask] = useState(false);
-  const [taskTitle, setTaskTitle] = useState('');
-  const [taskHub, setTaskHub] = useState<LearningHubId>(
-    activeHubFilter === 'all' ? 'marketing' : activeHubFilter
-  );
-  const [taskCat, setTaskCat] = useState('');
-  const [taskPriority, setTaskPriority] = useState<TaskPriority>('medium');
-  const [taskScheduledDate, setTaskScheduledDate] = useState('');
-  const [taskStartTime, setTaskStartTime] = useState('');
-  const [taskDuration, setTaskDuration] = useState(60);
-  const [taskDeadline, setTaskDeadline] = useState('');
-  const [taskProjectId, setTaskProjectId] = useState('');
-  const [taskDesc, setTaskDesc] = useState('');
-
-  // Inline Edit Task state
-  const [editingTask, setEditingTask] = useState<UnifiedTask | null>(null);
-  const [editDraft, setEditDraft] = useState<{
-    title: string;
-    hubId: LearningHubId;
-    priority: TaskPriority;
-    status: UnifiedTaskStatus;
-    categoryLabel: string;
-    scheduledDate: string;
-    startTime: string;
-    durationMinutes: number;
-    deadline: string;
-    projectId: string;
-    description: string;
-  } | null>(null);
+  // Unified TaskFormModal state
+  const [taskModalState, setTaskModalState] = useState<{
+    open: boolean;
+    initialTask: UnifiedTask | null;
+    prefill?: Partial<UnifiedTask>;
+  }>({ open: false, initialTask: null });
 
   const [confirmDeleteTask, setConfirmDeleteTask] = useState<UnifiedTask | null>(null);
 
@@ -174,26 +153,45 @@ export default function TasksProjectsView({
     return Boolean((dl && dl < todayKey) || (sched && sched < todayKey));
   };
 
-  const resolveLinkedLabel = (projectId: string, fallback = ''): string => {
+  const resolveTaskContextBadge = (t: UnifiedTask): string => {
+    if (t.linkedLabel) return t.linkedLabel;
+    if (t.linkedCourseId) {
+      const course = courses.find((c) => c.id === t.linkedCourseId);
+      if (course) return `كورس: ${course.title}`;
+    }
+    if (t.linkedPathId) {
+      const lp = learningPaths.find((p) => p.id === t.linkedPathId);
+      if (lp) return `مسار: ${lp.title}`;
+    }
+    if (t.linkedBookId) {
+      const book = readingItems.find((r) => r.id === t.linkedBookId);
+      if (book) return `كتاب: ${book.title}`;
+    }
+    const projectId = t.projectId || '';
     if (!projectId) return '';
     const proj = projects.find((p) => p.id === projectId);
-    if (proj) return proj.title;
+    if (proj) return `مشروع: ${proj.title}`;
     if (projectId.startsWith('course:')) {
       const cid = Number(projectId.split(':')[1]);
       const course = courses.find((c) => c.id === cid);
-      if (course) return course.title;
+      if (course) return `كورس: ${course.title}`;
     }
     if (projectId.startsWith('path:')) {
       const pid = projectId.split(':')[1];
       const lp = learningPaths.find((p) => p.id === pid);
-      if (lp) return lp.title;
+      if (lp) return `مسار: ${lp.title}`;
+    }
+    if (projectId.startsWith('book:')) {
+      const bid = projectId.split(':')[1];
+      const book = readingItems.find((r) => r.id === bid);
+      if (book) return `كتاب: ${book.title}`;
     }
     if (projectId.startsWith('month:')) {
       const mid = Number(projectId.split(':')[1]);
       const m = months.find((mo) => mo.id === mid);
       if (m) return `الشهر ${m.id}: ${m.theme}`;
     }
-    return fallback;
+    return '';
   };
 
   const filteredTasks = useMemo(() => {
@@ -308,95 +306,6 @@ export default function TasksProjectsView({
       });
     }
     setQuickSchedTarget(null);
-  };
-
-  const handleCreateTask = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canEdit) {
-      onRequireAuth();
-      return;
-    }
-    const clean = taskTitle.trim();
-    if (!clean) return;
-    const endTime = taskStartTime
-      ? computeEndTimeFromMinutes(taskStartTime, taskDuration)
-      : '';
-    onAddUnifiedTask({
-      title: clean,
-      description: taskDesc.trim(),
-      hubId: taskHub,
-      categoryLabel: taskCat.trim(),
-      priority: taskPriority,
-      status: 'todo',
-      dueDate: taskDeadline || taskScheduledDate || '',
-      scheduledDate: taskScheduledDate || '',
-      startTime: taskStartTime || '',
-      endTime,
-      durationMinutes: taskStartTime || taskScheduledDate ? taskDuration : 0,
-      deadline: taskDeadline || '',
-      projectId: taskProjectId || '',
-      linkedLabel: resolveLinkedLabel(taskProjectId),
-    });
-    setTaskTitle('');
-    setTaskDesc('');
-    setTaskCat('');
-    setTaskScheduledDate('');
-    setTaskStartTime('');
-    setTaskDuration(60);
-    setTaskDeadline('');
-    setTaskProjectId('');
-    setShowAddTask(false);
-  };
-
-  const openEditModal = (t: UnifiedTask) => {
-    setEditingTask(t);
-    setEditDraft({
-      title: t.title,
-      hubId: t.hubId,
-      priority: t.priority,
-      status: t.status,
-      categoryLabel: t.categoryLabel || '',
-      scheduledDate: t.scheduledDate || '',
-      startTime: t.startTime || '',
-      durationMinutes: t.durationMinutes || 60,
-      deadline: t.deadline || t.dueDate || '',
-      projectId: t.projectId || '',
-      description: t.description || '',
-    });
-  };
-
-  const handleSaveTaskEdit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingTask || !editDraft) return;
-    const clean = editDraft.title.trim();
-    if (!clean) return;
-    const endTime = editDraft.startTime
-      ? computeEndTimeFromMinutes(editDraft.startTime, editDraft.durationMinutes)
-      : '';
-    onUpdateUnifiedTask(editingTask.id, {
-      title: clean,
-      hubId: editDraft.hubId,
-      priority: editDraft.priority,
-      status: editDraft.status,
-      categoryLabel: editDraft.categoryLabel.trim(),
-      scheduledDate: editDraft.scheduledDate,
-      startTime: editDraft.startTime,
-      endTime,
-      durationMinutes:
-        editDraft.scheduledDate || editDraft.startTime ? editDraft.durationMinutes : 0,
-      deadline: editDraft.deadline,
-      dueDate: editDraft.deadline || editDraft.scheduledDate || '',
-      projectId: editDraft.projectId,
-      linkedLabel: resolveLinkedLabel(
-        editDraft.projectId,
-        editDraft.projectId === editingTask.projectId
-          ? editingTask.linkedLabel || ''
-          : ''
-      ),
-      description: editDraft.description.trim(),
-    });
-    setEditingTask(null);
-    setEditDraft(null);
   };
 
   const handleCreateProject = (e: React.FormEvent) => {
@@ -548,175 +457,20 @@ export default function TasksProjectsView({
                   onRequireAuth();
                   return;
                 }
-                setShowAddTask((v) => !v);
+                setTaskModalState({
+                  open: true,
+                  initialTask: null,
+                  prefill: {
+                    hubId: activeHubFilter === 'all' ? 'knowledge' : activeHubFilter,
+                  },
+                });
               }}
               className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
             >
               <Plus className="w-4 h-4" aria-hidden="true" />
-              <span>{showAddTask ? 'إلغاء' : 'إضافة مهمة جديدة'}</span>
+              <span>إضافة مهمة جديدة</span>
             </button>
           </div>
-
-          {showAddTask && canEdit && (
-            <form
-              onSubmit={handleCreateTask}
-              className="bg-white border border-slate-200 rounded-xl p-5 space-y-4"
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                <label className="block text-xs font-medium text-slate-700 sm:col-span-2 lg:col-span-1">
-                  عنوان المهمة (مطلوب)
-                  <input
-                    type="text"
-                    required
-                    value={taskTitle}
-                    onChange={(e) => setTaskTitle(e.target.value)}
-                    placeholder="مثلاً: إعداد خطة محتوى لأول أسبوعين"
-                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
-                  />
-                </label>
-                <label className="block text-xs font-medium text-slate-700">
-                  المجال (Hub)
-                  <select
-                    value={taskHub}
-                    onChange={(e) => setTaskHub(e.target.value as LearningHubId)}
-                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
-                  >
-                    {LEARNING_HUBS.map((h) => (
-                      <option key={h.id} value={h.id}>
-                        {h.title}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-xs font-medium text-slate-700">
-                  الأولوية
-                  <select
-                    value={taskPriority}
-                    onChange={(e) => setTaskPriority(e.target.value as TaskPriority)}
-                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
-                  >
-                    <option value="high">عالية</option>
-                    <option value="medium">متوسطة</option>
-                    <option value="low">منخفضة</option>
-                  </select>
-                </label>
-
-                <label className="block text-xs font-medium text-slate-700">
-                  تاريخ الجدولة (اتركه فارغًا لتبقى غير مجدولة)
-                  <input
-                    type="date"
-                    value={taskScheduledDate}
-                    onChange={(e) => setTaskScheduledDate(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
-                  />
-                </label>
-                <label className="block text-xs font-medium text-slate-700">
-                  وقت البدء (اختياري)
-                  <input
-                    type="time"
-                    value={taskStartTime}
-                    onChange={(e) => setTaskStartTime(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
-                  />
-                </label>
-                <label className="block text-xs font-medium text-slate-700">
-                  المدة المقدرة (بالدقائق)
-                  <select
-                    value={taskDuration}
-                    onChange={(e) => setTaskDuration(Number(e.target.value))}
-                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
-                  >
-                    <option value={15}>15 دقيقة</option>
-                    <option value={30}>30 دقيقة</option>
-                    <option value={45}>45 دقيقة</option>
-                    <option value={60}>60 دقيقة</option>
-                    <option value={90}>90 دقيقة</option>
-                    <option value={120}>120 دقيقة</option>
-                    <option value={180}>180 دقيقة</option>
-                  </select>
-                </label>
-
-                <label className="block text-xs font-medium text-slate-700">
-                  الموعد النهائي / Deadline (اختياري)
-                  <input
-                    type="date"
-                    value={taskDeadline}
-                    onChange={(e) => setTaskDeadline(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
-                  />
-                </label>
-                <label className="block text-xs font-medium text-slate-700">
-                  التصنيف الفرعي (اختياري)
-                  <input
-                    type="text"
-                    list="task-cats"
-                    value={taskCat}
-                    onChange={(e) => setTaskCat(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
-                  />
-                  <datalist id="task-cats">
-                    {(hubCategories[taskHub] ?? []).map((c) => (
-                      <option key={c} value={c} />
-                    ))}
-                  </datalist>
-                </label>
-                <label className="block text-xs font-medium text-slate-700">
-                  ربط بكورس / مسار / مشروع (اختياري)
-                  <select
-                    value={taskProjectId}
-                    onChange={(e) => setTaskProjectId(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
-                  >
-                    <option value="">بدون ربط</option>
-                    {projects.length > 0 && (
-                      <optgroup label="المشاريع التطبيقية">
-                        {projects.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            مشروع: {p.title}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {courses.length > 0 && (
-                      <optgroup label="الكورسات">
-                        {courses.map((c) => (
-                          <option key={`course:${c.id}`} value={`course:${c.id}`}>
-                            كورس: {c.title}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {learningPaths.length > 0 && (
-                      <optgroup label="المسارات التعليمية">
-                        {learningPaths.map((p) => (
-                          <option key={`path:${p.id}`} value={`path:${p.id}`}>
-                            مسار: {p.title}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
-                </label>
-              </div>
-              <label className="block text-xs font-medium text-slate-700">
-                تفاصيل إضافية (اختياري)
-                <textarea
-                  rows={2}
-                  value={taskDesc}
-                  onChange={(e) => setTaskDesc(e.target.value)}
-                  className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
-                />
-              </label>
-              <div className="flex justify-end gap-2">
-                <button
-                  type="submit"
-                  className="px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
-                >
-                  حفظ المهمة
-                </button>
-              </div>
-            </form>
-          )}
 
           {/* Standalone Unified Tasks */}
           <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-200">
@@ -728,7 +482,7 @@ export default function TasksProjectsView({
               filteredTasks.map((t) => {
                 const hubMeta = getHubMeta(t.hubId);
                 const overdue = isTaskOverdue(t);
-                const linkedProj = projects.find((p) => p.id === t.projectId);
+                const contextBadge = resolveTaskContextBadge(t);
                 return (
                   <div
                     key={t.id}
@@ -792,13 +546,10 @@ export default function TasksProjectsView({
                               الموعد النهائي: {t.deadline || t.dueDate}
                             </span>
                           )}
-                          {linkedProj && <span>· مشروع: {linkedProj.title}</span>}
-                          {!linkedProj && (t.linkedLabel || t.projectId) && (
+                          {contextBadge && (
                             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded">
                               <Link2 className="w-3 h-3" aria-hidden="true" />
-                              <span>
-                                {t.linkedLabel || resolveLinkedLabel(t.projectId || '')}
-                              </span>
+                              <span>{contextBadge}</span>
                             </span>
                           )}
                           {t.categoryLabel && <span>· {t.categoryLabel}</span>}
@@ -831,7 +582,12 @@ export default function TasksProjectsView({
                         </select>
                         <button
                           type="button"
-                          onClick={() => openEditModal(t)}
+                          onClick={() =>
+                            setTaskModalState({
+                              open: true,
+                              initialTask: t,
+                            })
+                          }
                           className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
                           aria-label="تعديل وجدولة المهمة"
                         >
@@ -1388,229 +1144,25 @@ export default function TasksProjectsView({
         </div>
       )}
 
-      {/* Edit Task Modal */}
-      {editingTask && editDraft && (
-        <div
-          className="fixed inset-0 z-[75] bg-slate-950/60 flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => {
-            setEditingTask(null);
-            setEditDraft(null);
-          }}
-        >
-          <form
-            onSubmit={handleSaveTaskEdit}
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-2xl p-5 space-y-4"
-          >
-            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-              <h3 className="text-sm font-bold text-slate-900">
-                تعديل المهمة وجدولتها
-              </h3>
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingTask(null);
-                  setEditDraft(null);
-                }}
-                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
-              >
-                <X className="w-4 h-4" aria-hidden="true" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <label className="block font-medium text-slate-700 sm:col-span-2">
-                عنوان المهمة
-                <input
-                  type="text"
-                  required
-                  value={editDraft.title}
-                  onChange={(e) =>
-                    setEditDraft((d) => (d ? { ...d, title: e.target.value } : d))
-                  }
-                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
-                />
-              </label>
-
-              <label className="block font-medium text-slate-700">
-                الأولوية
-                <select
-                  value={editDraft.priority}
-                  onChange={(e) =>
-                    setEditDraft((d) =>
-                      d ? { ...d, priority: e.target.value as TaskPriority } : d
-                    )
-                  }
-                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
-                >
-                  <option value="high">عالية</option>
-                  <option value="medium">متوسطة</option>
-                  <option value="low">منخفضة</option>
-                </select>
-              </label>
-
-              <label className="block font-medium text-slate-700">
-                الحالة
-                <select
-                  value={editDraft.status}
-                  onChange={(e) =>
-                    setEditDraft((d) =>
-                      d ? { ...d, status: e.target.value as UnifiedTaskStatus } : d
-                    )
-                  }
-                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
-                >
-                  <option value="todo">قيد الانتظار</option>
-                  <option value="in_progress">قيد التنفيذ</option>
-                  <option value="done">مكتملة</option>
-                </select>
-              </label>
-
-              <label className="block font-medium text-slate-700">
-                تاريخ الجدولة في التقويم
-                <input
-                  type="date"
-                  value={editDraft.scheduledDate}
-                  onChange={(e) =>
-                    setEditDraft((d) =>
-                      d ? { ...d, scheduledDate: e.target.value } : d
-                    )
-                  }
-                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
-                />
-              </label>
-
-              <label className="block font-medium text-slate-700">
-                وقت البدء
-                <input
-                  type="time"
-                  value={editDraft.startTime}
-                  onChange={(e) =>
-                    setEditDraft((d) =>
-                      d ? { ...d, startTime: e.target.value } : d
-                    )
-                  }
-                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
-                />
-              </label>
-
-              <label className="block font-medium text-slate-700">
-                المدة (بالدقائق)
-                <input
-                  type="number"
-                  min={15}
-                  max={720}
-                  step={15}
-                  value={editDraft.durationMinutes}
-                  onChange={(e) =>
-                    setEditDraft((d) =>
-                      d
-                        ? { ...d, durationMinutes: Number(e.target.value) || 60 }
-                        : d
-                    )
-                  }
-                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
-                />
-              </label>
-
-              <label className="block font-medium text-slate-700">
-                الموعد النهائي (Deadline)
-                <input
-                  type="date"
-                  value={editDraft.deadline}
-                  onChange={(e) =>
-                    setEditDraft((d) => (d ? { ...d, deadline: e.target.value } : d))
-                  }
-                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
-                />
-              </label>
-
-              <label className="block font-medium text-slate-700 sm:col-span-2">
-                ربط بكورس / مسار / مشروع
-                <select
-                  value={editDraft.projectId}
-                  onChange={(e) =>
-                    setEditDraft((d) =>
-                      d ? { ...d, projectId: e.target.value } : d
-                    )
-                  }
-                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
-                >
-                  <option value="">بدون ربط</option>
-                  {projects.length > 0 && (
-                    <optgroup label="المشاريع التطبيقية">
-                      {projects.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          مشروع: {p.title}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {courses.length > 0 && (
-                    <optgroup label="الكورسات">
-                      {courses.map((c) => (
-                        <option key={`course:${c.id}`} value={`course:${c.id}`}>
-                          كورس: {c.title}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {learningPaths.length > 0 && (
-                    <optgroup label="المسارات التعليمية">
-                      {learningPaths.map((p) => (
-                        <option key={`path:${p.id}`} value={`path:${p.id}`}>
-                          مسار: {p.title}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-              </label>
-
-              <label className="block font-medium text-slate-700 sm:col-span-2">
-                ملاحظات وتفاصيل
-                <textarea
-                  rows={2}
-                  value={editDraft.description}
-                  onChange={(e) =>
-                    setEditDraft((d) =>
-                      d ? { ...d, description: e.target.value } : d
-                    )
-                  }
-                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
-                />
-              </label>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200">
-              {editDraft.scheduledDate ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setEditDraft((d) =>
-                      d ? { ...d, scheduledDate: '', startTime: '' } : d
-                    )
-                  }
-                  className="text-xs text-slate-600 underline cursor-pointer"
-                >
-                  إلغاء الجدولة وإعادتها لقائمة المهام غير المجدولة
-                </button>
-              ) : (
-                <span />
-              )}
-              <button
-                type="submit"
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
-              >
-                <Save className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>حفظ التعديلات</span>
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+      <TaskFormModal
+        open={taskModalState.open}
+        onClose={() => setTaskModalState({ open: false, initialTask: null })}
+        initialTask={taskModalState.initialTask}
+        prefill={taskModalState.prefill}
+        courses={courses}
+        learningPaths={learningPaths}
+        readingItems={readingItems}
+        projects={projects}
+        hubCategories={hubCategories}
+        onSubmit={(payload, existingId) => {
+          if (existingId) {
+            onUpdateUnifiedTask(existingId, payload);
+          } else {
+            onAddUnifiedTask(payload);
+          }
+        }}
+        onDelete={onDeleteUnifiedTask}
+      />
 
       {/* Quick Schedule Modal for Course / Path / Plan items */}
       {quickSchedTarget && (

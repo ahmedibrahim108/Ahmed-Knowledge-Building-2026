@@ -11,6 +11,8 @@ import {
   FileText,
   FileWarning,
   Loader2,
+  Maximize2,
+  Minimize2,
   RefreshCw,
   X,
   ZoomIn,
@@ -118,6 +120,8 @@ export default function PDFViewerModal({
     null
   );
   const [useNativeIframeFallback, setUseNativeIframeFallback] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const blobFallbackTriedRef = useRef(false);
   const blobUrlRef = useRef<string | null>(null);
   const rawBlobRef = useRef<Blob | null>(null);
@@ -167,6 +171,7 @@ export default function PDFViewerModal({
       setCurrentPage(1);
       setLoadError(null);
       setDownloadNotice(null);
+      setIsExpanded(false);
       blobFallbackTriedRef.current = false;
       return;
     }
@@ -331,25 +336,38 @@ export default function PDFViewerModal({
         blobUrlRef.current = null;
       }
     };
-  }, [target, uid, isPdfMode]);
+  }, [target, uid, isPdfMode, reloadNonce]);
 
   useEffect(() => {
     if (!target) return;
     const updateWidth = () => {
       const w = bodyContainerRef.current?.clientWidth ?? window.innerWidth;
-      setContainerWidth(Math.max(280, Math.min(900, w - 32)));
+      const maxRender = isExpanded ? 1160 : 900;
+      setContainerWidth(Math.max(280, Math.min(maxRender, w - 32)));
     };
     updateWidth();
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && bodyContainerRef.current) {
+      observer = new ResizeObserver(() => updateWidth());
+      observer.observe(bodyContainerRef.current);
+    }
     window.addEventListener('resize', updateWidth);
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        if (isExpanded) {
+          setIsExpanded(false);
+        } else {
+          onClose();
+        }
+      }
     };
     window.addEventListener('keydown', handleKey);
     return () => {
+      observer?.disconnect();
       window.removeEventListener('resize', updateWidth);
       window.removeEventListener('keydown', handleKey);
     };
-  }, [target, onClose]);
+  }, [target, onClose, isExpanded]);
 
   const renderedPages = useMemo(() => {
     if (numPages <= 0) return [];
@@ -405,14 +423,20 @@ export default function PDFViewerModal({
 
   return (
     <div
-      className="fixed inset-0 z-[80] bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-1.5 sm:p-4 overscroll-none"
+      className={`fixed inset-0 z-[80] bg-slate-950/85 backdrop-blur-xs flex items-center justify-center overscroll-none ${
+        isExpanded ? 'p-0' : 'p-1.5 sm:p-4'
+      }`}
       role="dialog"
       aria-modal="true"
       aria-label={`عارض المستندات: ${target.title}`}
       onClick={onClose}
     >
       <div
-        className="w-full max-w-5xl h-[96dvh] sm:h-[94dvh] flex flex-col bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden"
+        className={`flex flex-col bg-white shadow-2xl overflow-hidden transition-all duration-150 ${
+          isExpanded
+            ? 'w-screen h-[100dvh] max-w-none rounded-none border-0'
+            : 'w-full max-w-5xl h-[96dvh] sm:h-[94dvh] rounded-2xl border border-slate-200'
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top Bar */}
@@ -468,11 +492,26 @@ export default function PDFViewerModal({
             )}
             <button
               type="button"
+              onClick={() => setIsExpanded((v) => !v)}
+              aria-label={isExpanded ? 'إنهاء ملء الشاشة' : 'توسيع لملء الشاشة'}
+              className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[38px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer"
+            >
+              {isExpanded ? (
+                <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
+              ) : (
+                <Maximize2 className="w-3.5 h-3.5" aria-hidden="true" />
+              )}
+              <span className="hidden sm:inline">
+                {isExpanded ? 'تصغير العرض' : 'ملء الشاشة'}
+              </span>
+            </button>
+            <button
+              type="button"
               onClick={onClose}
               className="inline-flex items-center gap-1 px-3 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
             >
               <X className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>إغلاق والعودة</span>
+              <span>إغلاق</span>
             </button>
           </div>
         </div>
@@ -603,17 +642,27 @@ export default function PDFViewerModal({
               <p className="text-xs text-slate-600 leading-relaxed">
                 {loadError}
               </p>
-              {(freshExternalUrl || target.downloadUrl) && (
-                <a
-                  href={freshExternalUrl || target.downloadUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg"
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setReloadNonce((n) => n + 1)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                 >
-                  <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>فتح أو تنزيل الملف من الرابط السحابي</span>
-                </a>
-              )}
+                  <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>إعادة المحاولة</span>
+                </button>
+                {(freshExternalUrl || target.downloadUrl) && (
+                  <a
+                    href={freshExternalUrl || target.downloadUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg"
+                  >
+                    <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>فتح أو تنزيل الملف</span>
+                  </a>
+                )}
+              </div>
             </div>
           )}
 
