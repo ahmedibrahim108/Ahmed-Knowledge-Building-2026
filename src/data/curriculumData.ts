@@ -746,6 +746,91 @@ export function getReflectionCardStyle(
   return REFLECTION_COLOR_PALETTE[resolveReflectionColorKey(reflection)];
 }
 
+export type ImageFrameAspect = 'auto' | '1:1' | '4:3' | '16:9' | '21:9' | '3:4';
+export type ImageDisplaySize = 'xs' | 'sm' | 'md' | 'lg' | 'full';
+
+export interface ImageFrameSpec {
+  aspect: ImageFrameAspect;
+  fitMode: 'cover' | 'contain';
+  zoom: number;
+  offsetX: number;
+  offsetY: number;
+  sizePreset: ImageDisplaySize;
+  customHeightPx?: number;
+}
+
+export const DEFAULT_IMAGE_FRAME_SPEC: ImageFrameSpec = {
+  aspect: '4:3',
+  fitMode: 'cover',
+  zoom: 1,
+  offsetX: 50,
+  offsetY: 50,
+  sizePreset: 'md',
+};
+
+export const DEFAULT_REFLECTION_IMAGE_FRAME: ImageFrameSpec = {
+  aspect: '21:9',
+  fitMode: 'cover',
+  zoom: 1,
+  offsetX: 50,
+  offsetY: 50,
+  sizePreset: 'sm',
+  customHeightPx: 140,
+};
+
+export function sanitizeImageFrameSpec(
+  raw: unknown,
+  fallback: ImageFrameSpec = DEFAULT_IMAGE_FRAME_SPEC
+): ImageFrameSpec {
+  if (!raw || typeof raw !== 'object') return { ...fallback };
+  const obj = raw as Record<string, unknown>;
+  const aspectRaw = String(obj.aspect ?? fallback.aspect);
+  const aspect: ImageFrameAspect =
+    aspectRaw === 'auto' ||
+    aspectRaw === '1:1' ||
+    aspectRaw === '4:3' ||
+    aspectRaw === '16:9' ||
+    aspectRaw === '21:9' ||
+    aspectRaw === '3:4'
+      ? aspectRaw
+      : fallback.aspect;
+  const fitMode: 'cover' | 'contain' =
+    obj.fitMode === 'contain' ? 'contain' : 'cover';
+  const zoomNum = Number(obj.zoom);
+  const zoom = Number.isFinite(zoomNum)
+    ? Math.max(0.4, Math.min(3, Math.round(zoomNum * 100) / 100))
+    : fallback.zoom;
+  const offsetXNum = Number(obj.offsetX);
+  const offsetX = Number.isFinite(offsetXNum)
+    ? Math.max(0, Math.min(100, Math.round(offsetXNum * 10) / 10))
+    : fallback.offsetX;
+  const offsetYNum = Number(obj.offsetY);
+  const offsetY = Number.isFinite(offsetYNum)
+    ? Math.max(0, Math.min(100, Math.round(offsetYNum * 10) / 10))
+    : fallback.offsetY;
+  const sizeRaw = String(obj.sizePreset ?? fallback.sizePreset);
+  const sizePreset: ImageDisplaySize =
+    sizeRaw === 'xs' ||
+    sizeRaw === 'sm' ||
+    sizeRaw === 'md' ||
+    sizeRaw === 'lg' ||
+    sizeRaw === 'full'
+      ? sizeRaw
+      : fallback.sizePreset;
+  const ch = Number(obj.customHeightPx);
+  const customHeightPx =
+    Number.isFinite(ch) && ch >= 80 && ch <= 560 ? Math.round(ch) : undefined;
+  return {
+    aspect,
+    fitMode,
+    zoom,
+    offsetX,
+    offsetY,
+    sizePreset,
+    ...(customHeightPx ? { customHeightPx } : {}),
+  };
+}
+
 export interface PersonalReflection {
   id: string;
   title: string;
@@ -754,6 +839,9 @@ export interface PersonalReflection {
   categoryTag?: string;
   colorKey?: ReflectionColorKey;
   isPublic?: boolean;
+  imageUrl?: string;
+  imageStoragePath?: string;
+  imageFrame?: ImageFrameSpec;
   pinned: boolean;
   createdAtLabel: string;
   createdAtMs: number;

@@ -5,6 +5,7 @@ import {
   Cloud,
   Eye,
   Feather,
+  Images,
   LayoutDashboard,
   LogIn,
   LogOut,
@@ -21,9 +22,10 @@ export type ActiveTab =
   | 'courses'
   | 'paths'
   | 'library'
-  | 'tasks'
   | 'journal'
   | 'reflections'
+  | 'gallery'
+  | 'tasks'
   | 'calendar'
   | 'account'
   | 'public';
@@ -80,6 +82,7 @@ export default function Header({
         { id: 'library', label: `المكتبة (${libraryCount})` },
         { id: 'journal', label: `التلخيص (${notesCount})` },
         { id: 'reflections', label: `خواطري (${reflectionsCount})` },
+        { id: 'gallery', label: 'معرض الصور' },
         { id: 'tasks', label: `المهام (${tasksCount})` },
         { id: 'calendar', label: 'التقويم' },
         { id: 'account', label: 'الإدارة والحساب' },
@@ -244,6 +247,17 @@ export default function Header({
                       >
                         <Feather className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
                         <span>خواطري وتأملاتي ({reflectionsCount})</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectTab('gallery');
+                          setMenuOpen(false);
+                        }}
+                        className="w-full px-4 py-2.5 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <Images className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                        <span>معرض الصور</span>
                       </button>
                       <button
                         type="button"

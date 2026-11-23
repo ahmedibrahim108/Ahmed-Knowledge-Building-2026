@@ -1,10 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
+  Crop,
   Edit3,
   Feather,
   FolderPlus,
   Globe,
+  ImagePlus,
+  Images,
   Lock,
   Palette,
   Pin,
@@ -17,6 +20,8 @@ import {
 } from 'lucide-react';
 import {
   DEFAULT_REFLECTION_CATEGORIES,
+  DEFAULT_REFLECTION_IMAGE_FRAME,
+  ImageFrameSpec,
   PersonalReflection,
   REFLECTION_COLOR_PALETTE,
   ReflectionColorKey,
@@ -24,10 +29,19 @@ import {
   VoiceDialectMode,
   getReflectionCardStyle,
   resolveReflectionColorKey,
+  sanitizeImageFrameSpec,
 } from '../data/curriculumData';
+import {
+  deleteReflectionImageStorage,
+  getImagesForScope,
+  isImageFile,
+  uploadReflectionImage,
+} from '../utils/imageStorage';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
+import { FramedImage, ImageFrameEditorModal } from './FramedImage';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
+import { MAIN_GALLERY_SCOPE_KEY } from './PhotoGalleryView';
 import VoiceRecorderButton from './VoiceRecorderButton';
 
 interface ReflectionsViewProps {
@@ -45,6 +59,9 @@ interface ReflectionsViewProps {
     categoryTag?: string;
     colorKey?: ReflectionColorKey;
     isPublic?: boolean;
+    imageUrl?: string;
+    imageStoragePath?: string;
+    imageFrame?: ImageFrameSpec;
   }) => void;
   onUpdateReflection: (id: string, updates: Partial<PersonalReflection>) => void;
   onDeleteReflection: (id: string) => void;
@@ -93,6 +110,32 @@ export default function ReflectionsView({
   const [categoryTag, setCategoryTag] = useState<string>(categories[0] || '');
   const [composerColorKey, setComposerColorKey] = useState<ReflectionColorKey>('auto');
   const [composerIsPublic, setComposerIsPublic] = useState(false);
+  const [composerImageUrl, setComposerImageUrl] = useState('');
+  const [composerImageStoragePath, setComposerImageStoragePath] = useState('');
+  const [composerImageFrame, setComposerImageFrame] = useState<ImageFrameSpec>(
+    DEFAULT_REFLECTION_IMAGE_FRAME
+  );
+  const [uploadingComposerImg, setUploadingComposerImg] = useState(false);
+  const [composerImgErr, setComposerImgErr] = useState<string | null>(null);
+  const composerFileRef = useRef<HTMLInputElement | null>(null);
+
+  // Gallery Picker helper state
+  const [galleryPickerTarget, setGalleryPickerTarget] = useState<
+    'composer' | 'modal' | null
+  >(null);
+  const [galleryPickerItems, setGalleryPickerItems] = useState<
+    Array<{ id: string; name: string; url: string; storagePath?: string }>
+  >([]);
+  const [loadingGalleryPicker, setLoadingGalleryPicker] = useState(false);
+
+  // Interactive Frame/Crop Editor state
+  const [frameEditorState, setFrameEditorState] = useState<{
+    mode: 'composer' | 'modal_edit' | 'direct_reflection';
+    reflectionId?: string;
+    srcUrl?: string;
+    storagePath?: string;
+    frame: ImageFrameSpec;
+  } | null>(null);
 
   // Category manager
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -115,8 +158,97 @@ export default function ReflectionsView({
   const [editCategory, setEditCategory] = useState('');
   const [editColorKey, setEditColorKey] = useState<ReflectionColorKey>('auto');
   const [editIsPublic, setEditIsPublic] = useState(false);
+  const [editImageUrl, setEditImageUrl] = useState('');
+  const [editImageStoragePath, setEditImageStoragePath] = useState('');
+  const [editImageFrame, setEditImageFrame] = useState<ImageFrameSpec>(
+    DEFAULT_REFLECTION_IMAGE_FRAME
+  );
+  const [uploadingModalImg, setUploadingModalImg] = useState(false);
+  const modalFileRef = useRef<HTMLInputElement | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<PersonalReflection | null>(null);
+
+  useEffect(() => {
+    if (!galleryPickerTarget) return;
+    let active = true;
+    setLoadingGalleryPicker(true);
+    void getImagesForScope(MAIN_GALLERY_SCOPE_KEY, uid)
+      .then((records) => {
+        if (!active) return;
+        const mapped = records
+          .map((rec) => ({
+            id: rec.id,
+            name: rec.caption || rec.name,
+            url: rec.downloadUrl || rec.dataUrl || '',
+            storagePath: rec.storagePath,
+          }))
+          .filter((i) => Boolean(i.url) || Boolean(i.storagePath));
+        setGalleryPickerItems(mapped);
+      })
+      .finally(() => {
+        if (active) setLoadingGalleryPicker(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [galleryPickerTarget, uid]);
+
+  const handleUploadComposerImage = async (file: File) => {
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    if (!isImageFile(file)) {
+      setComposerImgErr('يرجى اختيار ملف صورة صالح.');
+      return;
+    }
+    setUploadingComposerImg(true);
+    setComposerImgErr(null);
+    try {
+      const tempId = `new_${Date.now()}`;
+      const res = await uploadReflectionImage(tempId, file, uid);
+      setComposerImageUrl(res.imageUrl || res.localObjectUrl);
+      setComposerImageStoragePath(res.imageStoragePath);
+      setComposerImageFrame(DEFAULT_REFLECTION_IMAGE_FRAME);
+      setFrameEditorState({
+        mode: 'composer',
+        srcUrl: res.imageUrl || res.localObjectUrl,
+        storagePath: res.imageStoragePath,
+        frame: DEFAULT_REFLECTION_IMAGE_FRAME,
+      });
+    } catch {
+      setComposerImgErr('تعذّر رفع الصورة، تأكد من الاتصال وحاول مجددًا.');
+    } finally {
+      setUploadingComposerImg(false);
+    }
+  };
+
+  const handleUploadModalImage = async (file: File) => {
+    if (!activeReflection || !canEdit || !isImageFile(file)) return;
+    setUploadingModalImg(true);
+    try {
+      const oldPath = editImageStoragePath;
+      const res = await uploadReflectionImage(activeReflection.id, file, uid);
+      if (oldPath && oldPath !== res.imageStoragePath) {
+        void deleteReflectionImageStorage(oldPath);
+      }
+      const nextFrame = sanitizeImageFrameSpec(
+        editImageFrame,
+        DEFAULT_REFLECTION_IMAGE_FRAME
+      );
+      setEditImageUrl(res.imageUrl || res.localObjectUrl);
+      setEditImageStoragePath(res.imageStoragePath);
+      setEditImageFrame(nextFrame);
+      setFrameEditorState({
+        mode: 'modal_edit',
+        srcUrl: res.imageUrl || res.localObjectUrl,
+        storagePath: res.imageStoragePath,
+        frame: nextFrame,
+      });
+    } finally {
+      setUploadingModalImg(false);
+    }
+  };
 
   const isEffectivelyPublic = (r: PersonalReflection) =>
     Boolean(r.isPublic) || (Boolean(r.categoryTag) && publicCatSet.has(r.categoryTag!));
@@ -173,12 +305,23 @@ export default function ReflectionsView({
       categoryTag: categoryTag.trim(),
       colorKey: composerColorKey === 'auto' ? undefined : composerColorKey,
       isPublic: composerIsPublic,
+      ...(composerImageUrl || composerImageStoragePath
+        ? {
+            imageUrl: composerImageUrl,
+            imageStoragePath: composerImageStoragePath,
+            imageFrame: composerImageFrame,
+          }
+        : {}),
     });
     setTitle('');
     setContent('');
     setMoodTag('تأمل');
     setComposerColorKey('auto');
     setComposerIsPublic(false);
+    setComposerImageUrl('');
+    setComposerImageStoragePath('');
+    setComposerImageFrame(DEFAULT_REFLECTION_IMAGE_FRAME);
+    setComposerImgErr(null);
     setComposerOpen(false);
   };
 
@@ -190,12 +333,24 @@ export default function ReflectionsView({
     setEditCategory(r.categoryTag || '');
     setEditColorKey(r.colorKey || 'auto');
     setEditIsPublic(Boolean(r.isPublic));
+    setEditImageUrl(r.imageUrl || '');
+    setEditImageStoragePath(r.imageStoragePath || '');
+    setEditImageFrame(
+      sanitizeImageFrameSpec(r.imageFrame, DEFAULT_REFLECTION_IMAGE_FRAME)
+    );
     setModalEditing(startInEdit && canEdit);
   };
 
   const handleSaveModalEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeReflection || !canEdit) return;
+    if (
+      activeReflection.imageStoragePath &&
+      activeReflection.imageStoragePath !== editImageStoragePath &&
+      !activeReflection.imageStoragePath.includes('gallery')
+    ) {
+      void deleteReflectionImageStorage(activeReflection.imageStoragePath);
+    }
     onUpdateReflection(activeReflection.id, {
       title: editTitle.trim() || 'خاطرة بلا عنوان',
       content: editContent.trim(),
@@ -203,6 +358,10 @@ export default function ReflectionsView({
       categoryTag: editCategory.trim(),
       colorKey: editColorKey === 'auto' ? undefined : editColorKey,
       isPublic: editIsPublic,
+      imageUrl: editImageUrl,
+      imageStoragePath: editImageStoragePath,
+      imageFrame:
+        editImageUrl || editImageStoragePath ? editImageFrame : undefined,
     });
     setModalEditing(false);
   };
@@ -519,6 +678,92 @@ export default function ReflectionsView({
             />
           </div>
 
+          {/* Framed Image Control in New Reflection Composer */}
+          <div className="bg-white/80 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold text-slate-700 inline-flex items-center gap-1.5">
+                <Images className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                <span>صورة داخل إطار مخصّص للخاطرة (اختياري)</span>
+              </span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <input
+                  ref={composerFileRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void handleUploadComposerImage(f);
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={uploadingComposerImg}
+                  onClick={() => composerFileRef.current?.click()}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+                >
+                  <ImagePlus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{uploadingComposerImg ? 'جاري الرفع...' : 'رفع صورة'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGalleryPickerTarget('composer')}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+                >
+                  <Images className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>من معرض الصور</span>
+                </button>
+              </div>
+            </div>
+
+            {composerImgErr && (
+              <p className="text-[11px] text-red-700">{composerImgErr}</p>
+            )}
+
+            {(composerImageUrl || composerImageStoragePath) && (
+              <div className="space-y-2">
+                <FramedImage
+                  srcUrl={composerImageUrl}
+                  storagePath={composerImageStoragePath}
+                  frame={composerImageFrame}
+                  defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
+                  alt="صورة الخاطرة"
+                  mode="card"
+                  className="rounded-lg border border-slate-200"
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFrameEditorState({
+                        mode: 'composer',
+                        srcUrl: composerImageUrl,
+                        storagePath: composerImageStoragePath,
+                        frame: composerImageFrame,
+                      })
+                    }
+                    className="inline-flex items-center gap-1 px-2.5 py-1 font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    <Crop className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>تحديد الجزء المعروض وتغيير الحجم</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setComposerImageUrl('');
+                      setComposerImageStoragePath('');
+                    }}
+                    className="inline-flex items-center gap-1 text-red-700 hover:underline cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" aria-hidden="true" />
+                    <span>إزالة الصورة</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center justify-end gap-2">
             <button
               type="button"
@@ -680,93 +925,129 @@ export default function ReflectionsView({
               <article
                 key={r.id}
                 onClick={() => openModalReader(r, false)}
-                className={`rounded-xl border p-4 flex flex-col justify-between gap-3 cursor-pointer transition-all hover:shadow-sm ${style.cardBg} ${
+                className={`rounded-xl border overflow-hidden flex flex-col justify-between cursor-pointer transition-all hover:shadow-sm ${style.cardBg} ${
                   r.pinned ? 'ring-1 ring-[#1E3A5F]/35 ' + style.cardBorder : style.cardBorder
                 }`}
               >
-                <div className="space-y-1.5">
-                  {/* Quiet inline metadata (Zero-Pill Rule) */}
-                  <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                    <span className={`font-semibold truncate ${style.accentText}`}>
-                      {r.moodTag}
-                      {r.categoryTag ? ` · ${r.categoryTag}` : ''}
-                    </span>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {isPub && (
-                        <Globe
-                          className="w-3.5 h-3.5 text-emerald-700"
-                          aria-label="منشورة على الموقع العام"
-                        />
-                      )}
-                      {r.pinned && (
-                        <Pin className={`w-3.5 h-3.5 ${style.accentText}`} aria-label="مثبتة" />
-                      )}
+                {(r.imageUrl || r.imageStoragePath) && (
+                  <FramedImage
+                    srcUrl={r.imageUrl}
+                    storagePath={r.imageStoragePath}
+                    frame={r.imageFrame}
+                    defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
+                    alt={r.title}
+                    mode="card"
+                    className="border-b border-black/5"
+                  />
+                )}
+
+                <div className="p-4 flex-1 flex flex-col justify-between gap-3">
+                  <div className="space-y-1.5">
+                    {/* Quiet inline metadata (Zero-Pill Rule) */}
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                      <span className={`font-semibold truncate ${style.accentText}`}>
+                        {r.moodTag}
+                        {r.categoryTag ? ` · ${r.categoryTag}` : ''}
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {isPub && (
+                          <Globe
+                            className="w-3.5 h-3.5 text-emerald-700"
+                            aria-label="منشورة على الموقع العام"
+                          />
+                        )}
+                        {r.pinned && (
+                          <Pin className={`w-3.5 h-3.5 ${style.accentText}`} aria-label="مثبتة" />
+                        )}
+                      </div>
                     </div>
+
+                    <h3 className="font-editorial text-base font-bold text-slate-900 leading-snug line-clamp-1">
+                      <BidiText text={r.title} />
+                    </h3>
+
+                    <p className="text-xs text-slate-700 leading-relaxed line-clamp-4 whitespace-pre-wrap">
+                      <BidiText text={r.content} />
+                    </p>
                   </div>
 
-                  <h3 className="font-editorial text-base font-bold text-slate-900 leading-snug line-clamp-1">
-                    <BidiText text={r.title} />
-                  </h3>
-
-                  <p className="text-xs text-slate-700 leading-relaxed line-clamp-4 whitespace-pre-wrap">
-                    <BidiText text={r.content} />
-                  </p>
-                </div>
-
-                {/* Compact Footer Bar */}
-                <div
-                  className="pt-2 border-t border-black/5 flex items-center justify-between gap-2 text-[11px] text-slate-500"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <span className="truncate tabular-nums">{r.createdAtLabel}</span>
-                  {canEdit && (
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onUpdateReflection(r.id, { isPublic: !r.isPublic })
-                        }
-                        title={
-                          pubByCard
-                            ? 'منشورة — اضغط لجعلها خاصة'
-                            : pubByCat
-                            ? 'تظهر تلقائيًا لأن تصنيفها عام'
-                            : 'خاصة — اضغط لنشرها على الموقع العام'
-                        }
-                        className={`p-1 rounded hover:bg-white/70 cursor-pointer ${
-                          isPub ? 'text-emerald-700' : 'text-slate-400 hover:text-[#1E3A5F]'
-                        }`}
-                      >
-                        {isPub ? <Globe className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onUpdateReflection(r.id, { pinned: !r.pinned })}
-                        aria-label={r.pinned ? 'إلغاء التثبيت' : 'تثبيت'}
-                        className={`p-1 rounded hover:bg-white/70 cursor-pointer ${
-                          r.pinned ? style.accentText : 'text-slate-400 hover:text-[#1E3A5F]'
-                        }`}
-                      >
-                        <Pin className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openModalReader(r, true)}
-                        aria-label="تعديل الخاطرة"
-                        className="p-1 rounded text-slate-400 hover:text-[#1E3A5F] hover:bg-white/70 cursor-pointer"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteTarget(r)}
-                        aria-label="حذف الخاطرة"
-                        className="p-1 rounded text-slate-400 hover:text-red-700 hover:bg-white/70 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
+                  {/* Compact Footer Bar */}
+                  <div
+                    className="pt-2 border-t border-black/5 flex items-center justify-between gap-2 text-[11px] text-slate-500"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span className="truncate tabular-nums">{r.createdAtLabel}</span>
+                    {canEdit && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        {(r.imageUrl || r.imageStoragePath) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFrameEditorState({
+                                mode: 'direct_reflection',
+                                reflectionId: r.id,
+                                srcUrl: r.imageUrl,
+                                storagePath: r.imageStoragePath,
+                                frame: sanitizeImageFrameSpec(
+                                  r.imageFrame,
+                                  DEFAULT_REFLECTION_IMAGE_FRAME
+                                ),
+                              })
+                            }
+                            title="تعديل جزء الصورة وحجم الفريم"
+                            aria-label="تعديل جزء الصورة وحجم الفريم"
+                            className="p-1 rounded text-slate-400 hover:text-[#1E3A5F] hover:bg-white/70 cursor-pointer"
+                          >
+                            <Crop className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateReflection(r.id, { isPublic: !r.isPublic })
+                          }
+                          title={
+                            pubByCard
+                              ? 'منشورة — اضغط لجعلها خاصة'
+                              : pubByCat
+                              ? 'تظهر تلقائيًا لأن تصنيفها عام'
+                              : 'خاصة — اضغط لنشرها على الموقع العام'
+                          }
+                          className={`p-1 rounded hover:bg-white/70 cursor-pointer ${
+                            isPub ? 'text-emerald-700' : 'text-slate-400 hover:text-[#1E3A5F]'
+                          }`}
+                        >
+                          {isPub ? <Globe className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onUpdateReflection(r.id, { pinned: !r.pinned })}
+                          aria-label={r.pinned ? 'إلغاء التثبيت' : 'تثبيت'}
+                          className={`p-1 rounded hover:bg-white/70 cursor-pointer ${
+                            r.pinned ? style.accentText : 'text-slate-400 hover:text-[#1E3A5F]'
+                          }`}
+                        >
+                          <Pin className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openModalReader(r, true)}
+                          aria-label="تعديل الخاطرة"
+                          className="p-1 rounded text-slate-400 hover:text-[#1E3A5F] hover:bg-white/70 cursor-pointer"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(r)}
+                          aria-label="حذف الخاطرة"
+                          className="p-1 rounded text-slate-400 hover:text-red-700 hover:bg-white/70 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </article>
             );
@@ -904,6 +1185,88 @@ export default function ReflectionsView({
                         <span>نشر هذه الخاطرة على الموقع العام</span>
                       </label>
 
+                      {/* Modal Edit Image & Frame Controls */}
+                      <div className="bg-white/85 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-slate-700 inline-flex items-center gap-1.5">
+                            <Images className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                            <span>صورة الخاطرة وضبط الفريم</span>
+                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <input
+                              ref={modalFileRef}
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) void handleUploadModalImage(f);
+                                e.target.value = '';
+                              }}
+                            />
+                            <button
+                              type="button"
+                              disabled={uploadingModalImg}
+                              onClick={() => modalFileRef.current?.click()}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+                            >
+                              <ImagePlus className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>{uploadingModalImg ? 'جاري الرفع...' : 'رفع صورة جديدة'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setGalleryPickerTarget('modal')}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+                            >
+                              <Images className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>من معرض الصور</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {(editImageUrl || editImageStoragePath) && (
+                          <div className="space-y-2">
+                            <FramedImage
+                              srcUrl={editImageUrl}
+                              storagePath={editImageStoragePath}
+                              frame={editImageFrame}
+                              defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
+                              alt="معاينة الصورة"
+                              mode="modal"
+                              className="rounded-lg border border-slate-200"
+                            />
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setFrameEditorState({
+                                    mode: 'modal_edit',
+                                    srcUrl: editImageUrl,
+                                    storagePath: editImageStoragePath,
+                                    frame: editImageFrame,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2.5 py-1 font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                              >
+                                <Crop className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>ضبط الجزء المعروض وحجم الفريم</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditImageUrl('');
+                                  setEditImageStoragePath('');
+                                }}
+                                className="inline-flex items-center gap-1 text-red-700 hover:underline cursor-pointer"
+                              >
+                                <Trash2 className="w-3 h-3" aria-hidden="true" />
+                                <span>حذف الصورة</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
                       <textarea
                         rows={7}
                         value={editContent}
@@ -930,6 +1293,43 @@ export default function ReflectionsView({
                     </form>
                   ) : (
                     <>
+                      {(activeReflection.imageUrl ||
+                        activeReflection.imageStoragePath) && (
+                        <div className="space-y-2">
+                          <FramedImage
+                            srcUrl={activeReflection.imageUrl}
+                            storagePath={activeReflection.imageStoragePath}
+                            frame={activeReflection.imageFrame}
+                            defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
+                            alt={activeReflection.title}
+                            mode="modal"
+                            className="rounded-xl border border-black/10"
+                          />
+                          {canEdit && (
+                            <div className="flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setFrameEditorState({
+                                    mode: 'direct_reflection',
+                                    reflectionId: activeReflection.id,
+                                    srcUrl: activeReflection.imageUrl,
+                                    storagePath: activeReflection.imageStoragePath,
+                                    frame: sanitizeImageFrameSpec(
+                                      activeReflection.imageFrame,
+                                      DEFAULT_REFLECTION_IMAGE_FRAME
+                                    ),
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-[#1E3A5F] bg-white/80 border border-slate-200 hover:bg-white rounded-lg cursor-pointer"
+                              >
+                                <Crop className="w-3 h-3" aria-hidden="true" />
+                                <span>تعديل فريم وحجم الصورة</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <h2 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900 leading-snug">
                         <BidiText text={activeReflection.title} />
                       </h2>
@@ -940,7 +1340,7 @@ export default function ReflectionsView({
                         <ImageAttachmentGallery
                           uid={uid}
                           scopeKey={`reflection:${activeReflection.id}`}
-                          title="صور أو لقطات مرفقة"
+                          title="صور أو لقطات إضافية"
                           canEdit={canEdit}
                           onRequireAuth={onRequireAuth}
                           compact
@@ -956,6 +1356,128 @@ export default function ReflectionsView({
         </div>
       )}
 
+      {/* Gallery Image Picker Modal for Reflections */}
+      {galleryPickerTarget && (
+        <div
+          className="fixed inset-0 z-[75] bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setGalleryPickerTarget(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-2xl max-h-[82dvh] flex flex-col bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
+          >
+            <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <span className="text-sm font-bold text-slate-900">
+                اختر صورة من معرض الصور
+              </span>
+              <button
+                type="button"
+                onClick={() => setGalleryPickerTarget(null)}
+                className="p-1 text-slate-500 hover:text-slate-900 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto">
+              {loadingGalleryPicker ? (
+                <p className="text-xs text-slate-500 text-center py-8">
+                  جاري تحميل صور المعرض...
+                </p>
+              ) : galleryPickerItems.length === 0 ? (
+                <p className="text-xs text-slate-500 text-center py-8">
+                  لا توجد صور في معرض الصور بعد. يمكنك رفع صورة مباشرة أو إضافتها في تبويب «معرض الصور».
+                </p>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {galleryPickerItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        if (galleryPickerTarget === 'composer') {
+                          setComposerImageUrl(item.url);
+                          setComposerImageStoragePath(item.storagePath || '');
+                          setComposerImageFrame(DEFAULT_REFLECTION_IMAGE_FRAME);
+                          setFrameEditorState({
+                            mode: 'composer',
+                            srcUrl: item.url,
+                            storagePath: item.storagePath,
+                            frame: DEFAULT_REFLECTION_IMAGE_FRAME,
+                          });
+                        } else {
+                          const nextFrame = sanitizeImageFrameSpec(
+                            editImageFrame,
+                            DEFAULT_REFLECTION_IMAGE_FRAME
+                          );
+                          setEditImageUrl(item.url);
+                          setEditImageStoragePath(item.storagePath || '');
+                          setEditImageFrame(nextFrame);
+                          setFrameEditorState({
+                            mode: 'modal_edit',
+                            srcUrl: item.url,
+                            storagePath: item.storagePath,
+                            frame: nextFrame,
+                          });
+                        }
+                        setGalleryPickerTarget(null);
+                      }}
+                      className="text-right bg-slate-50 border border-slate-200 hover:border-[#1E3A5F] rounded-xl overflow-hidden cursor-pointer"
+                    >
+                      <FramedImage
+                        srcUrl={item.url}
+                        storagePath={item.storagePath}
+                        alt={item.name}
+                        mode="card"
+                        frame={{
+                          aspect: '4:3',
+                          fitMode: 'cover',
+                          zoom: 1,
+                          offsetX: 50,
+                          offsetY: 50,
+                          sizePreset: 'xs',
+                        }}
+                      />
+                      <p className="px-2 py-1.5 text-[11px] font-medium text-slate-700 truncate">
+                        {item.name}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Interactive Crop / Frame / Resize Modal */}
+      {frameEditorState && (
+        <ImageFrameEditorModal
+          open={Boolean(frameEditorState)}
+          srcUrl={frameEditorState.srcUrl}
+          storagePath={frameEditorState.storagePath}
+          title="تحديد جزء الصورة وحجم الفريم"
+          initialFrame={frameEditorState.frame}
+          defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
+          onSave={(nextFrame) => {
+            if (frameEditorState.mode === 'composer') {
+              setComposerImageFrame(nextFrame);
+            } else if (frameEditorState.mode === 'modal_edit') {
+              setEditImageFrame(nextFrame);
+            } else if (
+              frameEditorState.mode === 'direct_reflection' &&
+              frameEditorState.reflectionId
+            ) {
+              onUpdateReflection(frameEditorState.reflectionId, {
+                imageFrame: nextFrame,
+              });
+            }
+          }}
+          onClose={() => setFrameEditorState(null)}
+        />
+      )}
+
       <ConfirmDialog
         open={Boolean(deleteTarget)}
         title="حذف الخاطرة"
@@ -963,6 +1485,12 @@ export default function ReflectionsView({
         confirmLabel="حذف الخاطرة"
         onConfirm={() => {
           if (deleteTarget) {
+            if (
+              deleteTarget.imageStoragePath &&
+              !deleteTarget.imageStoragePath.includes('gallery')
+            ) {
+              void deleteReflectionImageStorage(deleteTarget.imageStoragePath);
+            }
             onDeleteReflection(deleteTarget.id);
             if (activeReflectionId === deleteTarget.id) {
               setActiveReflectionId(null);

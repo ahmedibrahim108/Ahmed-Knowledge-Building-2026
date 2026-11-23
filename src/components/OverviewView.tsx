@@ -9,6 +9,7 @@ import {
   Eye,
   Feather,
   GraduationCap,
+  Images,
   ListTodo,
   LogIn,
   NotebookPen,
@@ -24,6 +25,7 @@ import {
   CalendarEvent,
   CustomCategory,
   DEFAULT_HUB_CATEGORIES,
+  DEFAULT_REFLECTION_IMAGE_FRAME,
   DentalCase,
   DomainId,
   DomainInfo,
@@ -51,6 +53,7 @@ import {
 } from '../data/curriculumData';
 import type { CloudAttachmentItem } from '../services/supabaseSync';
 import BidiText from './BidiText';
+import { FramedImage } from './FramedImage';
 import { ActiveTab } from './Header';
 import type { ActivePdfTarget } from './PDFViewerModal';
 import ProgressCharts from './ProgressCharts';
@@ -342,6 +345,15 @@ export default function OverviewView({
               >
                 <NotebookPen className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
                 <span>دفتر التلخيص</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigateTab('gallery')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-medium text-slate-700 bg-[#F7F8FA] border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <Images className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <span>معرض الصور</span>
               </button>
 
               {onPreviewPublicSite && (
@@ -675,23 +687,39 @@ export default function OverviewView({
                     key={r.id}
                     type="button"
                     onClick={() => onNavigateTab('reflections')}
-                    className={`w-full text-right p-3.5 rounded-xl border space-y-1 transition-colors cursor-pointer ${cardStyle.cardBg} ${cardStyle.cardBorder}`}
+                    className={`w-full text-right rounded-xl border overflow-hidden transition-colors cursor-pointer ${cardStyle.cardBg} ${cardStyle.cardBorder}`}
                   >
-                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                      <span className={`font-semibold ${cardStyle.accentText}`}>
-                        {r.moodTag}
-                        {r.categoryTag ? ` · ${r.categoryTag}` : ''}
-                      </span>
-                      {r.pinned && (
-                        <Pin className={`w-3 h-3 ${cardStyle.accentText}`} aria-hidden="true" />
-                      )}
+                    {(r.imageUrl || r.imageStoragePath) && (
+                      <FramedImage
+                        srcUrl={r.imageUrl}
+                        storagePath={r.imageStoragePath}
+                        frame={r.imageFrame}
+                        defaultFrame={{
+                          ...DEFAULT_REFLECTION_IMAGE_FRAME,
+                          customHeightPx: 92,
+                        }}
+                        alt={r.title}
+                        mode="card"
+                        className="border-b border-black/5"
+                      />
+                    )}
+                    <div className="p-3.5 space-y-1">
+                      <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                        <span className={`font-semibold ${cardStyle.accentText}`}>
+                          {r.moodTag}
+                          {r.categoryTag ? ` · ${r.categoryTag}` : ''}
+                        </span>
+                        {r.pinned && (
+                          <Pin className={`w-3 h-3 ${cardStyle.accentText}`} aria-hidden="true" />
+                        )}
+                      </div>
+                      <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">
+                        <BidiText text={r.title} />
+                      </p>
+                      <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                        <BidiText text={r.content} />
+                      </p>
                     </div>
-                    <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">
-                      <BidiText text={r.title} />
-                    </p>
-                    <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                      <BidiText text={r.content} />
-                    </p>
                   </button>
                 );
               })}

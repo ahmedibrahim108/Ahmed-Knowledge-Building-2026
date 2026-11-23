@@ -12,6 +12,7 @@ import {
   DEFAULT_HUB_CATEGORIES,
   DEFAULT_PUBLIC_SITE_CONFIG,
   DEFAULT_REFLECTION_CATEGORIES,
+  DEFAULT_REFLECTION_IMAGE_FRAME,
   DEFAULT_USER_PREFERENCES,
   DEFAULT_WEEKLY_RHYTHM,
   DentalCase,
@@ -57,6 +58,7 @@ import {
   WeeklyMeetingException,
   WeeklyMeetingFollowUp,
   WeeklyRhythmItem,
+  sanitizeImageFrameSpec,
 } from '../data/curriculumData';
 import {
   ensureSupabaseRealtimeAuth,
@@ -661,6 +663,11 @@ export function buildReflectionRow(uid: string, r: PersonalReflection) {
     category_tag: clip(r.categoryTag, 80),
     color_key: sanitizeReflectionColor(r.colorKey),
     is_public: Boolean(r.isPublic),
+    image_url: clip(r.imageUrl || '', 2000),
+    image_storage_path: clip(r.imageStoragePath || '', 500),
+    image_frame: r.imageFrame
+      ? sanitizeImageFrameSpec(r.imageFrame, DEFAULT_REFLECTION_IMAGE_FRAME)
+      : {},
     pinned: Boolean(r.pinned),
     created_at_label: clip(r.createdAtLabel, 80),
     created_at_ms: Number.isFinite(rawMs) ? Math.round(rawMs) : 0,
@@ -1144,6 +1151,11 @@ function mapReflectionRow(raw: Record<string, unknown>): PersonalReflection {
     moodRaw === 'فكرة' || moodRaw === 'امتنان' || moodRaw === 'هدف'
       ? moodRaw
       : 'تأمل';
+  const rawFrame = raw.image_frame;
+  const hasFrame =
+    rawFrame &&
+    typeof rawFrame === 'object' &&
+    Object.keys(rawFrame as Record<string, unknown>).length > 0;
   return {
     id: String(raw.id),
     title: String(raw.title ?? ''),
@@ -1152,6 +1164,13 @@ function mapReflectionRow(raw: Record<string, unknown>): PersonalReflection {
     categoryTag: raw.category_tag ? String(raw.category_tag) : '',
     colorKey: sanitizeReflectionColor(raw.color_key),
     isPublic: Boolean(raw.is_public),
+    imageUrl: raw.image_url ? String(raw.image_url) : undefined,
+    imageStoragePath: raw.image_storage_path
+      ? String(raw.image_storage_path)
+      : undefined,
+    imageFrame: hasFrame
+      ? sanitizeImageFrameSpec(rawFrame, DEFAULT_REFLECTION_IMAGE_FRAME)
+      : undefined,
     pinned: Boolean(raw.pinned),
     createdAtLabel: String(raw.created_at_label ?? ''),
     createdAtMs: Number(raw.created_at_ms ?? 0),
@@ -2232,7 +2251,14 @@ const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
   book_notes: ['resources', 'sort_order', 'created_at_ms'],
   unified_tasks: ['linked_course_id', 'linked_path_id', 'linked_book_id'],
   user_preferences: ['weekly_rhythm', 'reflection_categories', 'custom_reading_modes'],
-  reflections: ['category_tag', 'color_key', 'is_public'],
+  reflections: [
+    'category_tag',
+    'color_key',
+    'is_public',
+    'image_url',
+    'image_storage_path',
+    'image_frame',
+  ],
   public_site_config: ['public_reflection_categories'],
 };
 

@@ -1,3 +1,8 @@
+import {
+  DEFAULT_IMAGE_FRAME_SPEC,
+  ImageFrameSpec,
+  sanitizeImageFrameSpec,
+} from '../data/curriculumData';
 import { auth } from '../firebase';
 import {
   ensureSupabaseRealtimeAuth,
@@ -15,6 +20,9 @@ export interface StoredImageRecord {
   width?: number;
   height?: number;
   caption: string;
+  frameConfig?: ImageFrameSpec;
+  categoryLabel?: string;
+  sortOrder?: number;
   createdAtMs: number;
   blob?: Blob;
   dataUrl?: string;
@@ -348,25 +356,47 @@ async function uploadImageRecordToCloud(
         // Signed URL optional; download() works everywhere
       }
 
-      const { error: rowErr } = await client.from('image_attachments').upsert(
-        {
-          owner_id: uid,
-          id: safeId,
-          scope_key: record.scopeKey.slice(0, 128),
-          file_name: (record.name || 'image.jpg').slice(0, 200),
-          mime_type: (record.mimeType || 'image/jpeg').slice(0, 80),
-          size_bytes: Math.max(0, Math.round((record.sizeKb || 1) * 1024)),
-          width: Math.max(0, Math.round(record.width ?? 0)),
-          height: Math.max(0, Math.round(record.height ?? 0)),
-          caption: (record.caption || '').slice(0, 500),
-          storage_bucket: USER_IMAGES_BUCKET,
-          storage_path: storagePath,
-          download_url: downloadUrl,
-          created_at_ms: Math.max(0, Math.round(record.createdAtMs || Date.now())),
-        },
-        { onConflict: 'owner_id,id' }
-      );
-      if (rowErr) throw rowErr;
+      const baseRow: Record<string, unknown> = {
+        owner_id: uid,
+        id: safeId,
+        scope_key: record.scopeKey.slice(0, 128),
+        file_name: (record.name || 'image.jpg').slice(0, 200),
+        mime_type: (record.mimeType || 'image/jpeg').slice(0, 80),
+        size_bytes: Math.max(0, Math.round((record.sizeKb || 1) * 1024)),
+        width: Math.max(0, Math.round(record.width ?? 0)),
+        height: Math.max(0, Math.round(record.height ?? 0)),
+        caption: (record.caption || '').slice(0, 500),
+        storage_bucket: USER_IMAGES_BUCKET,
+        storage_path: storagePath,
+        download_url: downloadUrl,
+        created_at_ms: Math.max(0, Math.round(record.createdAtMs || Date.now())),
+      };
+      const extendedRow: Record<string, unknown> = {
+        ...baseRow,
+        frame_config: record.frameConfig ?? DEFAULT_IMAGE_FRAME_SPEC,
+        category_label: (record.categoryLabel || '').slice(0, 80),
+        sort_order: Math.max(0, Math.round(record.sortOrder ?? 0)),
+      };
+
+      const { error: rowErr } = await client
+        .from('image_attachments')
+        .upsert(extendedRow, { onConflict: 'owner_id,id' });
+      if (rowErr) {
+        const msg = `${rowErr.code || ''} ${rowErr.message || ''}`.toLowerCase();
+        if (
+          rowErr.code === '42703' ||
+          rowErr.code === 'PGRST204' ||
+          msg.includes('column') ||
+          msg.includes('schema cache')
+        ) {
+          const { error: fallbackErr } = await client
+            .from('image_attachments')
+            .upsert(baseRow, { onConflict: 'owner_id,id' });
+          if (fallbackErr) throw fallbackErr;
+        } else {
+          throw rowErr;
+        }
+      }
     });
   }
 
@@ -384,7 +414,11 @@ async function uploadImageRecordToCloud(
 export async function compressAndSaveImages(
   scopeKey: string,
   files: FileList | File[],
-  uidOverride?: string
+  uidOverride?: string,
+  defaults?: {
+    frameConfig?: ImageFrameSpec;
+    categoryLabel?: string;
+  }
 ): Promise<StoredImageRecord[]> {
   const fileArray = Array.from(files).filter(isImageFile);
   if (fileArray.length === 0) return [];
@@ -406,6 +440,11 @@ export async function compressAndSaveImages(
       width,
       height,
       caption: '',
+      frameConfig: defaults?.frameConfig
+        ? sanitizeImageFrameSpec(defaults.frameConfig)
+        : { ...DEFAULT_IMAGE_FRAME_SPEC },
+      categoryLabel: defaults?.categoryLabel || '',
+      sortOrder: 0,
       createdAtMs: baseNow + i,
       blob,
       dataUrl,
@@ -472,7 +511,14 @@ async function fetchCloudImagesForScope(
       name: String(raw.file_name || 'image.jpg'),
       mimeType: String(raw.mime_type || 'image/jpeg'),
       sizeKb: Math.max(1, Math.round(Number(raw.size_bytes ?? 0) / 1024)),
+      width: typeof raw.width === 'number' ? raw.width : undefined,
+      height: typeof raw.height === 'number' ? raw.height : undefined,
       caption: String(raw.caption || ''),
+      frameConfig: raw.frame_config
+        ? sanitizeImageFrameSpec(raw.frame_config)
+        : undefined,
+      categoryLabel: raw.category_label ? String(raw.category_label) : '',
+      sortOrder: typeof raw.sort_order === 'number' ? raw.sort_order : 0,
       createdAtMs: Number(raw.created_at_ms ?? 0),
       storagePath,
       downloadUrl:
@@ -820,6 +866,191 @@ export async function uploadDentalCaseCover(
     coverStoragePath,
     coverDataUrl: '',
   };
+}
+
+export async function updateStoredImageMetadata(
+  imageId: string,
+  updates: {
+    caption?: string;
+    frameConfig?: ImageFrameSpec;
+    categoryLabel?: string;
+    sortOrder?: number;
+  },
+  uidOverride?: string
+): Promise<void> {
+  const uid = uidOverride || auth?.currentUser?.uid;
+
+  try {
+    const idb = await openImagesDb();
+    const existing = await getLocalImageById(imageId);
+    if (existing) {
+      const tx = idb.transaction(STORE_NAME, 'readwrite');
+      tx.objectStore(STORE_NAME).put({
+        ...existing,
+        ...(updates.caption !== undefined ? { caption: updates.caption } : {}),
+        ...(updates.frameConfig !== undefined
+          ? { frameConfig: sanitizeImageFrameSpec(updates.frameConfig) }
+          : {}),
+        ...(updates.categoryLabel !== undefined
+          ? { categoryLabel: updates.categoryLabel }
+          : {}),
+        ...(updates.sortOrder !== undefined
+          ? { sortOrder: updates.sortOrder }
+          : {}),
+      });
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+  } catch {
+    // non-fatal
+  }
+
+  if (uid && isSupabaseConfigured && supabase) {
+    try {
+      const patch: Record<string, unknown> = {};
+      if (updates.caption !== undefined) {
+        patch.caption = updates.caption.slice(0, 500);
+      }
+      if (updates.frameConfig !== undefined) {
+        patch.frame_config = sanitizeImageFrameSpec(updates.frameConfig);
+      }
+      if (updates.categoryLabel !== undefined) {
+        patch.category_label = updates.categoryLabel.slice(0, 80);
+      }
+      if (updates.sortOrder !== undefined) {
+        patch.sort_order = Math.max(0, Math.round(updates.sortOrder));
+      }
+      if (Object.keys(patch).length === 0) return;
+
+      await withFirebaseTokenRetry(async (client) => {
+        const { error } = await client
+          .from('image_attachments')
+          .update(patch)
+          .eq('owner_id', uid)
+          .eq('id', sanitizeImageId(imageId));
+        if (error) {
+          const msg = `${error.code || ''} ${error.message || ''}`.toLowerCase();
+          if (
+            (error.code === '42703' ||
+              error.code === 'PGRST204' ||
+              msg.includes('column') ||
+              msg.includes('schema cache')) &&
+            updates.caption !== undefined
+          ) {
+            await client
+              .from('image_attachments')
+              .update({ caption: updates.caption.slice(0, 500) })
+              .eq('owner_id', uid)
+              .eq('id', sanitizeImageId(imageId));
+          }
+        }
+      });
+    } catch {
+      // non-fatal
+    }
+  }
+}
+
+export async function resolveStorageImageUrl(
+  storagePath?: string
+): Promise<{ url: string; isObjectUrl: boolean } | null> {
+  if (
+    !storagePath ||
+    storagePath.startsWith('users/') ||
+    !isSupabaseConfigured ||
+    !supabase
+  ) {
+    return null;
+  }
+  try {
+    const blob = await withFirebaseTokenRetry(async (client) => {
+      const { data, error } = await client.storage
+        .from(USER_IMAGES_BUCKET)
+        .download(storagePath);
+      if (error || !data) throw error || new Error('Empty image download');
+      return data;
+    });
+    if (blob) {
+      return { url: URL.createObjectURL(blob), isObjectUrl: true };
+    }
+  } catch {
+    try {
+      const { data: signed } = await supabase.storage
+        .from(USER_IMAGES_BUCKET)
+        .createSignedUrl(storagePath, 3600);
+      if (signed?.signedUrl) {
+        return { url: signed.signedUrl, isObjectUrl: false };
+      }
+    } catch {
+      // Ignore
+    }
+  }
+  return null;
+}
+
+export async function uploadReflectionImage(
+  reflectionId: string,
+  file: File,
+  uidOverride?: string
+): Promise<{
+  imageUrl: string;
+  imageStoragePath: string;
+  localObjectUrl: string;
+}> {
+  const uid = uidOverride || auth?.currentUser?.uid;
+  const compressed = await compressImageFileForCloud(file);
+  const localObjectUrl = URL.createObjectURL(compressed.blob);
+  let imageStoragePath = '';
+  let imageUrl = '';
+
+  if (uid && isSupabaseConfigured && supabase) {
+    const safeId = sanitizeImageId(reflectionId);
+    const safeName = sanitizeStorageImageName(file.name || 'reflection.jpg');
+    const storagePath = `${uid}/images/reflection_cover_${safeId}/${safeName}`;
+    await withFirebaseTokenRetry(async (client) => {
+      const { error: uploadErr } = await client.storage
+        .from(USER_IMAGES_BUCKET)
+        .upload(storagePath, compressed.blob, {
+          contentType: compressed.mimeType || 'image/jpeg',
+          upsert: true,
+        });
+      if (uploadErr) throw uploadErr;
+
+      const { data: signed } = await client.storage
+        .from(USER_IMAGES_BUCKET)
+        .createSignedUrl(storagePath, 3600);
+      imageStoragePath = storagePath;
+      imageUrl = signed?.signedUrl || '';
+    });
+  }
+
+  return {
+    imageUrl: imageUrl || compressed.dataUrl || localObjectUrl,
+    imageStoragePath,
+    localObjectUrl,
+  };
+}
+
+export async function deleteReflectionImageStorage(
+  storagePath?: string
+): Promise<void> {
+  if (
+    !storagePath ||
+    storagePath.startsWith('users/') ||
+    !isSupabaseConfigured ||
+    !supabase
+  ) {
+    return;
+  }
+  try {
+    await withFirebaseTokenRetry(async (client) =>
+      client.storage.from(USER_IMAGES_BUCKET).remove([storagePath])
+    );
+  } catch {
+    // Non-fatal storage cleanup
+  }
 }
 
 export async function deleteDentalCaseCoverStorage(

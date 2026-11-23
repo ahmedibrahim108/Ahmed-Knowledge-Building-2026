@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import {
   BookNote,
+  DEFAULT_REFLECTION_IMAGE_FRAME,
   GrantedWorkspaceData,
   HERO_IMAGE_PATH,
   LearningPath,
@@ -34,6 +35,7 @@ import {
 import type { UserProfileRecord } from '../services/supabaseSync';
 import { ensureRichHtml, renderSafeBidiHtml } from '../utils/richText';
 import BidiText from './BidiText';
+import { FramedImage } from './FramedImage';
 import LearningObjectivesPanel from './LearningObjectivesPanel';
 import type { ActivePdfTarget } from './PDFViewerModal';
 
@@ -365,18 +367,31 @@ export default function PublicHomeView({
                     <article
                       key={r.id}
                       onClick={() => setDetailModal({ type: 'reflection', item: r })}
-                      className={`p-4 rounded-xl border space-y-1.5 cursor-pointer ${style.cardBg} ${style.cardBorder}`}
+                      className={`rounded-xl border overflow-hidden cursor-pointer ${style.cardBg} ${style.cardBorder}`}
                     >
-                      <p className={`text-[11px] font-semibold ${style.accentText}`}>
-                        {r.moodTag}
-                        {r.categoryTag ? ` · ${r.categoryTag}` : ''}
-                      </p>
-                      <h4 className="font-editorial text-base font-bold text-slate-900 line-clamp-1">
-                        <BidiText text={r.title} />
-                      </h4>
-                      <p className="text-xs text-slate-700 line-clamp-3 leading-relaxed">
-                        <BidiText text={r.content} />
-                      </p>
+                      {(r.imageUrl || r.imageStoragePath) && (
+                        <FramedImage
+                          srcUrl={r.imageUrl}
+                          storagePath={r.imageStoragePath}
+                          frame={r.imageFrame}
+                          defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
+                          alt={r.title}
+                          mode="card"
+                          className="border-b border-black/5"
+                        />
+                      )}
+                      <div className="p-4 space-y-1.5">
+                        <p className={`text-[11px] font-semibold ${style.accentText}`}>
+                          {r.moodTag}
+                          {r.categoryTag ? ` · ${r.categoryTag}` : ''}
+                        </p>
+                        <h4 className="font-editorial text-base font-bold text-slate-900 line-clamp-1">
+                          <BidiText text={r.title} />
+                        </h4>
+                        <p className="text-xs text-slate-700 line-clamp-3 leading-relaxed">
+                          <BidiText text={r.content} />
+                        </p>
+                      </div>
                     </article>
                   );
                 })}
@@ -642,18 +657,31 @@ export default function PublicHomeView({
                 <article
                   key={r.id}
                   onClick={() => setDetailModal({ type: 'reflection', item: r })}
-                  className={`rounded-xl border p-4 space-y-2 cursor-pointer transition-all hover:shadow-sm ${style.cardBg} ${style.cardBorder}`}
+                  className={`rounded-xl border overflow-hidden cursor-pointer transition-all hover:shadow-sm ${style.cardBg} ${style.cardBorder}`}
                 >
-                  <p className={`text-[11px] font-semibold ${style.accentText}`}>
-                    {r.moodTag}
-                    {r.categoryTag ? ` · ${r.categoryTag}` : ''}
-                  </p>
-                  <h3 className="font-editorial text-base font-bold text-slate-900 line-clamp-1">
-                    <BidiText text={r.title} />
-                  </h3>
-                  <p className="text-xs text-slate-700 leading-relaxed line-clamp-4 whitespace-pre-wrap">
-                    <BidiText text={r.content} />
-                  </p>
+                  {(r.imageUrl || r.imageStoragePath) && (
+                    <FramedImage
+                      srcUrl={r.imageUrl}
+                      storagePath={r.imageStoragePath}
+                      frame={r.imageFrame}
+                      defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
+                      alt={r.title}
+                      mode="card"
+                      className="border-b border-black/5"
+                    />
+                  )}
+                  <div className="p-4 space-y-2">
+                    <p className={`text-[11px] font-semibold ${style.accentText}`}>
+                      {r.moodTag}
+                      {r.categoryTag ? ` · ${r.categoryTag}` : ''}
+                    </p>
+                    <h3 className="font-editorial text-base font-bold text-slate-900 line-clamp-1">
+                      <BidiText text={r.title} />
+                    </h3>
+                    <p className="text-xs text-slate-700 leading-relaxed line-clamp-4 whitespace-pre-wrap">
+                      <BidiText text={r.content} />
+                    </p>
+                  </div>
                 </article>
               );
             })}
@@ -967,6 +995,18 @@ export default function PublicHomeView({
 
               {detailModal.type === 'reflection' && (
                 <div className="space-y-4">
+                  {(detailModal.item.imageUrl ||
+                    detailModal.item.imageStoragePath) && (
+                    <FramedImage
+                      srcUrl={detailModal.item.imageUrl}
+                      storagePath={detailModal.item.imageStoragePath}
+                      frame={detailModal.item.imageFrame}
+                      defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
+                      alt={detailModal.item.title}
+                      mode="modal"
+                      className="rounded-xl border border-slate-200"
+                    />
+                  )}
                   <div className="space-y-1">
                     <p className="text-xs font-semibold text-[#1E3A5F]">
                       {detailModal.item.moodTag}
