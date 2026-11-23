@@ -32,6 +32,7 @@ import {
   ReadingItemType,
   ReadingLibraryItem,
   ReadingMode,
+  ReadingModeMeta,
   UnifiedTask,
   getHubMeta,
   getTodayDateKey,
@@ -76,6 +77,8 @@ interface LibraryViewProps {
   onOpenCalendar?: () => void;
   onOpenTasksTab?: () => void;
   onOpenPdf: (target: ActivePdfTarget) => void;
+  customReadingModes?: ReadingModeMeta[];
+  onUpdateReadingModes?: (nextModes: ReadingModeMeta[]) => void;
 }
 
 const STATUS_AR: Record<ReadingItemStatus, string> = {
@@ -105,7 +108,13 @@ export default function LibraryView({
   onOpenCalendar,
   onOpenTasksTab,
   onOpenPdf,
+  customReadingModes,
+  onUpdateReadingModes,
 }: LibraryViewProps) {
+  const readingModesList =
+    customReadingModes && customReadingModes.length > 0
+      ? customReadingModes
+      : READING_MODES_META;
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [modeFilter, setModeFilter] = useState<ReadingMode | 'all'>('all');
   const [onlyRepeated, setOnlyRepeated] = useState(false);
@@ -654,6 +663,8 @@ export default function LibraryView({
             canEdit={canEdit}
             value={selectedItem}
             onChange={(updates) => onUpdateItem(selectedItem.id, updates)}
+            customReadingModes={customReadingModes}
+            onUpdateReadingModes={onUpdateReadingModes}
           />
 
           {/* Linked Unified Tasks for this Book / Library Material */}
@@ -882,7 +893,7 @@ export default function LibraryView({
               className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
             >
               <option value="all">كل أنماط القراءة</option>
-              {READING_MODES_META.map((m) => (
+              {readingModesList.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label}
                 </option>
@@ -1179,7 +1190,7 @@ export default function LibraryView({
                   {(item.readingModes?.length ?? 0) > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {item.readingModes.map((m) => {
-                        const meta = READING_MODES_META.find((rm) => rm.id === m);
+                        const meta = readingModesList.find((rm) => rm.id === m);
                         return (
                           <span
                             key={m}

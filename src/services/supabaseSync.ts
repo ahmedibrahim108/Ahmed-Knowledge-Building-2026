@@ -5,6 +5,7 @@ import {
   CalendarColor,
   CalendarEvent,
   CalendarPreferences,
+  ContentAccessGrant,
   CourseStudyStage,
   CustomCategory,
   DEFAULT_CALENDAR_PREFERENCES,
@@ -16,6 +17,7 @@ import {
   DentalCase,
   DentalCaseStatus,
   DomainInfo,
+  GrantedWorkspaceData,
   LearningHubId,
   LearningObjective,
   LearningPath,
@@ -38,6 +40,8 @@ import {
   ReadingItemType,
   ReadingLibraryItem,
   ReadingMode,
+  ReadingModeMeta,
+  ReflectionColorKey,
   ReflectionMood,
   SmallTask,
   StudyHistoryEntry,
@@ -72,7 +76,15 @@ export function sanitizeId(raw: string): string {
 }
 
 const VALID_HUB_IDS: LearningHubId[] = ['marketing', 'dental_career', 'knowledge'];
-const VALID_READING_MODES: ReadingMode[] = READING_MODES_META.map((m) => m.id);
+const VALID_REFLECTION_COLORS: ReflectionColorKey[] = [
+  'auto',
+  'sage',
+  'sky',
+  'amber',
+  'rose',
+  'lavender',
+  'slate',
+];
 const VALID_STUDY_STAGES: CourseStudyStage[] = [
   'focus_now',
   'in_progress',
@@ -106,6 +118,12 @@ function sanitizeNoteColor(raw: unknown): NoteColorKey {
     : 'default';
 }
 
+function sanitizeReflectionColor(raw: unknown): ReflectionColorKey {
+  return VALID_REFLECTION_COLORS.includes(raw as ReflectionColorKey)
+    ? (raw as ReflectionColorKey)
+    : 'auto';
+}
+
 function sanitizeHubId(raw: unknown): LearningHubId {
   if (raw === 'marketing' || raw === 'dental_career' || raw === 'knowledge') {
     return raw;
@@ -116,10 +134,37 @@ function sanitizeHubId(raw: unknown): LearningHubId {
 function sanitizeReadingModes(raw: unknown): ReadingMode[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .filter((v): v is ReadingMode =>
-      VALID_READING_MODES.includes(v as ReadingMode)
-    )
-    .slice(0, 5);
+    .map((v) => clip(typeof v === 'string' ? v.trim() : '', 80))
+    .filter(Boolean)
+    .slice(0, 16);
+}
+
+function sanitizeCustomReadingModesConfig(raw: unknown): ReadingModeMeta[] {
+  if (!Array.isArray(raw) || raw.length === 0) return READING_MODES_META;
+  const cleaned = raw
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .slice(0, 24)
+    .map((item, idx) => {
+      const label = clip(typeof item.label === 'string' ? item.label.trim() : '', 100);
+      const shortLabel = clip(
+        typeof item.shortLabel === 'string' && item.shortLabel.trim()
+          ? item.shortLabel.trim()
+          : label,
+        50
+      );
+      const idRaw = typeof item.id === 'string' ? item.id.trim() : '';
+      return {
+        id: clip(idRaw || `mode_${idx + 1}`, 80),
+        label,
+        shortLabel,
+        description: clip(
+          typeof item.description === 'string' ? item.description.trim() : '',
+          320
+        ),
+      };
+    })
+    .filter((m) => m.label.length > 0);
+  return cleaned.length > 0 ? cleaned : READING_MODES_META;
 }
 
 function sanitizeLearningMethods(raw: unknown): string[] {
@@ -330,7 +375,13 @@ function mapPublicSiteConfigRow(raw: Record<string, unknown> | null | undefined)
       showCourses: rawFlags.showCourses !== false,
       showPaths: rawFlags.showPaths !== false,
       showBooks: rawFlags.showBooks !== false,
+      showReflections: rawFlags.showReflections !== false,
     },
+    publicReflectionCategories: sanitizeStringList(
+      raw.public_reflection_categories,
+      40,
+      80
+    ),
     updatedAtMs: Number(raw.updated_at_ms ?? 0),
   };
 }
@@ -593,6 +644,9 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
       40,
       80
     ),
+    custom_reading_modes: sanitizeCustomReadingModesConfig(
+      prefs.customReadingModes ?? READING_MODES_META
+    ),
   };
 }
 
@@ -605,6 +659,8 @@ export function buildReflectionRow(uid: string, r: PersonalReflection) {
     content: clip(r.content, 20000),
     mood_tag: pickEnum(r.moodTag, ['تأمل', 'فكرة', 'امتنان', 'هدف'] as const, 'تأمل'),
     category_tag: clip(r.categoryTag, 80),
+    color_key: sanitizeReflectionColor(r.colorKey),
+    is_public: Boolean(r.isPublic),
     pinned: Boolean(r.pinned),
     created_at_label: clip(r.createdAtLabel, 80),
     created_at_ms: Number.isFinite(rawMs) ? Math.round(rawMs) : 0,
@@ -1078,6 +1134,7 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
       Array.isArray(raw.reflection_categories) && raw.reflection_categories.length > 0
         ? sanitizeStringList(raw.reflection_categories, 40, 80)
         : DEFAULT_REFLECTION_CATEGORIES,
+    customReadingModes: sanitizeCustomReadingModesConfig(raw.custom_reading_modes),
   };
 }
 
@@ -1093,6 +1150,8 @@ function mapReflectionRow(raw: Record<string, unknown>): PersonalReflection {
     content: String(raw.content ?? ''),
     moodTag,
     categoryTag: raw.category_tag ? String(raw.category_tag) : '',
+    colorKey: sanitizeReflectionColor(raw.color_key),
+    isPublic: Boolean(raw.is_public),
     pinned: Boolean(raw.pinned),
     createdAtLabel: String(raw.created_at_label ?? ''),
     createdAtMs: Number(raw.created_at_ms ?? 0),
@@ -2172,8 +2231,9 @@ const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
   reading_items: ['learning_objectives', 'sort_order', 'is_public'],
   book_notes: ['resources', 'sort_order', 'created_at_ms'],
   unified_tasks: ['linked_course_id', 'linked_path_id', 'linked_book_id'],
-  user_preferences: ['weekly_rhythm', 'reflection_categories'],
-  reflections: ['category_tag'],
+  user_preferences: ['weekly_rhythm', 'reflection_categories', 'custom_reading_modes'],
+  reflections: ['category_tag', 'color_key', 'is_public'],
+  public_site_config: ['public_reflection_categories'],
 };
 
 function isMissingColumnError(err: unknown): boolean {
@@ -2747,13 +2807,17 @@ export async function savePublicSiteConfig(
       showCourses: cfg.visibilityFlags?.showCourses !== false,
       showPaths: cfg.visibilityFlags?.showPaths !== false,
       showBooks: cfg.visibilityFlags?.showBooks !== false,
+      showReflections: cfg.visibilityFlags?.showReflections !== false,
     },
+    public_reflection_categories: sanitizeStringList(
+      cfg.publicReflectionCategories ?? [],
+      40,
+      80
+    ),
     updated_at_ms: Date.now(),
   };
 
-  await runWrite((c) =>
-    c.from('public_site_config').upsert(payload, { onConflict: 'id' })
-  );
+  await runUpsertWith007Fallback('public_site_config', payload, 'id');
 }
 
 export function subscribePublicSiteConfig(
@@ -2797,14 +2861,17 @@ export interface PublicCatalogData {
   courses: PersonalCourse[];
   learningPaths: LearningPath[];
   readingItems: ReadingLibraryItem[];
+  reflections: PersonalReflection[];
 }
 
-export async function fetchPublicCatalog(): Promise<PublicCatalogData> {
+export async function fetchPublicCatalog(
+  publicReflectionCategories: string[] = []
+): Promise<PublicCatalogData> {
   if (!isSupabaseConfigured || !supabase) {
-    return { courses: [], learningPaths: [], readingItems: [] };
+    return { courses: [], learningPaths: [], readingItems: [], reflections: [] };
   }
   try {
-    const [coursesRes, pathsRes, booksRes] = await Promise.all([
+    const [coursesRes, pathsRes, booksRes, reflectionsRes] = await Promise.all([
       supabase
         .from('courses')
         .select('*')
@@ -2820,6 +2887,11 @@ export async function fetchPublicCatalog(): Promise<PublicCatalogData> {
         .select('*')
         .eq('is_public', true)
         .order('sort_order', { ascending: true }),
+      supabase
+        .from('reflections')
+        .select('*')
+        .order('pinned', { ascending: false })
+        .order('created_at_ms', { ascending: false }),
     ]);
 
     if (
@@ -2828,8 +2900,20 @@ export async function fetchPublicCatalog(): Promise<PublicCatalogData> {
       isMissingColumnError(booksRes.error)
     ) {
       hasPending007Migration = true;
-      return { courses: [], learningPaths: [], readingItems: [] };
+      return { courses: [], learningPaths: [], readingItems: [], reflections: [] };
     }
+
+    const catSet = new Set(publicReflectionCategories.filter(Boolean));
+    const rawReflections = reflectionsRes.error
+      ? []
+      : (reflectionsRes.data || []).map((r) =>
+          mapReflectionRow(r as Record<string, unknown>)
+        );
+    const publicReflections = rawReflections.filter(
+      (r) =>
+        Boolean(r.isPublic) ||
+        (Boolean(r.categoryTag) && catSet.has(r.categoryTag as string))
+    );
 
     return {
       courses: (coursesRes.data || []).map((r) =>
@@ -2841,10 +2925,11 @@ export async function fetchPublicCatalog(): Promise<PublicCatalogData> {
       readingItems: (booksRes.data || []).map((r) =>
         mapReadingItemRow(r as Record<string, unknown>)
       ),
+      reflections: publicReflections,
     };
   } catch (err) {
     console.warn('fetchPublicCatalog failed:', err);
-    return { courses: [], learningPaths: [], readingItems: [] };
+    return { courses: [], learningPaths: [], readingItems: [], reflections: [] };
   }
 }
 
@@ -2894,5 +2979,200 @@ export async function updateUserProfileAccess(
   await runWrite((c) =>
     c.from('user_profiles').update(payload).eq('uid', targetUid)
   );
+}
+
+// ============================================================================
+// Per-Account Granular Content Access Grants (RBAC)
+// ============================================================================
+
+function mapContentGrantRow(raw: Record<string, unknown>): ContentAccessGrant {
+  return {
+    id: String(raw.id || ''),
+    ownerId: String(raw.owner_id || ''),
+    granteeUid: String(raw.grantee_uid || ''),
+    granteeEmail: String(raw.grantee_email || ''),
+    courseDocIds: sanitizeStringList(raw.course_doc_ids, 200, 160),
+    includeCourseNotes: raw.include_course_notes !== false,
+    noteIds: sanitizeStringList(raw.note_ids, 300, 160),
+    pathIds: sanitizeStringList(raw.path_ids, 200, 160),
+    bookIds: sanitizeStringList(raw.book_ids, 300, 160),
+    reflectionIds: sanitizeStringList(raw.reflection_ids, 300, 160),
+    reflectionCategories: sanitizeStringList(raw.reflection_categories, 60, 80),
+    notesForUser: String(raw.notes_for_user || ''),
+    updatedAtMs: Number(raw.updated_at_ms ?? 0),
+  };
+}
+
+export async function fetchAllContentGrants(
+  ownerUid: string
+): Promise<ContentAccessGrant[]> {
+  if (!isSupabaseConfigured || !supabase) return [];
+  const { data, error } = await withFirebaseTokenRetry(async (c) =>
+    c
+      .from('content_access_grants')
+      .select('*')
+      .eq('owner_id', ownerUid)
+      .order('updated_at_ms', { ascending: false })
+  );
+  if (error) {
+    if (isMissingTableError(error)) {
+      hasPending007Migration = true;
+      return [];
+    }
+    throw new Error(formatSupabaseErrorMessage(error, 'تعذّر تحميل صلاحيات المحتوى.'));
+  }
+  return (data || []).map((r) => mapContentGrantRow(r as Record<string, unknown>));
+}
+
+export async function upsertContentAccessGrant(
+  ownerUid: string,
+  grant: Omit<ContentAccessGrant, 'id' | 'ownerId' | 'updatedAtMs'>
+): Promise<ContentAccessGrant> {
+  const grantId = sanitizeId(`${ownerUid}__${grant.granteeUid}`);
+  const payload = {
+    id: grantId,
+    owner_id: ownerUid,
+    grantee_uid: clip(grant.granteeUid, 128),
+    grantee_email: clip(grant.granteeEmail.trim().toLowerCase(), 200),
+    course_doc_ids: sanitizeStringList(grant.courseDocIds, 200, 160),
+    include_course_notes: grant.includeCourseNotes !== false,
+    note_ids: sanitizeStringList(grant.noteIds, 300, 160),
+    path_ids: sanitizeStringList(grant.pathIds, 200, 160),
+    book_ids: sanitizeStringList(grant.bookIds, 300, 160),
+    reflection_ids: sanitizeStringList(grant.reflectionIds, 300, 160),
+    reflection_categories: sanitizeStringList(grant.reflectionCategories, 60, 80),
+    notes_for_user: clip(grant.notesForUser, 1000),
+    updated_at_ms: Date.now(),
+  };
+
+  await runWrite((c) =>
+    c.from('content_access_grants').upsert(payload, { onConflict: 'owner_id,grantee_uid' })
+  );
+
+  return mapContentGrantRow(payload as unknown as Record<string, unknown>);
+}
+
+export async function deleteContentAccessGrant(
+  ownerUid: string,
+  granteeUid: string
+): Promise<void> {
+  await runWrite((c) =>
+    c
+      .from('content_access_grants')
+      .delete()
+      .eq('owner_id', ownerUid)
+      .eq('grantee_uid', granteeUid)
+  );
+}
+
+export async function fetchGrantedWorkspaceForUser(
+  user: User
+): Promise<GrantedWorkspaceData> {
+  const empty: GrantedWorkspaceData = {
+    grants: [],
+    courses: [],
+    bookNotes: [],
+    learningPaths: [],
+    readingItems: [],
+    reflections: [],
+  };
+  if (!isSupabaseConfigured || !supabase || !user?.uid) return empty;
+
+  try {
+    const { data: grantRows, error: grantErr } = await withFirebaseTokenRetry(async (c) =>
+      c.from('content_access_grants').select('*')
+    );
+    if (grantErr || !grantRows || grantRows.length === 0) {
+      return empty;
+    }
+
+    const grants = grantRows.map((r) => mapContentGrantRow(r as Record<string, unknown>));
+    const grantedCourseDocSet = new Set<string>();
+    const grantedNoteSet = new Set<string>();
+    const grantedPathSet = new Set<string>();
+    const grantedBookSet = new Set<string>();
+    const grantedReflSet = new Set<string>();
+    const grantedReflCatSet = new Set<string>();
+    let includeCourseNotesAny = false;
+
+    for (const g of grants) {
+      g.courseDocIds.forEach((id) => grantedCourseDocSet.add(id));
+      g.noteIds.forEach((id) => grantedNoteSet.add(id));
+      g.pathIds.forEach((id) => grantedPathSet.add(id));
+      g.bookIds.forEach((id) => grantedBookSet.add(id));
+      g.reflectionIds.forEach((id) => grantedReflSet.add(id));
+      g.reflectionCategories.forEach((cat) => grantedReflCatSet.add(cat));
+      if (g.includeCourseNotes) includeCourseNotesAny = true;
+    }
+
+    const [coursesRes, notesRes, pathsRes, booksRes, reflRes] = await Promise.all([
+      grantedCourseDocSet.size > 0
+        ? withFirebaseTokenRetry(async (c) =>
+            c.from('courses').select('*').in('doc_id', Array.from(grantedCourseDocSet))
+          )
+        : Promise.resolve({ data: [], error: null }),
+      grantedNoteSet.size > 0 || (includeCourseNotesAny && grantedCourseDocSet.size > 0)
+        ? withFirebaseTokenRetry(async (c) => c.from('book_notes').select('*'))
+        : Promise.resolve({ data: [], error: null }),
+      grantedPathSet.size > 0
+        ? withFirebaseTokenRetry(async (c) =>
+            c.from('learning_paths').select('*').in('id', Array.from(grantedPathSet))
+          )
+        : Promise.resolve({ data: [], error: null }),
+      grantedBookSet.size > 0
+        ? withFirebaseTokenRetry(async (c) =>
+            c.from('reading_items').select('*').in('id', Array.from(grantedBookSet))
+          )
+        : Promise.resolve({ data: [], error: null }),
+      grantedReflSet.size > 0 || grantedReflCatSet.size > 0
+        ? withFirebaseTokenRetry(async (c) =>
+            c
+              .from('reflections')
+              .select('*')
+              .order('pinned', { ascending: false })
+              .order('created_at_ms', { ascending: false })
+          )
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+
+    const courses = (coursesRes.data || []).map((r) =>
+      mapCourseRow(r as Record<string, unknown>)
+    );
+    const grantedCourseNumSet = new Set(courses.map((c) => c.id));
+
+    const bookNotes = (notesRes.data || [])
+      .map((r) => mapBookNoteRow(r as Record<string, unknown>))
+      .filter(
+        (n) =>
+          grantedNoteSet.has(n.id) ||
+          (includeCourseNotesAny && n.courseId && grantedCourseNumSet.has(n.courseId))
+      );
+
+    const learningPaths = (pathsRes.data || []).map((r) =>
+      mapLearningPathRow(r as Record<string, unknown>)
+    );
+    const readingItems = (booksRes.data || []).map((r) =>
+      mapReadingItemRow(r as Record<string, unknown>)
+    );
+    const reflections = (reflRes.data || [])
+      .map((r) => mapReflectionRow(r as Record<string, unknown>))
+      .filter(
+        (r) =>
+          grantedReflSet.has(r.id) ||
+          (Boolean(r.categoryTag) && grantedReflCatSet.has(r.categoryTag as string))
+      );
+
+    return {
+      grants,
+      courses,
+      bookNotes,
+      learningPaths,
+      readingItems,
+      reflections,
+    };
+  } catch (err) {
+    console.warn('fetchGrantedWorkspaceForUser fallback:', err);
+    return empty;
+  }
 }
 

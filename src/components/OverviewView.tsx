@@ -45,6 +45,7 @@ import {
   WeeklyMeeting,
   WeeklyRhythmItem,
   getHubMeta,
+  getReflectionCardStyle,
   getTodayDateKey,
   resolveCourseStudyStage,
 } from '../data/curriculumData';
@@ -152,35 +153,33 @@ export default function OverviewView({
     (c) => resolveCourseStudyStage(c) === 'focus_now'
   ).length;
 
-  // Progress Tracker calculations (retained cleanly for ProgressCharts)
-  const totalActivities = months.length * 4;
-  const completedActivities = months.reduce(
-    (acc, m) => acc + Object.values(m.activities).filter(Boolean).length,
-    0
-  );
-  const completedCourses = courses.filter((c) => c.completed).length;
-  const totalSmallTasks =
-    months.reduce((acc, m) => acc + m.tasks.length, 0) +
-    courses.reduce((acc, c) => acc + c.tasks.length, 0);
-  const completedSmallTasks =
-    months.reduce((acc, m) => acc + m.tasks.filter((t) => t.done).length, 0) +
-    courses.reduce((acc, c) => acc + c.tasks.filter((t) => t.done).length, 0);
+  void quarters;
+  void months;
+  void onJumpToMonth;
 
   const overallProgressPct = useMemo(() => {
     const parts: number[] = [];
-    if (totalActivities > 0) parts.push(completedActivities / totalActivities);
-    if (totalSmallTasks > 0) parts.push(completedSmallTasks / totalSmallTasks);
-    if (courses.length > 0) parts.push(completedCourses / courses.length);
+    if (learningPaths.length > 0) {
+      const avgPath =
+        learningPaths.reduce((acc, p) => {
+          const stTotal = p.stages.length;
+          const stDone = p.stages.filter((s) => s.done).length;
+          return acc + (stTotal > 0 ? stDone / stTotal : (p.progressPct ?? 0) / 100);
+        }, 0) / learningPaths.length;
+      parts.push(avgPath);
+    }
+    if (courses.length > 0) {
+      const avgCourse =
+        courses.reduce((acc, c) => acc + (c.completed ? 1 : (c.progressPct ?? 0) / 100), 0) /
+        courses.length;
+      parts.push(avgCourse);
+    }
+    if (unifiedTasks.length > 0) {
+      parts.push(unifiedTasks.filter((t) => t.status === 'done').length / unifiedTasks.length);
+    }
     if (parts.length === 0) return 0;
     return Math.round((parts.reduce((a, b) => a + b, 0) / parts.length) * 100);
-  }, [
-    totalActivities,
-    completedActivities,
-    totalSmallTasks,
-    completedSmallTasks,
-    courses.length,
-    completedCourses,
-  ]);
+  }, [learningPaths, courses, unifiedTasks]);
 
   const activeTasksList = useMemo(() => {
     const priOrder = { high: 0, medium: 1, low: 2 };
@@ -373,7 +372,7 @@ export default function OverviewView({
             {!imgFailed ? (
               <img
                 src={HERO_IMAGE_PATH}
-                alt="مكتب دراسي هادئ يضم كتبًا مفتوحة ودفتر تلخيص"
+                alt="ساحة دراسة هادئة ذات أقواس بيضاء ونباتات خضراء"
                 referrerPolicy="no-referrer"
                 onError={() => setImgFailed(true)}
                 className="w-full h-full lg:absolute lg:inset-0 object-cover"
@@ -543,14 +542,17 @@ export default function OverviewView({
               لا توجد مهام نشطة في هذا العرض حاليًا.
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl bg-[#F7F8FA]/50 overflow-hidden">
               {activeTasksList.map((t) => {
                 const tDate = t.scheduledDate || t.dueDate || '';
                 const isOverdue = Boolean(tDate && tDate < today);
+                const isToday = Boolean(tDate && tDate === today);
+                const priLabel =
+                  t.priority === 'high' ? 'عالية' : t.priority === 'low' ? 'منخفضة' : 'متوسطة';
                 return (
                   <div
                     key={t.id}
-                    className="p-3 bg-[#F7F8FA] border border-slate-200 rounded-xl flex items-center justify-between gap-2"
+                    className="px-3.5 py-2.5 bg-white hover:bg-[#F7F8FA] flex items-center justify-between gap-2.5 transition-colors"
                   >
                     <button
                       type="button"
@@ -560,23 +562,40 @@ export default function OverviewView({
                           status: t.status === 'done' ? 'todo' : 'done',
                         });
                       }}
-                      className="flex items-center gap-2.5 text-right flex-1 min-w-0 cursor-pointer"
+                      className="flex items-start gap-2.5 text-right flex-1 min-w-0 cursor-pointer"
                     >
                       {t.status === 'done' ? (
-                        <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0" />
+                        <CheckSquare className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0" />
                       ) : (
-                        <Square className="w-4 h-4 text-slate-400 shrink-0" />
+                        <Square className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
                       )}
-                      <div className="min-w-0 flex-1">
+                      <div className="min-w-0 flex-1 space-y-0.5">
                         <p className="text-xs sm:text-sm font-semibold text-slate-900 truncate">
-                          {t.title}
+                          <BidiText text={t.title} />
                         </p>
-                        <p className="text-[11px] text-slate-500 tabular-nums truncate">
-                          {tDate ? tDate : 'غير مجدولة'}
-                          {t.startTime ? ` · ${t.startTime}` : ''}
-                          {t.linkedLabel ? ` · ${t.linkedLabel}` : ''}
-                          {isOverdue ? ' · متأخرة' : ''}
-                        </p>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500 tabular-nums">
+                          <span
+                            className={
+                              isOverdue
+                                ? 'font-semibold text-rose-700'
+                                : isToday
+                                ? 'font-semibold text-[#1E3A5F]'
+                                : ''
+                            }
+                          >
+                            {isToday ? 'اليوم' : tDate || 'غير مجدولة'}
+                          </span>
+                          {t.startTime && <span>· {t.startTime}</span>}
+                          <span>· أولوية {priLabel}</span>
+                          {t.linkedLabel && (
+                            <span className="text-slate-600 truncate max-w-[180px]">
+                              · {t.linkedLabel}
+                            </span>
+                          )}
+                          {isOverdue && (
+                            <span className="font-semibold text-rose-700">· متأخرة</span>
+                          )}
+                        </div>
                       </div>
                     </button>
 
@@ -587,7 +606,7 @@ export default function OverviewView({
                         setEditingTask(t);
                         setTaskModalOpen(true);
                       }}
-                      className="px-2.5 py-1 text-[11px] font-medium text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer shrink-0"
+                      className="px-2.5 py-1 text-[11px] font-medium text-[#1E3A5F] bg-[#F7F8FA] border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer shrink-0"
                     >
                       تعديل
                     </button>
@@ -649,30 +668,33 @@ export default function OverviewView({
             </div>
           ) : (
             <div className="space-y-2.5">
-              {latestReflections.map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => onNavigateTab('reflections')}
-                  className="w-full text-right p-3.5 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 space-y-1 transition-colors cursor-pointer"
-                >
-                  <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
-                    <span className="font-semibold text-[#1E3A5F]">
-                      {r.moodTag}
-                      {r.categoryTag ? ` · ${r.categoryTag}` : ''}
-                    </span>
-                    {r.pinned && (
-                      <Pin className="w-3 h-3 text-[#1E3A5F]" aria-hidden="true" />
-                    )}
-                  </div>
-                  <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">
-                    <BidiText text={r.title} />
-                  </p>
-                  <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
-                    <BidiText text={r.content} />
-                  </p>
-                </button>
-              ))}
+              {latestReflections.map((r) => {
+                const cardStyle = getReflectionCardStyle(r);
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => onNavigateTab('reflections')}
+                    className={`w-full text-right p-3.5 rounded-xl border space-y-1 transition-colors cursor-pointer ${cardStyle.cardBg} ${cardStyle.cardBorder}`}
+                  >
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                      <span className={`font-semibold ${cardStyle.accentText}`}>
+                        {r.moodTag}
+                        {r.categoryTag ? ` · ${r.categoryTag}` : ''}
+                      </span>
+                      {r.pinned && (
+                        <Pin className={`w-3 h-3 ${cardStyle.accentText}`} aria-hidden="true" />
+                      )}
+                    </div>
+                    <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">
+                      <BidiText text={r.title} />
+                    </p>
+                    <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
+                      <BidiText text={r.content} />
+                    </p>
+                  </button>
+                );
+              })}
             </div>
           )}
         </section>
@@ -748,14 +770,14 @@ export default function OverviewView({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
           <div className="space-y-1">
             <h2 className="font-editorial text-2xl font-bold text-slate-900">
-              مؤشرات التقدّم البصرية
+              مؤشرات التقدّم في المسارات والكورسات
             </h2>
             <p className="text-xs text-slate-500">
-              نظرة بيانية موجزة على الإنجاز في الوحدات والكورسات والمهام.
+              تمثيل مرئي لحجم الإنجاز في المسارات التعليمية، الكورسات النشطة، وعدد الملاحظات والمراجعات.
             </p>
           </div>
           <div className="text-left shrink-0">
-            <span className="block text-[11px] text-slate-500">معدل الإنجاز الكلي</span>
+            <span className="block text-[11px] text-slate-500">معدل التقدّم العام</span>
             <span className="text-2xl font-bold text-[#1E3A5F] tabular-nums">
               {overallProgressPct}%
             </span>
@@ -763,16 +785,14 @@ export default function OverviewView({
         </div>
 
         <ProgressCharts
-          months={months}
-          quarters={quarters}
           courses={courses}
+          learningPaths={learningPaths}
+          bookNotes={bookNotes}
+          unifiedTasks={unifiedTasks}
           overallProgressPct={overallProgressPct}
-          completedSmallTasks={completedSmallTasks}
-          totalSmallTasks={totalSmallTasks}
-          completedActivities={completedActivities}
-          totalActivities={totalActivities}
-          completedCourses={completedCourses}
-          onJumpToMonth={onJumpToMonth}
+          onSelectCourse={onSelectCourse}
+          onOpenPaths={() => onNavigateTab('paths')}
+          onOpenJournal={() => onNavigateTab('journal')}
         />
       </section>
 

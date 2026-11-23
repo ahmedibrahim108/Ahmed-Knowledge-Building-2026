@@ -3,13 +3,16 @@ import {
   Activity,
   BookOpen,
   CalendarDays,
+  Check,
   CheckCircle2,
   Database,
   Download,
   Eye,
   FolderCog,
   Globe,
+  KeyRound,
   Loader2,
+  PenLine,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -20,7 +23,10 @@ import {
   X,
 } from 'lucide-react';
 import {
+  BookNote,
+  ContentAccessGrant,
   CustomCategory,
+  DEFAULT_REFLECTION_CATEGORIES,
   DomainId,
   DomainInfo,
   LEARNING_HUBS,
@@ -30,9 +36,11 @@ import {
   MonthPlan,
   MonthStatus,
   PersonalCourse,
+  PersonalReflection,
   PublicSiteConfig,
   QuarterInfo,
   ReadingLibraryItem,
+  ReadingModeMeta,
   SmallTask,
   StudyHistoryEntry,
   StudyResource,
@@ -48,9 +56,12 @@ import {
   testSupabaseConnection,
 } from '../services/supabaseClient';
 import {
+  deleteContentAccessGrant,
+  fetchAllContentGrants,
   fetchAllUserProfiles,
   isPending007Migration,
   updateUserProfileAccess,
+  upsertContentAccessGrant,
 } from '../services/supabaseSync';
 import { exportPlanToExcel } from '../utils/excelExport';
 import ConfirmDialog from './ConfirmDialog';
@@ -167,6 +178,12 @@ interface AccountCenterViewProps {
   onToggleBookPublic: (bookId: string, isPublic: boolean) => void;
   onPreviewPublicSite: () => void;
   bookNotesForExcel: Parameters<typeof exportPlanToExcel>[2];
+  bookNotes?: BookNote[];
+  reflections?: PersonalReflection[];
+  reflectionCategories?: string[];
+  onToggleReflectionPublic?: (id: string, isPublic: boolean) => void;
+  customReadingModes?: ReadingModeMeta[];
+  onUpdateReadingModes?: (nextModes: ReadingModeMeta[]) => void;
 }
 
 export default function AccountCenterView(props: AccountCenterViewProps) {
@@ -189,14 +206,52 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
   // Public site editor state
   const [siteDraft, setSiteDraft] = useState<PublicSiteConfig>(props.publicSiteConfig);
   const [newSkill, setNewSkill] = useState('');
+  const [editingSkillIdx, setEditingSkillIdx] = useState<number | null>(null);
+  const [editingSkillVal, setEditingSkillVal] = useState('');
   const [newInterest, setNewInterest] = useState('');
+  const [editingInterestIdx, setEditingInterestIdx] = useState<number | null>(null);
+  const [editingInterestVal, setEditingInterestVal] = useState('');
   const [savingSite, setSavingSite] = useState(false);
   const [siteSavedNotice, setSiteSavedNotice] = useState<string | null>(null);
 
-  // Users RBAC state
+  // Users RBAC & Content Grants state
   const [profiles, setProfiles] = useState<UserProfileItem[]>([]);
+  const [grantsByUid, setGrantsByUid] = useState<Record<string, ContentAccessGrant>>({});
   const [loadingProfiles, setLoadingProfiles] = useState(false);
   const [profilesError, setProfilesError] = useState<string | null>(null);
+  const [grantModalUser, setGrantModalUser] = useState<UserProfileItem | null>(null);
+  const [grantDraft, setGrantDraft] = useState<{
+    courseDocIds: string[];
+    includeCourseNotes: boolean;
+    noteIds: string[];
+    pathIds: string[];
+    bookIds: string[];
+    reflectionIds: string[];
+    reflectionCategories: string[];
+    notesForUser: string;
+  }>({
+    courseDocIds: [],
+    includeCourseNotes: true,
+    noteIds: [],
+    pathIds: [],
+    bookIds: [],
+    reflectionIds: [],
+    reflectionCategories: [],
+    notesForUser: '',
+  });
+  const [grantNoteSearch, setGrantNoteSearch] = useState('');
+  const [savingGrant, setSavingGrant] = useState(false);
+
+  const allReflectionCats = Array.from(
+    new Set([
+      ...(props.reflectionCategories && props.reflectionCategories.length > 0
+        ? props.reflectionCategories
+        : DEFAULT_REFLECTION_CATEGORIES),
+      ...(props.reflections || [])
+        .map((r) => (r.categoryTag || '').trim())
+        .filter(Boolean),
+    ])
+  );
 
   useEffect(() => {
     setSiteDraft(props.publicSiteConfig);
@@ -206,8 +261,16 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
     setLoadingProfiles(true);
     setProfilesError(null);
     try {
-      const list = await fetchAllUserProfiles();
+      const [list, grantsList] = await Promise.all([
+        fetchAllUserProfiles(),
+        props.uid ? fetchAllContentGrants(props.uid) : Promise.resolve([]),
+      ]);
       setProfiles(list);
+      const map: Record<string, ContentAccessGrant> = {};
+      for (const g of grantsList) {
+        map[g.granteeUid] = g;
+      }
+      setGrantsByUid(map);
     } catch (err) {
       setProfilesError(
         err instanceof Error ? err.message : 'تعذر تحميل قائمة المستخدمين.'
@@ -221,7 +284,69 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
     if (subTab === 'users') {
       void loadProfiles();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subTab]);
+
+  const openGrantModalForUser = (prof: UserProfileItem) => {
+    const existing = grantsByUid[prof.uid];
+    setGrantModalUser(prof);
+    setGrantNoteSearch('');
+    setGrantDraft({
+      courseDocIds: existing?.courseDocIds ?? [],
+      includeCourseNotes: existing?.includeCourseNotes ?? true,
+      noteIds: existing?.noteIds ?? [],
+      pathIds: existing?.pathIds ?? [],
+      bookIds: existing?.bookIds ?? [],
+      reflectionIds: existing?.reflectionIds ?? [],
+      reflectionCategories: existing?.reflectionCategories ?? [],
+      notesForUser: existing?.notesForUser ?? '',
+    });
+  };
+
+  const handleSaveUserGrant = async () => {
+    if (!grantModalUser || !props.uid) return;
+    setSavingGrant(true);
+    setProfilesError(null);
+    try {
+      const saved = await upsertContentAccessGrant(props.uid, {
+        granteeUid: grantModalUser.uid,
+        granteeEmail: grantModalUser.email,
+        ...grantDraft,
+      });
+      setGrantsByUid((prev) => ({
+        ...prev,
+        [grantModalUser.uid]: saved,
+      }));
+      setGrantModalUser(null);
+    } catch (err) {
+      setProfilesError(
+        err instanceof Error ? err.message : 'تعذر حفظ صلاحيات المحتوى.'
+      );
+    } finally {
+      setSavingGrant(false);
+    }
+  };
+
+  const handleRevokeUserGrant = async () => {
+    if (!grantModalUser || !props.uid) return;
+    setSavingGrant(true);
+    setProfilesError(null);
+    try {
+      await deleteContentAccessGrant(props.uid, grantModalUser.uid);
+      setGrantsByUid((prev) => {
+        const next = { ...prev };
+        delete next[grantModalUser.uid];
+        return next;
+      });
+      setGrantModalUser(null);
+    } catch (err) {
+      setProfilesError(
+        err instanceof Error ? err.message : 'تعذر إلغاء صلاحيات المحتوى.'
+      );
+    } finally {
+      setSavingGrant(false);
+    }
+  };
 
   const handleRunDiagnostics = async () => {
     setDiagRunning(true);
@@ -395,6 +520,8 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
               onUpdateMonthResource={props.onUpdateMonthResource}
               onDeleteMonthResource={props.onDeleteMonthResource}
               onOpenBookNote={props.onOpenBookNote ?? (() => {})}
+              customReadingModes={props.customReadingModes}
+              onUpdateReadingModes={props.onUpdateReadingModes}
             />
           ) : (
             <DomainsView
@@ -713,31 +840,90 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
               </div>
             </div>
 
-            {/* Skills & Interests */}
+            {/* Skills & Interests with Inline Edit */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2.5">
                 <p className="text-xs font-bold text-slate-800">المهارات الظاهرة</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {siteDraft.skills.map((sk) => (
-                    <span
-                      key={sk}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-md"
-                    >
-                      <span>{sk}</span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setSiteDraft((p) => ({
-                            ...p,
-                            skills: p.skills.filter((s) => s !== sk),
-                          }))
-                        }
-                        className="text-slate-400 hover:text-red-700 cursor-pointer"
+                  {siteDraft.skills.map((sk, idx) =>
+                    editingSkillIdx === idx ? (
+                      <div
+                        key={`edit-sk-${idx}`}
+                        className="inline-flex items-center gap-1 bg-white border border-[#1E3A5F] rounded-md px-1.5 py-0.5"
                       >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </span>
-                  ))}
+                        <input
+                          type="text"
+                          autoFocus
+                          value={editingSkillVal}
+                          onChange={(e) => setEditingSkillVal(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const clean = editingSkillVal.trim();
+                              if (clean) {
+                                setSiteDraft((p) => ({
+                                  ...p,
+                                  skills: p.skills.map((s, i) => (i === idx ? clean : s)),
+                                }));
+                              }
+                              setEditingSkillIdx(null);
+                            } else if (e.key === 'Escape') {
+                              setEditingSkillIdx(null);
+                            }
+                          }}
+                          className="w-28 text-xs focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const clean = editingSkillVal.trim();
+                            if (clean) {
+                              setSiteDraft((p) => ({
+                                ...p,
+                                skills: p.skills.map((s, i) => (i === idx ? clean : s)),
+                              }));
+                            }
+                            setEditingSkillIdx(null);
+                          }}
+                          className="text-emerald-700 cursor-pointer"
+                          aria-label="حفظ التعديل"
+                        >
+                          <Check className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <span
+                        key={`${sk}-${idx}`}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-md"
+                      >
+                        <span>{sk}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingSkillIdx(idx);
+                            setEditingSkillVal(sk);
+                          }}
+                          aria-label={`تعديل ${sk}`}
+                          className="text-slate-400 hover:text-[#1E3A5F] cursor-pointer"
+                        >
+                          <PenLine className="w-2.5 h-2.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSiteDraft((p) => ({
+                              ...p,
+                              skills: p.skills.filter((_, i) => i !== idx),
+                            }))
+                          }
+                          aria-label={`حذف ${sk}`}
+                          className="text-slate-400 hover:text-red-700 cursor-pointer"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    )
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <input
@@ -765,26 +951,89 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
               <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2.5">
                 <p className="text-xs font-bold text-slate-800">الاهتمامات الظاهرة</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {siteDraft.interests.map((intr) => (
-                    <span
-                      key={intr}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-md"
-                    >
-                      <span>{intr}</span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setSiteDraft((p) => ({
-                            ...p,
-                            interests: p.interests.filter((s) => s !== intr),
-                          }))
-                        }
-                        className="text-slate-400 hover:text-red-700 cursor-pointer"
+                  {siteDraft.interests.map((intr, idx) =>
+                    editingInterestIdx === idx ? (
+                      <div
+                        key={`edit-intr-${idx}`}
+                        className="inline-flex items-center gap-1 bg-white border border-[#1E3A5F] rounded-md px-1.5 py-0.5"
                       >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </span>
-                  ))}
+                        <input
+                          type="text"
+                          autoFocus
+                          value={editingInterestVal}
+                          onChange={(e) => setEditingInterestVal(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const clean = editingInterestVal.trim();
+                              if (clean) {
+                                setSiteDraft((p) => ({
+                                  ...p,
+                                  interests: p.interests.map((s, i) =>
+                                    i === idx ? clean : s
+                                  ),
+                                }));
+                              }
+                              setEditingInterestIdx(null);
+                            } else if (e.key === 'Escape') {
+                              setEditingInterestIdx(null);
+                            }
+                          }}
+                          className="w-28 text-xs focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const clean = editingInterestVal.trim();
+                            if (clean) {
+                              setSiteDraft((p) => ({
+                                ...p,
+                                interests: p.interests.map((s, i) =>
+                                  i === idx ? clean : s
+                                ),
+                              }));
+                            }
+                            setEditingInterestIdx(null);
+                          }}
+                          className="text-emerald-700 cursor-pointer"
+                          aria-label="حفظ التعديل"
+                        >
+                          <Check className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <span
+                        key={`${intr}-${idx}`}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-white border border-slate-200 rounded-md"
+                      >
+                        <span>{intr}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingInterestIdx(idx);
+                            setEditingInterestVal(intr);
+                          }}
+                          aria-label={`تعديل ${intr}`}
+                          className="text-slate-400 hover:text-[#1E3A5F] cursor-pointer"
+                        >
+                          <PenLine className="w-2.5 h-2.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSiteDraft((p) => ({
+                              ...p,
+                              interests: p.interests.filter((_, i) => i !== idx),
+                            }))
+                          }
+                          aria-label={`حذف ${intr}`}
+                          className="text-slate-400 hover:text-red-700 cursor-pointer"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    )
+                  )}
                 </div>
                 <div className="flex gap-2">
                   <input
@@ -814,11 +1063,11 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
             </div>
 
             {/* Visibility Toggles */}
-            <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2">
+            <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-3">
               <p className="text-xs font-bold text-slate-800">
                 إظهار / إخفاء الأقسام في الصفحة العامة
               </p>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 text-xs">
                 {(
                   [
                     ['showHero', 'الواجهة التعريفية'],
@@ -829,6 +1078,7 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                     ['showCourses', 'الكورسات المنشورة'],
                     ['showPaths', 'المسارات المنشورة'],
                     ['showBooks', 'الكتب المنشورة'],
+                    ['showReflections', 'الخواطر المنشورة'],
                   ] as const
                 ).map(([key, label]) => (
                   <label
@@ -837,7 +1087,7 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                   >
                     <input
                       type="checkbox"
-                      checked={siteDraft.visibilityFlags[key]}
+                      checked={siteDraft.visibilityFlags[key] !== false}
                       onChange={(e) =>
                         setSiteDraft((p) => ({
                           ...p,
@@ -852,6 +1102,45 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                   </label>
                 ))}
               </div>
+
+              {allReflectionCats.length > 0 && (
+                <div className="pt-3 border-t border-slate-200/80 space-y-2">
+                  <p className="text-xs font-bold text-slate-800">
+                    تصنيفات الخواطر المنشورة تلقائيًا للعامة:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {allReflectionCats.map((cat) => {
+                      const pubCats = siteDraft.publicReflectionCategories ?? [];
+                      const checked = pubCats.includes(cat);
+                      return (
+                        <label
+                          key={cat}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border cursor-pointer ${
+                            checked
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-900 font-semibold'
+                              : 'bg-white border-slate-200 text-slate-700'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) =>
+                              setSiteDraft((p) => {
+                                const prev = p.publicReflectionCategories ?? [];
+                                const next = e.target.checked
+                                  ? Array.from(new Set([...prev, cat]))
+                                  : prev.filter((c) => c !== cat);
+                                return { ...p, publicReflectionCategories: next };
+                              })
+                            }
+                          />
+                          <span>{cat}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Custom Sections */}
@@ -1019,20 +1308,48 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                 ))}
               </div>
             </div>
+
+            {(props.reflections?.length ?? 0) > 0 && props.onToggleReflectionPublic && (
+              <div className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-2 max-h-[260px] overflow-y-auto">
+                <p className="text-xs font-bold text-slate-900">
+                  الخواطر الفردية ({(props.reflections || []).filter((r) => r.isPublic).length} منشورة فرديًا)
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {(props.reflections || []).map((r) => (
+                    <label
+                      key={r.id}
+                      className="flex items-center justify-between gap-2 p-2 bg-white border border-slate-200 rounded-lg text-xs cursor-pointer"
+                    >
+                      <span className="truncate">
+                        {r.title || r.moodTag}
+                        {r.categoryTag ? ` (${r.categoryTag})` : ''}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(r.isPublic)}
+                        onChange={(e) =>
+                          props.onToggleReflectionPublic?.(r.id, e.target.checked)
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
         </div>
       )}
 
-      {/* Sub-tab 5: Users & Access Control */}
+      {/* Sub-tab 5: Users, Roles & Granular Content Access Control */}
       {subTab === 'users' && (
         <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="font-editorial text-xl font-bold text-slate-900">
-                المستخدمون والصلاحيات
+                المستخدمون والصلاحيات والمحتوى المخصّص
               </h2>
               <p className="text-xs text-slate-500">
-                تحكم في أدوار وحالات الحسابات المسجّلة. يظل حساب المالك الأساسي ({OWNER_ADMIN_EMAIL}) محميًا كمسؤول.
+                تحكم في أدوار الحسابات، وامنح كل حساب صلاحية الوصول إلى كورسات أو تلخيصات أو مسارات أو كتب أو خواطر محددة. يظل ({OWNER_ADMIN_EMAIL}) محميًا كمسؤول.
               </p>
             </div>
             <button
@@ -1070,12 +1387,23 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                     <th className="py-2.5 px-3 font-semibold">البريد</th>
                     <th className="py-2.5 px-3 font-semibold">الدور</th>
                     <th className="py-2.5 px-3 font-semibold">الحالة</th>
+                    <th className="py-2.5 px-3 font-semibold">صلاحيات المحتوى المخصّصة</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {profiles.map((prof) => {
                     const isPrimaryOwner =
                       prof.email.toLowerCase() === OWNER_ADMIN_EMAIL.toLowerCase();
+                    const g = grantsByUid[prof.uid];
+                    const grantParts: string[] = [];
+                    if (g?.courseDocIds.length)
+                      grantParts.push(`${g.courseDocIds.length} كورس`);
+                    if (g?.noteIds.length) grantParts.push(`${g.noteIds.length} تلخيص`);
+                    if (g?.pathIds.length) grantParts.push(`${g.pathIds.length} مسار`);
+                    if (g?.bookIds.length) grantParts.push(`${g.bookIds.length} كتاب`);
+                    if ((g?.reflectionIds.length || 0) + (g?.reflectionCategories.length || 0) > 0)
+                      grantParts.push('خواطر');
+
                     return (
                       <tr key={prof.uid}>
                         <td className="py-3 px-3 font-semibold text-slate-900">
@@ -1100,7 +1428,7 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                             }
                             className="px-2 py-1 bg-[#F7F8FA] border border-slate-300 rounded-md disabled:opacity-60"
                           >
-                            <option value="user">مستخدم عادي (عام فقط)</option>
+                            <option value="user">مستخدم عادي (عام + مخصّص)</option>
                             <option value="admin">مسؤول (Admin)</option>
                           </select>
                         </td>
@@ -1123,11 +1451,332 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                             <option value="rejected">مرفوض</option>
                           </select>
                         </td>
+                        <td className="py-3 px-3">
+                          {isPrimaryOwner ? (
+                            <span className="text-[11px] text-slate-500">صلاحية كاملة للمالك</span>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => openGrantModalForUser(prof)}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold text-[#1E3A5F] bg-[#F7F8FA] hover:bg-slate-200 border border-slate-200 rounded-lg cursor-pointer"
+                              >
+                                <KeyRound className="w-3 h-3" aria-hidden="true" />
+                                <span>تخصيص المحتوى</span>
+                              </button>
+                              <span className="text-[11px] text-slate-500 tabular-nums">
+                                {grantParts.length > 0 ? grantParts.join(' · ') : 'عام فقط'}
+                              </span>
+                            </div>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* Per-Account Content Access Grants Modal */}
+          {grantModalUser && (
+            <div
+              className="fixed inset-0 z-[75] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
+              role="dialog"
+              aria-modal="true"
+              onClick={() => setGrantModalUser(null)}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-4xl max-h-[90dvh] flex flex-col bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
+              >
+                <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                      تخصيص المحتوى لحساب: {grantModalUser.displayName || grantModalUser.email}
+                    </h3>
+                    <p className="text-[11px] text-slate-500">{grantModalUser.email}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setGrantModalUser(null)}
+                    aria-label="إغلاق"
+                    className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-5 space-y-5 text-xs">
+                  <div className="p-3.5 bg-[#F7F8FA] border border-slate-200 rounded-xl space-y-2.5">
+                    <label className="inline-flex items-center gap-2 font-semibold text-[#1E3A5F] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={grantDraft.includeCourseNotes}
+                        onChange={(e) =>
+                          setGrantDraft((p) => ({
+                            ...p,
+                            includeCourseNotes: e.target.checked,
+                          }))
+                        }
+                      />
+                      <span>
+                        منح جميع التلخيصات والملاحظات المرتبطة بالكورسات المختارة تلقائيًا
+                      </span>
+                    </label>
+                    <input
+                      type="text"
+                      value={grantDraft.notesForUser}
+                      onChange={(e) =>
+                        setGrantDraft((p) => ({ ...p, notesForUser: e.target.value }))
+                      }
+                      placeholder="رسالة ترحيب أو ملاحظة قصيرة لهذا الحساب (اختياري)..."
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Courses */}
+                    <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-64 overflow-y-auto">
+                      <p className="font-bold text-slate-900">
+                        الكورسات ({grantDraft.courseDocIds.length} محدد)
+                      </p>
+                      {props.courses.map((c) => {
+                        const docId = c.docId || `course-${c.id}`;
+                        const checked = grantDraft.courseDocIds.includes(docId);
+                        return (
+                          <label
+                            key={docId}
+                            className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                          >
+                            <span className="truncate">{c.title}</span>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) =>
+                                setGrantDraft((p) => ({
+                                  ...p,
+                                  courseDocIds: e.target.checked
+                                    ? Array.from(new Set([...p.courseDocIds, docId]))
+                                    : p.courseDocIds.filter((id) => id !== docId),
+                                }))
+                              }
+                            />
+                          </label>
+                        );
+                      })}
+                    </div>
+
+                    {/* BookNotes / Summaries */}
+                    <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-64 overflow-y-auto">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-bold text-slate-900">
+                          التلخيصات والملاحظات ({grantDraft.noteIds.length} محدد)
+                        </p>
+                        <input
+                          type="text"
+                          value={grantNoteSearch}
+                          onChange={(e) => setGrantNoteSearch(e.target.value)}
+                          placeholder="بحث..."
+                          className="w-32 px-2 py-1 text-[11px] bg-[#F7F8FA] border border-slate-300 rounded"
+                        />
+                      </div>
+                      {(props.bookNotes || [])
+                        .filter((bn) => {
+                          const q = grantNoteSearch.trim().toLowerCase();
+                          if (!q) return true;
+                          return (
+                            bn.bookTitle.toLowerCase().includes(q) ||
+                            (bn.courseTitle || '').toLowerCase().includes(q)
+                          );
+                        })
+                        .map((bn) => {
+                          const checked = grantDraft.noteIds.includes(bn.id);
+                          return (
+                            <label
+                              key={bn.id}
+                              className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                            >
+                              <span className="truncate">
+                                {bn.bookTitle}
+                                {bn.courseTitle ? ` — ${bn.courseTitle}` : ''}
+                              </span>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) =>
+                                  setGrantDraft((p) => ({
+                                    ...p,
+                                    noteIds: e.target.checked
+                                      ? Array.from(new Set([...p.noteIds, bn.id]))
+                                      : p.noteIds.filter((id) => id !== bn.id),
+                                  }))
+                                }
+                              />
+                            </label>
+                          );
+                        })}
+                    </div>
+
+                    {/* Learning Paths */}
+                    <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-56 overflow-y-auto">
+                      <p className="font-bold text-slate-900">
+                        مسارات التعلّم ({grantDraft.pathIds.length} محدد)
+                      </p>
+                      {props.learningPaths.map((lp) => {
+                        const checked = grantDraft.pathIds.includes(lp.id);
+                        return (
+                          <label
+                            key={lp.id}
+                            className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                          >
+                            <span className="truncate">{lp.title}</span>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) =>
+                                setGrantDraft((p) => ({
+                                  ...p,
+                                  pathIds: e.target.checked
+                                    ? Array.from(new Set([...p.pathIds, lp.id]))
+                                    : p.pathIds.filter((id) => id !== lp.id),
+                                }))
+                              }
+                            />
+                          </label>
+                        );
+                      })}
+                    </div>
+
+                    {/* Reading Library Books */}
+                    <div className="p-3.5 rounded-xl border border-slate-200 space-y-2 max-h-56 overflow-y-auto">
+                      <p className="font-bold text-slate-900">
+                        الكتب ومصادر المكتبة ({grantDraft.bookIds.length} محدد)
+                      </p>
+                      {props.readingItems.map((b) => {
+                        const checked = grantDraft.bookIds.includes(b.id);
+                        return (
+                          <label
+                            key={b.id}
+                            className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                          >
+                            <span className="truncate">{b.title}</span>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) =>
+                                setGrantDraft((p) => ({
+                                  ...p,
+                                  bookIds: e.target.checked
+                                    ? Array.from(new Set([...p.bookIds, b.id]))
+                                    : p.bookIds.filter((id) => id !== b.id),
+                                }))
+                              }
+                            />
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Reflections & Reflection Categories */}
+                  <div className="p-3.5 rounded-xl border border-slate-200 space-y-3">
+                    <p className="font-bold text-slate-900">
+                      منح خواطر وتصنيفات خواطر ({grantDraft.reflectionIds.length} خاطرة ·{' '}
+                      {grantDraft.reflectionCategories.length} تصنيف)
+                    </p>
+                    {allReflectionCats.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {allReflectionCats.map((cat) => {
+                          const checked = grantDraft.reflectionCategories.includes(cat);
+                          return (
+                            <label
+                              key={cat}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#F7F8FA] border border-slate-200 rounded-lg cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) =>
+                                  setGrantDraft((p) => ({
+                                    ...p,
+                                    reflectionCategories: e.target.checked
+                                      ? Array.from(
+                                          new Set([...p.reflectionCategories, cat])
+                                        )
+                                      : p.reflectionCategories.filter((c) => c !== cat),
+                                  }))
+                                }
+                              />
+                              <span>تصنيف: {cat}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {(props.reflections?.length ?? 0) > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-40 overflow-y-auto">
+                        {(props.reflections || []).map((r) => {
+                          const checked = grantDraft.reflectionIds.includes(r.id);
+                          return (
+                            <label
+                              key={r.id}
+                              className="flex items-center justify-between gap-2 p-2 bg-[#F7F8FA] rounded-lg cursor-pointer"
+                            >
+                              <span className="truncate">{r.title || r.moodTag}</span>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) =>
+                                  setGrantDraft((p) => ({
+                                    ...p,
+                                    reflectionIds: e.target.checked
+                                      ? Array.from(new Set([...p.reflectionIds, r.id]))
+                                      : p.reflectionIds.filter((id) => id !== r.id),
+                                  }))
+                                }
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                  {grantsByUid[grantModalUser.uid] ? (
+                    <button
+                      type="button"
+                      disabled={savingGrant}
+                      onClick={() => void handleRevokeUserGrant()}
+                      className="px-3.5 py-2 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
+                    >
+                      إلغاء كل الصلاحيات المخصّصة
+                    </button>
+                  ) : (
+                    <span />
+                  )}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setGrantModalUser(null)}
+                      className="px-4 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg cursor-pointer"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingGrant}
+                      onClick={() => void handleSaveUserGrant()}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                    >
+                      {savingGrant && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      <span>حفظ الصلاحيات</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </section>

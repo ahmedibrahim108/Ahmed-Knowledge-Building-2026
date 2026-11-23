@@ -51,6 +51,7 @@ import {
   DentalCase,
   DomainId,
   DomainInfo,
+  GrantedWorkspaceData,
   INITIAL_BOOK_NOTES,
   INITIAL_COURSES,
   INITIAL_CUSTOM_CATEGORIES,
@@ -68,6 +69,7 @@ import {
   PublicSiteConfig,
   QuarterInfo,
   ReadingLibraryItem,
+  ReflectionColorKey,
   ReflectionMood,
   SmallTask,
   StudyHistoryEntry,
@@ -112,6 +114,7 @@ import {
   deleteWeeklyMeetingDoc,
   ensureUserDocumentAndSeed,
   ensureUserProfileExists,
+  fetchGrantedWorkspaceForUser,
   fetchPublicCatalog,
   sanitizeId,
   saveBookNoteDoc,
@@ -340,8 +343,12 @@ export default function App() {
     courses: [],
     learningPaths: [],
     readingItems: [],
+    reflections: [],
   });
   const [loadingPublicCatalog, setLoadingPublicCatalog] = useState(false);
+  const [grantedWorkspace, setGrantedWorkspace] =
+    useState<GrantedWorkspaceData | null>(null);
+  const [loadingGranted, setLoadingGranted] = useState(false);
 
   const isAdmin = checkIsAdminAccess(user, userProfile);
   const canEdit = isAdmin && !isPreviewingPublic;
@@ -537,10 +544,12 @@ export default function App() {
   }, []);
 
   // Subscribe to public homepage config and load public catalog
-  const refreshPublicCatalog = async () => {
+  const refreshPublicCatalog = async (catsOverride?: string[]) => {
     setLoadingPublicCatalog(true);
     try {
-      const cat = await fetchPublicCatalog();
+      const cats =
+        catsOverride ?? publicSiteConfig.publicReflectionCategories ?? [];
+      const cat = await fetchPublicCatalog(cats);
       setPublicCatalog(cat);
     } finally {
       setLoadingPublicCatalog(false);
@@ -550,6 +559,9 @@ export default function App() {
   useEffect(() => {
     const unsubConfig = subscribePublicSiteConfig((cfg) => {
       setPublicSiteConfig(cfg);
+      void fetchPublicCatalog(cfg.publicReflectionCategories ?? []).then(
+        setPublicCatalog
+      );
     });
     void refreshPublicCatalog();
     return () => {
@@ -585,6 +597,8 @@ export default function App() {
       // Always reset in-memory state first so switching accounts or signing out never bleeds prior account data
       resetToDefaultView(true);
       setUserProfile(null);
+      setGrantedWorkspace(null);
+      setLoadingGranted(false);
       setIsPreviewingPublic(false);
       setUser(nextUser);
 
@@ -609,12 +623,21 @@ export default function App() {
         setAuthReady(true);
 
         if (!adminAllowed) {
-          // Strict RBAC: Non-admin users never seed or access admin workspace data
+          // Strict RBAC: Non-admin users never seed or access admin workspace data directly,
+          // only public items plus explicitly granted read-only content for their account.
           setActiveTab('public');
           setSelectedCourseId(null);
           setStudyModalState(null);
           syncLocationHash('public', null, null);
           void refreshPublicCatalog();
+          setLoadingGranted(true);
+          fetchGrantedWorkspaceForUser(nextUser)
+            .then((gw) => {
+              if (isMounted) setGrantedWorkspace(gw);
+            })
+            .finally(() => {
+              if (isMounted) setLoadingGranted(false);
+            });
           return;
         }
 
@@ -1007,7 +1030,7 @@ export default function App() {
   const recordHistory = (
     payload: Omit<StudyHistoryEntry, 'id' | 'timestampLabel' | 'createdAtMs'>
   ) => {
-    if (!user) return;
+    if (!user || !isAdmin) return;
     const entry: StudyHistoryEntry = {
       ...payload,
       id: `hist-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -1039,7 +1062,7 @@ export default function App() {
 
   // --- Preferences CRUD ---
   const handleUpdatePreferences = (updates: Partial<UserPreferences>) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1050,7 +1073,7 @@ export default function App() {
 
   // --- Quarter CRUD ---
   const handleAddQuarter = (title: string, subtitle: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1067,7 +1090,7 @@ export default function App() {
   };
 
   const handleUpdateQuarter = (id: string, updates: Partial<QuarterInfo>) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1097,7 +1120,7 @@ export default function App() {
   };
 
   const handleDeleteQuarter = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1115,7 +1138,7 @@ export default function App() {
     exploratoryAuthor: string;
     courseId: number;
   }) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1184,11 +1207,11 @@ export default function App() {
   };
 
   const syncMonth = (updated: MonthPlan) => {
-    if (user) void saveMonthDoc(user.uid, updated);
+    if (user && isAdmin) void saveMonthDoc(user.uid, updated);
   };
 
   const handleUpdateMonth = (id: number, updates: Partial<MonthPlan>) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1203,7 +1226,7 @@ export default function App() {
   };
 
   const handleDeleteMonth = (id: number) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1219,7 +1242,7 @@ export default function App() {
   };
 
   const handleUpdateMonthStatus = (id: number, status: MonthStatus) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1227,7 +1250,7 @@ export default function App() {
   };
 
   const handleToggleActivity = (id: number, key: keyof MonthActivities) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1277,7 +1300,7 @@ export default function App() {
   };
 
   const handleUpdateMonthNotes = (id: number, notes: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1290,7 +1313,7 @@ export default function App() {
     field: 'title' | 'author' | 'pace' | 'domainId' | 'format' | 'focus',
     value: string
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1311,7 +1334,7 @@ export default function App() {
   };
 
   const handleToggleMonthTask = (monthId: number, taskId: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1361,7 +1384,7 @@ export default function App() {
     text: string,
     track: SmallTask['track']
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1383,7 +1406,7 @@ export default function App() {
   };
 
   const handleDeleteMonthTask = (monthId: number, taskId: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1416,7 +1439,7 @@ export default function App() {
       sizeBytes?: number;
     }
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1456,7 +1479,7 @@ export default function App() {
     resourceId: string,
     updates: Partial<StudyResource>
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1476,7 +1499,7 @@ export default function App() {
   };
 
   const handleDeleteMonthResource = (monthId: number, resourceId: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1501,7 +1524,7 @@ export default function App() {
 
   // --- Domain CRUD ---
   const handleAddDomain = (payload: Omit<DomainInfo, 'id' | 'order'>) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1521,7 +1544,7 @@ export default function App() {
   };
 
   const handleUpdateDomain = (id: DomainId, updates: Partial<DomainInfo>) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1536,7 +1559,7 @@ export default function App() {
   };
 
   const handleDeleteDomain = (id: DomainId) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1546,7 +1569,7 @@ export default function App() {
 
   // --- Course CRUD ---
   const syncCourse = (updated: PersonalCourse) => {
-    if (user) void saveCourseDoc(user.uid, updated);
+    if (user && isAdmin) void saveCourseDoc(user.uid, updated);
   };
 
   const handleAddCourse = (payload: {
@@ -1566,7 +1589,7 @@ export default function App() {
     applicationMilestone: string;
     linkedMonths: number[];
   }) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1609,7 +1632,7 @@ export default function App() {
     id: number,
     updates: Partial<PersonalCourse>
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1632,7 +1655,7 @@ export default function App() {
   };
 
   const handleDeleteCourse = (id: number) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1649,7 +1672,7 @@ export default function App() {
   };
 
   const handleToggleCourseTask = (courseId: number, taskId: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1701,7 +1724,7 @@ export default function App() {
   };
 
   const handleAddCourseTask = (courseId: number, text: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1723,7 +1746,7 @@ export default function App() {
   };
 
   const handleDeleteCourseTask = (courseId: number, taskId: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1756,7 +1779,7 @@ export default function App() {
       sizeBytes?: number;
     }
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1796,7 +1819,7 @@ export default function App() {
     resourceId: string,
     updates: Partial<StudyResource>
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1816,7 +1839,7 @@ export default function App() {
   };
 
   const handleDeleteCourseResource = (courseId: number, resourceId: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1852,7 +1875,7 @@ export default function App() {
     initialContent?: string;
     stayInCurrentView?: boolean;
   }): string | void => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1907,7 +1930,7 @@ export default function App() {
       return;
     }
 
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1939,7 +1962,7 @@ export default function App() {
       return;
     }
 
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -1966,7 +1989,7 @@ export default function App() {
   };
 
   const handleUpdateBookNote = (id: string, updates: Partial<BookNote>) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2070,6 +2093,8 @@ export default function App() {
     content: string;
     moodTag: ReflectionMood;
     categoryTag?: string;
+    colorKey?: ReflectionColorKey;
+    isPublic?: boolean;
   }): string | undefined => {
     if (!user || !isAdmin) {
       handleRequireAuth();
@@ -2083,6 +2108,8 @@ export default function App() {
       content: payload.content,
       moodTag: payload.moodTag,
       categoryTag: payload.categoryTag || '',
+      colorKey: payload.colorKey,
+      isPublic: Boolean(payload.isPublic),
       pinned: false,
       createdAtLabel: formatArabicDateTime(),
       createdAtMs: now,
@@ -2132,7 +2159,7 @@ export default function App() {
 
   // --- Calendar Events (Weekly & Monthly) CRUD ---
   const handleAddCalendarEvent = (payload: Omit<CalendarEvent, 'id'>) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2159,7 +2186,7 @@ export default function App() {
     id: string,
     updates: Partial<CalendarEvent>
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2174,7 +2201,7 @@ export default function App() {
   };
 
   const handleDeleteCalendarEvent = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2184,7 +2211,7 @@ export default function App() {
 
   // --- Learning Paths CRUD ---
   const handleAddLearningPath = (payload: Omit<LearningPath, 'id'>) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2206,7 +2233,7 @@ export default function App() {
     id: string,
     updates: Partial<LearningPath>
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2221,7 +2248,7 @@ export default function App() {
   };
 
   const handleDeleteLearningPath = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2230,7 +2257,7 @@ export default function App() {
   };
 
   const handleTogglePathStage = (pathId: string, stageId: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2292,7 +2319,7 @@ export default function App() {
 
   // --- Reading Library CRUD ---
   const handleAddReadingItem = (payload: Omit<ReadingLibraryItem, 'id'>) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2314,7 +2341,7 @@ export default function App() {
     id: string,
     updates: Partial<ReadingLibraryItem>
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2329,7 +2356,7 @@ export default function App() {
   };
 
   const handleDeleteReadingItem = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2347,7 +2374,7 @@ export default function App() {
 
   // --- Practical Projects CRUD ---
   const handleAddProject = (payload: Omit<PracticalProject, 'id'>) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2369,7 +2396,7 @@ export default function App() {
     id: string,
     updates: Partial<PracticalProject>
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2384,7 +2411,7 @@ export default function App() {
   };
 
   const handleDeleteProject = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2394,7 +2421,7 @@ export default function App() {
 
   // --- Unified Tasks CRUD ---
   const handleAddUnifiedTask = (payload: Omit<UnifiedTask, 'id'>): string | undefined => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return undefined;
     }
@@ -2417,7 +2444,7 @@ export default function App() {
     id: string,
     updates: Partial<UnifiedTask>
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2515,7 +2542,7 @@ export default function App() {
   };
 
   const handleDeleteUnifiedTask = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2527,7 +2554,7 @@ export default function App() {
   const handleAddDentalCase = (
     payload: Omit<DentalCase, 'id'>
   ): string | undefined => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return undefined;
     }
@@ -2552,7 +2579,7 @@ export default function App() {
     id: string,
     updates: Partial<DentalCase>
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2571,7 +2598,7 @@ export default function App() {
   };
 
   const handleDeleteDentalCase = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2585,7 +2612,7 @@ export default function App() {
 
   // --- Weekly Meetings CRUD ---
   const handleAddWeeklyMeeting = (payload: Omit<WeeklyMeeting, 'id'>) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2607,7 +2634,7 @@ export default function App() {
     id: string,
     updates: Partial<WeeklyMeeting>
   ) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2622,7 +2649,7 @@ export default function App() {
   };
 
   const handleDeleteWeeklyMeeting = (id: string) => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2631,7 +2658,7 @@ export default function App() {
   };
 
   const handleResetPlan = () => {
-    if (!user) {
+    if (!user || !isAdmin) {
       handleRequireAuth();
       return;
     }
@@ -2801,6 +2828,20 @@ export default function App() {
                 ? readingItems.filter((b) => b.isPublic)
                 : publicCatalog.readingItems
             }
+            publicReflections={
+              isAdmin && isPreviewingPublic
+                ? reflections.filter(
+                    (r) =>
+                      Boolean(r.isPublic) ||
+                      (Boolean(r.categoryTag) &&
+                        (
+                          publicSiteConfig.publicReflectionCategories ?? []
+                        ).includes(r.categoryTag!))
+                  )
+                : publicCatalog.reflections
+            }
+            grantedWorkspace={isAdmin ? null : grantedWorkspace}
+            loadingGranted={loadingGranted}
             loadingCatalog={loadingPublicCatalog}
             user={user}
             isAdmin={isAdmin}
@@ -2923,6 +2964,10 @@ export default function App() {
             onUpdateMonthResource={handleUpdateMonthResource}
             onDeleteMonthResource={handleDeleteMonthResource}
             onOpenBookNote={handleAddOrOpenBookNote}
+            customReadingModes={preferences.customReadingModes}
+            onUpdateReadingModes={(nextModes) =>
+              handleUpdatePreferences({ customReadingModes: nextModes })
+            }
           />
         )}
 
@@ -3056,6 +3101,10 @@ export default function App() {
             onOpenCourse={(courseId) => navigateToCourseRoute(courseId)}
             onOpenCalendar={() => navigateToTab('calendar')}
             onOpenTasks={() => navigateToTab('tasks')}
+            customReadingModes={preferences.customReadingModes}
+            onUpdateReadingModes={(nextModes) =>
+              handleUpdatePreferences({ customReadingModes: nextModes })
+            }
           />
         )}
 
@@ -3083,6 +3132,10 @@ export default function App() {
             onOpenCalendar={() => navigateToTab('calendar')}
             onOpenTasksTab={() => navigateToTab('tasks')}
             onOpenPdf={setActivePdfTarget}
+            customReadingModes={preferences.customReadingModes}
+            onUpdateReadingModes={(nextModes) =>
+              handleUpdatePreferences({ customReadingModes: nextModes })
+            }
           />
         )}
 
@@ -3167,15 +3220,31 @@ export default function App() {
             onRequireAuth={handleRequireAuth}
             reflections={reflections}
             reflectionCategories={preferences.reflectionCategories}
-            voiceDialect={preferences.voiceDialect}
-            onAddReflection={(title, content, moodTag, categoryTag) =>
-              handleAddReflection({ title, content, moodTag, categoryTag })
+            publicReflectionCategories={
+              publicSiteConfig.publicReflectionCategories ?? []
             }
+            voiceDialect={preferences.voiceDialect}
+            onAddReflection={handleAddReflection}
             onUpdateReflection={handleUpdateReflection}
             onDeleteReflection={handleDeleteReflection}
             onSaveCategories={(nextCats) =>
               handleUpdatePreferences({ reflectionCategories: nextCats })
             }
+            onTogglePublicCategory={async (cat, makePublic) => {
+              if (!user || !isAdmin) return;
+              const prev = publicSiteConfig.publicReflectionCategories ?? [];
+              const nextCats = makePublic
+                ? Array.from(new Set([...prev, cat]))
+                : prev.filter((c) => c !== cat);
+              const nextCfg: PublicSiteConfig = {
+                ...publicSiteConfig,
+                publicReflectionCategories: nextCats,
+                updatedAtMs: Date.now(),
+              };
+              setPublicSiteConfig(nextCfg);
+              await savePublicSiteConfig(user.uid, nextCfg);
+              void refreshPublicCatalog(nextCats);
+            }}
           />
         )}
 
@@ -3287,6 +3356,9 @@ export default function App() {
               if (!user || !isAdmin) return;
               await savePublicSiteConfig(user.uid, nextCfg);
               setPublicSiteConfig(nextCfg);
+              void refreshPublicCatalog(
+                nextCfg.publicReflectionCategories ?? []
+              );
             }}
             onToggleCoursePublic={(docId, isPub) => {
               const target = courses.find((c) => c.docId === docId);
@@ -3304,6 +3376,16 @@ export default function App() {
               navigateToTab('public', false);
             }}
             bookNotesForExcel={bookNotes}
+            bookNotes={bookNotes}
+            reflections={reflections}
+            reflectionCategories={preferences.reflectionCategories}
+            onToggleReflectionPublic={(id, isPub) => {
+              handleUpdateReflection(id, { isPublic: isPub });
+            }}
+            customReadingModes={preferences.customReadingModes}
+            onUpdateReadingModes={(nextModes) =>
+              handleUpdatePreferences({ customReadingModes: nextModes })
+            }
           />
         )}
           </>

@@ -2,12 +2,14 @@ export type DomainId = string;
 
 export type LearningHubId = 'marketing' | 'dental_career' | 'knowledge';
 
-export type ReadingMode =
-  | 'surface'
-  | 'survey'
-  | 'deep'
-  | 'applied'
-  | 'breakdown';
+export type ReadingMode = string;
+
+export interface ReadingModeMeta {
+  id: string;
+  label: string;
+  shortLabel: string;
+  description: string;
+}
 
 export type CourseStudyStage =
   | 'focus_now'
@@ -233,12 +235,7 @@ export const LEARNING_HUBS: LearningHubMeta[] = [
   },
 ];
 
-export const READING_MODES_META: Array<{
-  id: ReadingMode;
-  label: string;
-  shortLabel: string;
-  description: string;
-}> = [
+export const READING_MODES_META: ReadingModeMeta[] = [
   {
     id: 'surface',
     label: 'قراءة سطحية',
@@ -626,12 +623,137 @@ export interface StudyHistoryEntry {
 
 export type ReflectionMood = 'تأمل' | 'فكرة' | 'امتنان' | 'هدف';
 
+export type ReflectionColorKey =
+  | 'auto'
+  | 'sage'
+  | 'sky'
+  | 'amber'
+  | 'rose'
+  | 'lavender'
+  | 'slate';
+
+export const REFLECTION_COLOR_PALETTE: Record<
+  Exclude<ReflectionColorKey, 'auto'>,
+  {
+    id: Exclude<ReflectionColorKey, 'auto'>;
+    label: string;
+    cardClass: string;
+    cardBg: string;
+    cardBorder: string;
+    accentText: string;
+    badgeClass: string;
+    swatchClass: string;
+    swatchHex: string;
+    hex: string;
+  }
+> = {
+  sage: {
+    id: 'sage',
+    label: 'أخضر هادئ (امتنان)',
+    cardClass: 'bg-[#F3F8F5] border-[#C9DEC9] hover:border-[#A7CBB5]',
+    cardBg: 'bg-[#F3F8F5]',
+    cardBorder: 'border-[#C9DEC9] hover:border-[#A7CBB5]',
+    accentText: 'text-[#1D5438]',
+    badgeClass: 'bg-[#E2EFE6] text-[#1D5438]',
+    swatchClass: 'bg-[#CDE5D6] border-[#7BAE91]',
+    swatchHex: '#CDE5D6',
+    hex: '#F3F8F5',
+  },
+  sky: {
+    id: 'sky',
+    label: 'أزرق سماوي هادئ (تأمل)',
+    cardClass: 'bg-[#F3F7FB] border-[#CBD8E6] hover:border-[#9EB7D2]',
+    cardBg: 'bg-[#F3F7FB]',
+    cardBorder: 'border-[#CBD8E6] hover:border-[#9EB7D2]',
+    accentText: 'text-[#1E3A5F]',
+    badgeClass: 'bg-[#E3ECF6] text-[#1E3A5F]',
+    swatchClass: 'bg-[#CFE0F2] border-[#6F96BE]',
+    swatchHex: '#CFE0F2',
+    hex: '#F3F7FB',
+  },
+  amber: {
+    id: 'amber',
+    label: 'رملي دافئ (فكرة)',
+    cardClass: 'bg-[#FBF8F1] border-[#E7DCC4] hover:border-[#D3C099]',
+    cardBg: 'bg-[#FBF8F1]',
+    cardBorder: 'border-[#E7DCC4] hover:border-[#D3C099]',
+    accentText: 'text-[#7A5413]',
+    badgeClass: 'bg-[#F3EBDA] text-[#7A5413]',
+    swatchClass: 'bg-[#EFE0BE] border-[#C29C53]',
+    swatchHex: '#EFE0BE',
+    hex: '#FBF8F1',
+  },
+  lavender: {
+    id: 'lavender',
+    label: 'ليلكي ناعم (هدف)',
+    cardClass: 'bg-[#F6F5FB] border-[#DCD8EB] hover:border-[#BBB3DA]',
+    cardBg: 'bg-[#F6F5FB]',
+    cardBorder: 'border-[#DCD8EB] hover:border-[#BBB3DA]',
+    accentText: 'text-[#4C3D7A]',
+    badgeClass: 'bg-[#EAE7F5] text-[#4C3D7A]',
+    swatchClass: 'bg-[#DDD6F3] border-[#8F80C4]',
+    swatchHex: '#DDD6F3',
+    hex: '#F6F5FB',
+  },
+  rose: {
+    id: 'rose',
+    label: 'وردي خفيف',
+    cardClass: 'bg-[#FCF5F6] border-[#EAD0D5] hover:border-[#D9A7B2]',
+    cardBg: 'bg-[#FCF5F6]',
+    cardBorder: 'border-[#EAD0D5] hover:border-[#D9A7B2]',
+    accentText: 'text-[#842D43]',
+    badgeClass: 'bg-[#F6E4E8] text-[#842D43]',
+    swatchClass: 'bg-[#F3D5DC] border-[#C67A8D]',
+    swatchHex: '#F3D5DC',
+    hex: '#FCF5F6',
+  },
+  slate: {
+    id: 'slate',
+    label: 'أبيض رمادي صافي',
+    cardClass: 'bg-[#F8F9FB] border-slate-200 hover:border-slate-300',
+    cardBg: 'bg-[#F8F9FB]',
+    cardBorder: 'border-slate-200 hover:border-slate-300',
+    accentText: 'text-slate-700',
+    badgeClass: 'bg-slate-200/75 text-slate-700',
+    swatchClass: 'bg-slate-100 border-slate-400',
+    swatchHex: '#E2E8F0',
+    hex: '#F8F9FB',
+  },
+};
+
+export function resolveReflectionColorKey(
+  reflection: Pick<PersonalReflection, 'colorKey' | 'moodTag'>
+): Exclude<ReflectionColorKey, 'auto'> {
+  if (reflection.colorKey && reflection.colorKey !== 'auto') {
+    return reflection.colorKey;
+  }
+  switch (reflection.moodTag) {
+    case 'امتنان':
+      return 'sage';
+    case 'فكرة':
+      return 'amber';
+    case 'هدف':
+      return 'lavender';
+    case 'تأمل':
+    default:
+      return 'sky';
+  }
+}
+
+export function getReflectionCardStyle(
+  reflection: Pick<PersonalReflection, 'colorKey' | 'moodTag'>
+) {
+  return REFLECTION_COLOR_PALETTE[resolveReflectionColorKey(reflection)];
+}
+
 export interface PersonalReflection {
   id: string;
   title: string;
   content: string;
   moodTag: ReflectionMood;
   categoryTag?: string;
+  colorKey?: ReflectionColorKey;
+  isPublic?: boolean;
   pinned: boolean;
   createdAtLabel: string;
   createdAtMs: number;
@@ -934,6 +1056,7 @@ export interface PublicSiteVisibilityFlags {
   showCourses: boolean;
   showPaths: boolean;
   showBooks: boolean;
+  showReflections?: boolean;
 }
 
 export interface PublicSiteConfig {
@@ -948,6 +1071,7 @@ export interface PublicSiteConfig {
   philosophyText: string;
   sections: PublicSiteSection[];
   visibilityFlags: PublicSiteVisibilityFlags;
+  publicReflectionCategories?: string[];
   updatedAtMs: number;
 }
 
@@ -991,7 +1115,9 @@ export const DEFAULT_PUBLIC_SITE_CONFIG: PublicSiteConfig = {
     showCourses: true,
     showPaths: true,
     showBooks: true,
+    showReflections: true,
   },
+  publicReflectionCategories: [],
   updatedAtMs: 0,
 };
 
@@ -1003,6 +1129,31 @@ export interface UserProfileItem {
   role: 'user' | 'admin';
   approvalStatus: 'pending' | 'approved' | 'rejected' | 'suspended';
   createdAt?: string;
+}
+
+export interface ContentAccessGrant {
+  id: string;
+  ownerId: string;
+  granteeUid: string;
+  granteeEmail: string;
+  courseDocIds: string[];
+  includeCourseNotes: boolean;
+  noteIds: string[];
+  pathIds: string[];
+  bookIds: string[];
+  reflectionIds: string[];
+  reflectionCategories: string[];
+  notesForUser: string;
+  updatedAtMs: number;
+}
+
+export interface GrantedWorkspaceData {
+  grants: ContentAccessGrant[];
+  courses: PersonalCourse[];
+  bookNotes: BookNote[];
+  learningPaths: LearningPath[];
+  readingItems: ReadingLibraryItem[];
+  reflections: PersonalReflection[];
 }
 
 export type EntitySortMode =
@@ -1030,6 +1181,7 @@ export interface UserPreferences {
   calendarPrefs?: CalendarPreferences;
   weeklyRhythm?: WeeklyRhythmItem[];
   reflectionCategories?: string[];
+  customReadingModes?: ReadingModeMeta[];
 }
 
 export const DEFAULT_HUB_CATEGORIES: Record<LearningHubId, string[]> = {
@@ -1055,6 +1207,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   calendarPrefs: DEFAULT_CALENDAR_PREFERENCES,
   weeklyRhythm: DEFAULT_WEEKLY_RHYTHM,
   reflectionCategories: DEFAULT_REFLECTION_CATEGORIES,
+  customReadingModes: READING_MODES_META,
 };
 
 export interface WeeklyRhythmSlot {
@@ -1065,7 +1218,7 @@ export interface WeeklyRhythmSlot {
   guideline: string;
 }
 
-export const HERO_IMAGE_PATH = '/src/assets/images/editorial_study_library_1795029579941.jpg';
+export const HERO_IMAGE_PATH = '/assets/aistudio/image_453deeef.png';
 
 export const INITIAL_QUARTERS: QuarterInfo[] = [
   {

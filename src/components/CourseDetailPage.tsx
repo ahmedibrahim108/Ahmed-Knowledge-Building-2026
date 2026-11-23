@@ -1449,6 +1449,10 @@ export default function CourseDetailPage({
             }}
             onChange={(updates) => onUpdateCourse(course.id, updates)}
             title="تتبع التكرار المتباعد، السماع المتكرر وأنماط القراءة لهذا الكورس"
+            customReadingModes={preferences.customReadingModes}
+            onUpdateReadingModes={(nextModes) =>
+              onUpdatePreferences({ customReadingModes: nextModes })
+            }
           />
         </div>
       )}

@@ -2,16 +2,23 @@ import { useState } from 'react';
 import {
   BookOpen,
   CalendarClock,
+  Check,
   CheckCircle2,
   Headphones,
+  PenLine,
   Plus,
   Repeat,
+  RotateCcw,
+  SlidersHorizontal,
   Sparkles,
+  Trash2,
+  X,
 } from 'lucide-react';
 import {
   DEFAULT_LEARNING_METHODS,
   READING_MODES_META,
   ReadingMode,
+  ReadingModeMeta,
   SPACED_REPETITION_INTERVALS,
   addDaysToDateKey,
   getTodayDateKey,
@@ -33,6 +40,8 @@ interface SpacedRepetitionPanelProps {
   onChange: (updates: SpacedRepetitionValue) => void;
   title?: string;
   compact?: boolean;
+  customReadingModes?: ReadingModeMeta[];
+  onUpdateReadingModes?: (nextModes: ReadingModeMeta[]) => void;
 }
 
 export default function SpacedRepetitionPanel({
@@ -41,8 +50,21 @@ export default function SpacedRepetitionPanel({
   onChange,
   title = 'أنماط القراءة، أساليب التعلم والتكرار المتباعد',
   compact = false,
+  customReadingModes,
+  onUpdateReadingModes,
 }: SpacedRepetitionPanelProps) {
   const [customMethod, setCustomMethod] = useState('');
+  const [editingModesOpen, setEditingModesOpen] = useState(false);
+  const [editingModeId, setEditingModeId] = useState<string | null>(null);
+  const [editModeLabel, setEditModeLabel] = useState('');
+  const [editModeDesc, setEditModeDesc] = useState('');
+  const [newModeLabel, setNewModeLabel] = useState('');
+  const [newModeDesc, setNewModeDesc] = useState('');
+
+  const activeModeCatalog: ReadingModeMeta[] =
+    customReadingModes && customReadingModes.length > 0
+      ? customReadingModes
+      : READING_MODES_META;
 
   const readingModes = value.readingModes ?? [];
   const learningMethods = value.learningMethods ?? [];
@@ -87,6 +109,45 @@ export default function SpacedRepetitionPanel({
       onChange({ learningMethods: [...learningMethods, trimmed] });
     }
     setCustomMethod('');
+  };
+
+  const handleSaveEditedMode = (modeId: string) => {
+    if (!onUpdateReadingModes || !editModeLabel.trim()) return;
+    const cleanLabel = editModeLabel.trim();
+    const next = activeModeCatalog.map((m) =>
+      m.id === modeId
+        ? {
+            ...m,
+            label: cleanLabel,
+            shortLabel: cleanLabel.replace(/^قراءة\s+/, '').slice(0, 24) || cleanLabel,
+            description: editModeDesc.trim(),
+          }
+        : m
+    );
+    onUpdateReadingModes(next);
+    setEditingModeId(null);
+  };
+
+  const handleAddReadingMode = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onUpdateReadingModes || !newModeLabel.trim()) return;
+    const cleanLabel = newModeLabel.trim();
+    const id = `mode_${Date.now()}`;
+    const newEntry: ReadingModeMeta = {
+      id,
+      label: cleanLabel,
+      shortLabel: cleanLabel.replace(/^قراءة\s+/, '').slice(0, 24) || cleanLabel,
+      description:
+        newModeDesc.trim() || 'نمط قراءة وتعلّم مخصّص وفق طريقتك في الفهم والتطبيق.',
+    };
+    onUpdateReadingModes([...activeModeCatalog, newEntry]);
+    setNewModeLabel('');
+    setNewModeDesc('');
+  };
+
+  const handleDeleteReadingMode = (modeId: string) => {
+    if (!onUpdateReadingModes || activeModeCatalog.length <= 1) return;
+    onUpdateReadingModes(activeModeCatalog.filter((m) => m.id !== modeId));
   };
 
   const handleLogSpacedReview = () => {
@@ -143,12 +204,32 @@ export default function SpacedRepetitionPanel({
         </div>
       </div>
 
-      {/* 5 Reading Modes */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
-          <BookOpen className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-          <span>أنماط القراءة المطبّقة (اختر نمطًا أو أكثر):</span>
+      {/* Customizable Reading Modes */}
+      <div className="space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+            <BookOpen className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+            <span>أنماط القراءة المطبّقة (اختر نمطًا أو أكثر):</span>
+          </div>
+          {canEdit && onUpdateReadingModes && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditingModesOpen((v) => !v);
+                setEditingModeId(null);
+              }}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-md border cursor-pointer transition-colors ${
+                editingModesOpen
+                  ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                  : 'bg-white text-[#1E3A5F] border-slate-300 hover:bg-slate-100'
+              }`}
+            >
+              <SlidersHorizontal className="w-3 h-3" aria-hidden="true" />
+              <span>{editingModesOpen ? 'إغلاق التخصيص' : 'تخصيص / إضافة أنماط القراءة'}</span>
+            </button>
+          )}
         </div>
+
         <div
           className={
             compact
@@ -156,7 +237,7 @@ export default function SpacedRepetitionPanel({
               : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2'
           }
         >
-          {READING_MODES_META.map((mode) => {
+          {activeModeCatalog.map((mode) => {
             const active = readingModes.includes(mode.id);
             return (
               <button
@@ -173,17 +254,150 @@ export default function SpacedRepetitionPanel({
                 }`}
               >
                 <p className="text-xs font-bold">{mode.label}</p>
-                <p
-                  className={`text-[10px] mt-0.5 leading-snug ${
-                    active ? 'text-slate-200' : 'text-slate-500'
-                  }`}
-                >
-                  {mode.description}
-                </p>
+                {mode.description && (
+                  <p
+                    className={`text-[10px] mt-0.5 leading-snug ${
+                      active ? 'text-slate-200' : 'text-slate-500'
+                    }`}
+                  >
+                    {mode.description}
+                  </p>
+                )}
               </button>
             );
           })}
         </div>
+
+        {/* Inline Customize Reading Modes Drawer */}
+        {editingModesOpen && canEdit && onUpdateReadingModes && (
+          <div className="bg-white border border-slate-200 rounded-xl p-3.5 sm:p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-bold text-slate-900">
+                  تخصيص أنماط القراءة (تعديل الاسم أو الوصف أو إضافة نمط مثل: قراءة فهم)
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  التعديلات تُحفظ وتظهر عبر المكتبة والكورسات والمسارات والملاحظات.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onUpdateReadingModes(READING_MODES_META)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 bg-slate-100 rounded-md cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                <span>استعادة الافتراضي</span>
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              {activeModeCatalog.map((m) => (
+                <div
+                  key={m.id}
+                  className="p-2.5 rounded-lg bg-[#F7F8FA] border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                >
+                  {editingModeId === m.id ? (
+                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        value={editModeLabel}
+                        onChange={(e) => setEditModeLabel(e.target.value)}
+                        placeholder="اسم النمط (مثلاً: قراءة فهم)"
+                        className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md font-semibold"
+                      />
+                      <input
+                        type="text"
+                        value={editModeDesc}
+                        onChange={(e) => setEditModeDesc(e.target.value)}
+                        placeholder="وصف مختصر..."
+                        className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
+                      />
+                    </div>
+                  ) : (
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-bold text-slate-900">{m.label}</p>
+                      <p className="text-[11px] text-slate-500 truncate">{m.description}</p>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-1 shrink-0">
+                    {editingModeId === m.id ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleSaveEditedMode(m.id)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold bg-[#1E3A5F] text-white rounded-md cursor-pointer"
+                        >
+                          <Check className="w-3 h-3" />
+                          <span>حفظ</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingModeId(null)}
+                          className="p-1 text-slate-500 hover:text-slate-800 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingModeId(m.id);
+                            setEditModeLabel(m.label);
+                            setEditModeDesc(m.description);
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-md cursor-pointer"
+                        >
+                          <PenLine className="w-3 h-3" />
+                          <span>تعديل</span>
+                        </button>
+                        {activeModeCatalog.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteReadingMode(m.id)}
+                            aria-label={`حذف ${m.label}`}
+                            className="p-1.5 text-slate-400 hover:text-red-700 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <form
+              onSubmit={handleAddReadingMode}
+              className="grid grid-cols-1 sm:grid-cols-12 gap-2 pt-2 border-t border-slate-100"
+            >
+              <input
+                type="text"
+                value={newModeLabel}
+                onChange={(e) => setNewModeLabel(e.target.value)}
+                placeholder="إضافة نمط جديد (مثل: قراءة فهم، قراءة نقدية...)"
+                className="sm:col-span-4 px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+              />
+              <input
+                type="text"
+                value={newModeDesc}
+                onChange={(e) => setNewModeDesc(e.target.value)}
+                placeholder="وصف مختصر للنمط (اختياري)..."
+                className="sm:col-span-6 px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+              />
+              <button
+                type="submit"
+                className="sm:col-span-2 inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-semibold bg-[#1E3A5F] text-white hover:bg-[#162C49] rounded-lg cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>إضافة</span>
+              </button>
+            </form>
+          </div>
+        )}
       </div>
 
       {/* Learning Methods */}

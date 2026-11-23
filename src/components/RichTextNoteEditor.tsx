@@ -24,6 +24,8 @@ import {
   SlidersHorizontal,
   Table2,
   Trash2,
+  Type,
+  Underline,
   Undo2,
 } from 'lucide-react';
 import {
@@ -36,6 +38,8 @@ import {
 import { TextDir, detectTextDirection } from '../utils/bidi';
 import {
   HIGHLIGHT_SWATCHES,
+  INLINE_FONT_SIZE_OPTIONS,
+  TEXT_INK_SWATCHES,
   ensureRichHtml,
   getNoteLayoutClasses,
   sanitizePastedHtml,
@@ -164,9 +168,20 @@ export default function RichTextNoteEditor({
   const [activeFormats, setActiveFormats] = useState({
     bold: false,
     italic: false,
+    underline: false,
     ul: false,
     ol: false,
   });
+
+  // Floating Word-style contextual bubble toolbar on word click / text selection
+  const floatingToolbarRef = useRef<HTMLDivElement | null>(null);
+  const [floatingBubble, setFloatingBubble] = useState<{
+    visible: boolean;
+    top: number;
+    left: number;
+    placeBelow: boolean;
+  }>({ visible: false, top: 0, left: 0, placeBelow: false });
+  const [floatingSubMenu, setFloatingSubMenu] = useState<'none' | 'size' | 'color' | 'highlight'>('none');
 
   useEffect(() => {
     setActiveHighlight(preferences.noteHighlightColor);
@@ -186,13 +201,17 @@ export default function RichTextNoteEditor({
 
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as Node;
       if (
         wrapperRef.current &&
-        !wrapperRef.current.contains(e.target as Node)
+        !wrapperRef.current.contains(target) &&
+        (!floatingToolbarRef.current || !floatingToolbarRef.current.contains(target))
       ) {
         setShowHighlightMenu(false);
         setShowTableMenu(false);
         setShowLayoutMenu(false);
+        setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+        setFloatingSubMenu('none');
       }
     };
     document.addEventListener('mousedown', handleOutsideClick);
@@ -458,11 +477,59 @@ export default function RichTextNoteEditor({
     return single ? [single] : [];
   };
 
+  const updateFloatingBubblePosition = () => {
+    if (!canEdit) {
+      setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      return;
+    }
+    const el = editorRef.current;
+    const sel = window.getSelection();
+    if (!el || !sel || sel.rangeCount === 0) {
+      setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    if (!el.contains(range.commonAncestorContainer)) {
+      setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+      return;
+    }
+
+    let rect = range.getBoundingClientRect();
+    if ((!rect || (rect.width === 0 && rect.height === 0)) && range.getClientRects().length > 0) {
+      rect = range.getClientRects()[0];
+    }
+    if (!rect || (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.left === 0)) {
+      const activeBlock = findClosestEditableBlock(sel.anchorNode);
+      if (!activeBlock) {
+        setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+        return;
+      }
+      rect = activeBlock.getBoundingClientRect();
+    }
+
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1024;
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 768;
+    const estWidth = Math.min(390, vw - 24);
+    const placeBelow = rect.top < 78;
+    const rawTop = placeBelow ? rect.bottom + 10 : rect.top - 52;
+    const clampedTop = Math.max(8, Math.min(vh - 64, rawTop));
+    const centerX = rect.left + rect.width / 2;
+    const clampedLeft = Math.max(12, Math.min(vw - estWidth - 12, centerX - estWidth / 2));
+
+    setFloatingBubble({
+      visible: true,
+      top: Math.round(clampedTop),
+      left: Math.round(clampedLeft),
+      placeBelow,
+    });
+  };
+
   const syncFormatState = () => {
     try {
       setActiveFormats({
         bold: document.queryCommandState('bold'),
         italic: document.queryCommandState('italic'),
+        underline: document.queryCommandState('underline'),
         ul: document.queryCommandState('insertUnorderedList'),
         ol: document.queryCommandState('insertOrderedList'),
       });
@@ -498,11 +565,23 @@ export default function RichTextNoteEditor({
         (sel && sel.anchorNode && el.contains(sel.anchorNode))
       ) {
         syncFormatState();
+        updateFloatingBubblePosition();
+      }
+    };
+    const handleScrollOrResize = () => {
+      if (document.activeElement === editorRef.current) {
+        updateFloatingBubblePosition();
       }
     };
     document.addEventListener('selectionchange', handler);
-    return () => document.removeEventListener('selectionchange', handler);
-  }, []);
+    window.addEventListener('scroll', handleScrollOrResize, true);
+    window.addEventListener('resize', handleScrollOrResize);
+    return () => {
+      document.removeEventListener('selectionchange', handler);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+      window.removeEventListener('resize', handleScrollOrResize);
+    };
+  }, [canEdit]);
 
   const emitChange = (normalizeEmptyOnBlur = false) => {
     const el = editorRef.current;
@@ -737,11 +816,69 @@ export default function RichTextNoteEditor({
     }
   };
 
+  const expandCollapsedRangeToWordIfPossible = (sel: Selection): Range | null => {
+    if (sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    if (!range.collapsed) return range;
+    const node = range.startContainer;
+    if (node.nodeType !== Node.TEXT_NODE) return range;
+    const text = node.textContent ?? '';
+    const offset = range.startOffset;
+    const isWordChar = (ch: string) =>
+      /[A-Za-z0-9\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF_-]/.test(ch);
+    let start = offset;
+    let end = offset;
+    while (start > 0 && isWordChar(text[start - 1])) start -= 1;
+    while (end < text.length && isWordChar(text[end])) end += 1;
+    if (end > start) {
+      const expanded = document.createRange();
+      expanded.setStart(node, start);
+      expanded.setEnd(node, end);
+      sel.removeAllRanges();
+      sel.addRange(expanded);
+      return expanded;
+    }
+    return range;
+  };
+
+  const applyInlineStyleToSelection = (styles: { fontSize?: string; color?: string }) => {
+    if (!guardEdit()) return;
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = expandCollapsedRangeToWordIfPossible(sel);
+    if (!range || range.collapsed) return;
+
+    const span = document.createElement('span');
+    if (styles.fontSize) span.style.fontSize = styles.fontSize;
+    if (styles.color) span.style.color = styles.color;
+
+    try {
+      const extracted = range.extractContents();
+      span.appendChild(extracted);
+      range.insertNode(span);
+      sel.removeAllRanges();
+      const nextRange = document.createRange();
+      nextRange.selectNodeContents(span);
+      sel.addRange(nextRange);
+    } catch {
+      // Fallback for cross-block partial ranges
+      const nodes = Array.from(el.childNodes);
+      void nodes;
+    }
+    setFloatingSubMenu('none');
+    emitChange();
+    updateFloatingBubblePosition();
+  };
+
   const applyHighlight = (colorKey: HighlightColorKey) => {
     if (!guardEdit()) return;
     setActiveHighlight(colorKey);
     onSelectDefaultHighlight?.(colorKey);
     setShowHighlightMenu(false);
+    setFloatingSubMenu('none');
 
     const el = editorRef.current;
     if (!el) return;
@@ -750,11 +887,8 @@ export default function RichTextNoteEditor({
     const hex = HIGHLIGHT_SWATCHES[colorKey].bgHex;
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return;
-    const range = selection.getRangeAt(0);
-
-    if (range.collapsed) {
-      return;
-    }
+    const range = expandCollapsedRangeToWordIfPossible(selection);
+    if (!range || range.collapsed) return;
 
     const mark = document.createElement('mark');
     mark.setAttribute('data-highlight', colorKey);
@@ -766,20 +900,23 @@ export default function RichTextNoteEditor({
       selection.removeAllRanges();
       const afterRange = document.createRange();
       afterRange.selectNodeContents(mark);
-      afterRange.collapse(false);
       selection.addRange(afterRange);
     } catch {
       document.execCommand('hiliteColor', false, hex);
     }
     emitChange();
+    updateFloatingBubblePosition();
   };
 
   const removeHighlight = () => {
     if (!guardEdit()) return;
     setShowHighlightMenu(false);
+    setFloatingSubMenu('none');
     const el = editorRef.current;
     if (!el) return;
     el.focus();
+    const sel = window.getSelection();
+    if (sel) expandCollapsedRangeToWordIfPossible(sel);
     document.execCommand('hiliteColor', false, 'transparent');
     document.execCommand('removeFormat');
     emitChange();
@@ -1835,9 +1972,24 @@ export default function RichTextNoteEditor({
           aria-label="محرر الملاحظات المنسّق ثنائي اللغة"
           style={{ caretColor: '#1E3A5F' }}
           onFocus={ensureParagraphSeparator}
-          onInput={() => emitChange(false)}
+          onInput={() => {
+            emitChange(false);
+            updateFloatingBubblePosition();
+          }}
           onCompositionEnd={() => emitChange(false)}
-          onBlur={() => emitChange(true)}
+          onBlur={(e) => {
+            const nextTarget = e.relatedTarget as Node | null;
+            if (floatingToolbarRef.current && nextTarget && floatingToolbarRef.current.contains(nextTarget)) {
+              return;
+            }
+            emitChange(true);
+            setTimeout(() => {
+              if (document.activeElement !== editorRef.current) {
+                setFloatingBubble((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+                setFloatingSubMenu('none');
+              }
+            }, 180);
+          }}
           onPaste={handlePaste}
           onKeyUp={(e) => {
             if (
@@ -1847,8 +1999,12 @@ export default function RichTextNoteEditor({
               syncBlocksBidi(editorRef.current, editorDir);
             }
             syncFormatState();
+            updateFloatingBubblePosition();
           }}
-          onMouseUp={syncFormatState}
+          onMouseUp={() => {
+            syncFormatState();
+            updateFloatingBubblePosition();
+          }}
           className={`prose-bidi w-full ${layout.canvasPaddingClass} ${minHeightClass} ${
             FONT_SIZE_CLASS[preferences.noteFontSize]
           } ${
@@ -1858,6 +2014,298 @@ export default function RichTextNoteEditor({
           }`}
         />
       </div>
+
+      {/* Word-Style Contextual Floating Bubble Toolbar (appears directly beside selected word/caret) */}
+      {canEdit && floatingBubble.visible && (
+        <div
+          ref={floatingToolbarRef}
+          style={{
+            position: 'fixed',
+            top: `${floatingBubble.top}px`,
+            left: `${floatingBubble.left}px`,
+            zIndex: 90,
+          }}
+          onMouseDown={(e) => {
+            // Keep browser text selection alive while interacting with toolbar controls
+            e.preventDefault();
+          }}
+          className="max-w-[calc(100vw-24px)] bg-white/95 backdrop-blur-md border border-slate-200 shadow-xl rounded-xl p-1.5 flex flex-wrap items-center gap-0.5 text-xs"
+          role="toolbar"
+          aria-label="شريط التنسيق السريع للكلمة"
+        >
+          {/* Bold, Italic, Underline */}
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const sel = window.getSelection();
+              if (sel) expandCollapsedRangeToWordIfPossible(sel);
+              runExec('bold');
+            }}
+            title="عريض"
+            className={`w-7 h-7 inline-flex items-center justify-center rounded-md cursor-pointer ${
+              activeFormats.bold ? 'bg-[#1E3A5F] text-white' : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <Bold className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const sel = window.getSelection();
+              if (sel) expandCollapsedRangeToWordIfPossible(sel);
+              runExec('italic');
+            }}
+            title="مائل"
+            className={`w-7 h-7 inline-flex items-center justify-center rounded-md cursor-pointer ${
+              activeFormats.italic ? 'bg-[#1E3A5F] text-white' : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <Italic className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const sel = window.getSelection();
+              if (sel) expandCollapsedRangeToWordIfPossible(sel);
+              runExec('underline');
+            }}
+            title="تحته خط"
+            className={`w-7 h-7 inline-flex items-center justify-center rounded-md cursor-pointer ${
+              activeFormats.underline ? 'bg-[#1E3A5F] text-white' : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <Underline className="w-3.5 h-3.5" />
+          </button>
+
+          <span className="w-px h-4 bg-slate-200 mx-0.5" aria-hidden="true" />
+
+          {/* Inline Font Size Picker */}
+          <div className="relative">
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setFloatingSubMenu((v) => (v === 'size' ? 'none' : 'size'));
+              }}
+              title="حجم الخط للكلمة / التحديد"
+              className={`h-7 px-1.5 inline-flex items-center gap-0.5 rounded-md font-semibold text-[11px] cursor-pointer ${
+                floatingSubMenu === 'size'
+                  ? 'bg-[#1E3A5F] text-white'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <Type className="w-3 h-3" />
+              <span>حجم</span>
+            </button>
+            {floatingSubMenu === 'size' && (
+              <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-lg p-1.5 flex items-center gap-1 z-20 whitespace-nowrap">
+                {INLINE_FONT_SIZE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      applyInlineStyleToSelection({ fontSize: opt.sizePx });
+                    }}
+                    className="px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-100 rounded border border-slate-200 cursor-pointer"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Inline Text Color Picker */}
+          <div className="relative">
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setFloatingSubMenu((v) => (v === 'color' ? 'none' : 'color'));
+              }}
+              title="لون الخط"
+              className={`h-7 px-1.5 inline-flex items-center gap-1 rounded-md text-[11px] font-bold cursor-pointer ${
+                floatingSubMenu === 'color'
+                  ? 'bg-[#1E3A5F] text-white'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <span>A</span>
+              <span className="w-2.5 h-1 rounded-full bg-[#1E3A5F]" />
+            </button>
+            {floatingSubMenu === 'color' && (
+              <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-lg p-2 flex items-center gap-1.5 z-20">
+                {TEXT_INK_SWATCHES.map((sw) => (
+                  <button
+                    key={sw.id}
+                    type="button"
+                    title={sw.label}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      applyInlineStyleToSelection({ color: sw.hex });
+                    }}
+                    className={`w-5 h-5 rounded-full border border-white shadow-xs cursor-pointer ${sw.dotClass}`}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Highlight Picker */}
+          <div className="relative">
+            <button
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setFloatingSubMenu((v) => (v === 'highlight' ? 'none' : 'highlight'));
+              }}
+              title="تظليل النص"
+              className={`w-7 h-7 inline-flex items-center justify-center rounded-md cursor-pointer ${
+                floatingSubMenu === 'highlight'
+                  ? 'bg-[#1E3A5F] text-white'
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <Highlighter className="w-3.5 h-3.5" />
+            </button>
+            {floatingSubMenu === 'highlight' && (
+              <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-lg p-2 flex items-center gap-1.5 z-20">
+                {(Object.keys(HIGHLIGHT_SWATCHES) as HighlightColorKey[]).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    title={HIGHLIGHT_SWATCHES[key].label}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      applyHighlight(key);
+                    }}
+                    className={`w-5 h-5 rounded border cursor-pointer ${HIGHLIGHT_SWATCHES[key].swatchClass}`}
+                  />
+                ))}
+                <button
+                  type="button"
+                  title="إزالة التظليل"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    removeHighlight();
+                  }}
+                  className="px-1.5 py-0.5 text-[10px] text-slate-600 hover:text-red-700 cursor-pointer"
+                >
+                  مسح
+                </button>
+              </div>
+            )}
+          </div>
+
+          <span className="w-px h-4 bg-slate-200 mx-0.5" aria-hidden="true" />
+
+          {/* Alignment Right / Center / Left */}
+          <button
+            type="button"
+            title="محاذاة لليمين"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              applyBlockAlignment('right');
+            }}
+            className={`w-7 h-7 inline-flex items-center justify-center rounded-md cursor-pointer ${
+              activeAlign === 'right' ? 'bg-[#1E3A5F] text-white' : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <AlignRight className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            title="توسيط"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              applyBlockAlignment('center');
+            }}
+            className={`w-7 h-7 inline-flex items-center justify-center rounded-md cursor-pointer ${
+              activeAlign === 'center' ? 'bg-[#1E3A5F] text-white' : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <AlignCenter className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            title="محاذاة لليسار"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              applyBlockAlignment('left');
+            }}
+            className={`w-7 h-7 inline-flex items-center justify-center rounded-md cursor-pointer ${
+              activeAlign === 'left' ? 'bg-[#1E3A5F] text-white' : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <AlignLeft className="w-3.5 h-3.5" />
+          </button>
+
+          <span className="w-px h-4 bg-slate-200 mx-0.5" aria-hidden="true" />
+
+          {/* Quick Direction + Heading + List + Clear */}
+          <button
+            type="button"
+            title="عربي RTL"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              applyBlockDirection('rtl');
+            }}
+            className="h-7 px-1.5 text-[10px] font-bold text-slate-700 hover:bg-slate-100 rounded-md cursor-pointer"
+          >
+            ع
+          </button>
+          <button
+            type="button"
+            title="إنجليزي LTR"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              applyBlockDirection('ltr');
+            }}
+            className="h-7 px-1.5 text-[10px] font-bold text-[#1E3A5F] hover:bg-slate-100 rounded-md cursor-pointer"
+          >
+            EN
+          </button>
+          <button
+            type="button"
+            title="عنوان فرعي"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              toggleSubheading();
+            }}
+            className="w-7 h-7 inline-flex items-center justify-center text-slate-700 hover:bg-slate-100 rounded-md cursor-pointer"
+          >
+            <Heading3 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            title="نقاط"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              runExec('insertUnorderedList');
+            }}
+            className={`w-7 h-7 inline-flex items-center justify-center rounded-md cursor-pointer ${
+              activeFormats.ul ? 'bg-[#1E3A5F] text-white' : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <List className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            title="مسح التنسيق"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              removeHighlight();
+            }}
+            className="w-7 h-7 inline-flex items-center justify-center text-slate-500 hover:text-red-700 hover:bg-red-50 rounded-md cursor-pointer"
+          >
+            <Eraser className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

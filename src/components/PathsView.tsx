@@ -24,6 +24,7 @@ import {
   PersonalCourse,
   PracticalProject,
   ReadingLibraryItem,
+  ReadingModeMeta,
   TaskPriority,
   UnifiedTask,
   computeEndTimeFromMinutes,
@@ -60,6 +61,8 @@ interface PathsViewProps {
   onOpenCourse: (courseId: number) => void;
   onOpenCalendar?: () => void;
   onOpenTasks?: () => void;
+  customReadingModes?: ReadingModeMeta[];
+  onUpdateReadingModes?: (nextModes: ReadingModeMeta[]) => void;
 }
 
 const STATUS_LABELS: Record<LearningPathStatus, string> = {
@@ -89,6 +92,8 @@ export default function PathsView({
   onOpenCourse,
   onOpenCalendar,
   onOpenTasks,
+  customReadingModes,
+  onUpdateReadingModes,
 }: PathsViewProps) {
   const [selectedPathId, setSelectedPathId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -1033,6 +1038,8 @@ export default function PathsView({
             value={selectedPath}
             onChange={(updates) => onUpdatePath(selectedPath.id, updates)}
             title="أساليب التعلم وأنماط القراءة لهذا المسار"
+            customReadingModes={customReadingModes}
+            onUpdateReadingModes={onUpdateReadingModes}
           />
         </section>
 

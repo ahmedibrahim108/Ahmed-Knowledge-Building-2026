@@ -128,6 +128,54 @@ const ALLOWED_BG_COLORS = new Set([
   'rgb(254, 205, 211)',
 ]);
 
+export const TEXT_INK_SWATCHES = [
+  { id: 'slate', label: 'افتراضي داكن', hex: '#1e293b', dotClass: 'bg-slate-800' },
+  { id: 'navy', label: 'كحلي علمي', hex: '#1e3a5f', dotClass: 'bg-[#1E3A5F]' },
+  { id: 'emerald', label: 'أخضر زمردي', hex: '#047857', dotClass: 'bg-emerald-700' },
+  { id: 'amber', label: 'كهرماني دافئ', hex: '#b45309', dotClass: 'bg-amber-700' },
+  { id: 'rose', label: 'قرمزي هادئ', hex: '#be123c', dotClass: 'bg-rose-700' },
+  { id: 'violet', label: 'بنفسجي', hex: '#6d28d9', dotClass: 'bg-violet-700' },
+  { id: 'muted', label: 'رمادي هادئ', hex: '#475569', dotClass: 'bg-slate-600' },
+] as const;
+
+export const INLINE_FONT_SIZE_OPTIONS = [
+  { id: '13px', label: 'صغير', sizePx: '13px' },
+  { id: '15px', label: 'عادي', sizePx: '15px' },
+  { id: '18px', label: 'كبير', sizePx: '18px' },
+  { id: '21px', label: 'عنوان', sizePx: '21px' },
+] as const;
+
+const ALLOWED_TEXT_COLORS = new Map<string, string>([
+  ['#0f172a', '#0f172a'],
+  ['rgb(15, 23, 42)', '#0f172a'],
+  ['#1e293b', '#1e293b'],
+  ['rgb(30, 41, 59)', '#1e293b'],
+  ['#1e3a5f', '#1e3a5f'],
+  ['rgb(30, 58, 95)', '#1e3a5f'],
+  ['#047857', '#047857'],
+  ['rgb(4, 120, 87)', '#047857'],
+  ['#b45309', '#b45309'],
+  ['rgb(180, 83, 9)', '#b45309'],
+  ['#be123c', '#be123c'],
+  ['rgb(190, 18, 60)', '#be123c'],
+  ['#6d28d9', '#6d28d9'],
+  ['rgb(109, 40, 217)', '#6d28d9'],
+  ['#475569', '#475569'],
+  ['rgb(71, 85, 105)', '#475569'],
+]);
+
+const ALLOWED_FONT_SIZES = new Set([
+  '12px',
+  '13px',
+  '14px',
+  '15px',
+  '16px',
+  '18px',
+  '20px',
+  '21px',
+  '22px',
+]);
+
 const BLOCK_DIR_TAGS = new Set([
   'P',
   'DIV',
@@ -333,21 +381,34 @@ function runSanitizeHtml(
       } else if (ALLOWED_BG_COLORS.has(rawBg)) {
         bgHex = rawBg;
       }
+      const rawTextColor = (el.style.color || '').trim().toLowerCase();
+      const safeColor = ALLOWED_TEXT_COLORS.get(rawTextColor) ?? '';
+      const rawFontSize = (el.style.fontSize || '').trim().toLowerCase();
+      const safeFontSize = ALLOWED_FONT_SIZES.has(rawFontSize) ? rawFontSize : '';
+
       const spanDir = (el.getAttribute('dir') || '').toLowerCase();
       const spanDirAttr =
         !ignoreExternalDir && (spanDir === 'ltr' || spanDir === 'rtl')
           ? ` dir="${spanDir}" class="bidi-isolate"`
           : '';
 
+      const extraStyles: string[] = [];
+      if (safeColor) extraStyles.push(`color: ${safeColor}`);
+      if (safeFontSize) extraStyles.push(`font-size: ${safeFontSize}`);
+
       if (tag === 'MARK') {
         const finalBg = bgHex || HIGHLIGHT_SWATCHES.amber.bgHex;
-        return `<mark${spanDirAttr} style="background-color: ${finalBg};">${childrenHtml}</mark>`;
+        extraStyles.unshift(`background-color: ${finalBg}`);
+        return `<mark${spanDirAttr} style="${extraStyles.join('; ')};">${childrenHtml}</mark>`;
       }
       if (bgHex) {
-        return `<mark${spanDirAttr} style="background-color: ${bgHex};">${childrenHtml}</mark>`;
+        extraStyles.unshift(`background-color: ${bgHex}`);
+        return `<mark${spanDirAttr} style="${extraStyles.join('; ')};">${childrenHtml}</mark>`;
       }
-      if (spanDirAttr) {
-        return `<span${spanDirAttr}>${childrenHtml}</span>`;
+      if (extraStyles.length > 0 || spanDirAttr) {
+        const styleAttr =
+          extraStyles.length > 0 ? ` style="${extraStyles.join('; ')};"` : '';
+        return `<span${spanDirAttr}${styleAttr}>${childrenHtml}</span>`;
       }
       return childrenHtml;
     }

@@ -5,25 +5,35 @@ import {
   BookOpen,
   Compass,
   Eye,
+  Feather,
   GraduationCap,
+  KeyRound,
   Layers,
   Loader2,
   LogIn,
   LogOut,
   Map as MapIcon,
+  NotebookPen,
   ShieldCheck,
   Sparkles,
   User as UserIcon,
   X,
 } from 'lucide-react';
 import {
+  BookNote,
+  GrantedWorkspaceData,
+  HERO_IMAGE_PATH,
   LearningPath,
   PersonalCourse,
+  PersonalReflection,
   PublicSiteConfig,
   ReadingLibraryItem,
   getHubMeta,
+  getReflectionCardStyle,
 } from '../data/curriculumData';
 import type { UserProfileRecord } from '../services/supabaseSync';
+import { ensureRichHtml, renderSafeBidiHtml } from '../utils/richText';
+import BidiText from './BidiText';
 import LearningObjectivesPanel from './LearningObjectivesPanel';
 import type { ActivePdfTarget } from './PDFViewerModal';
 
@@ -32,6 +42,9 @@ interface PublicHomeViewProps {
   publicCourses: PersonalCourse[];
   publicPaths: LearningPath[];
   publicBooks: ReadingLibraryItem[];
+  publicReflections?: PersonalReflection[];
+  grantedWorkspace?: GrantedWorkspaceData | null;
+  loadingGranted?: boolean;
   loadingCatalog?: boolean;
   user: User | null;
   isAdmin: boolean;
@@ -44,9 +57,11 @@ interface PublicHomeViewProps {
 }
 
 type PublicDetailModalState =
-  | { type: 'course'; item: PersonalCourse }
+  | { type: 'course'; item: PersonalCourse; linkedNotes?: BookNote[] }
+  | { type: 'note'; item: BookNote }
   | { type: 'path'; item: LearningPath }
   | { type: 'book'; item: ReadingLibraryItem }
+  | { type: 'reflection'; item: PersonalReflection }
   | null;
 
 export default function PublicHomeView({
@@ -54,6 +69,9 @@ export default function PublicHomeView({
   publicCourses,
   publicPaths,
   publicBooks,
+  publicReflections = [],
+  grantedWorkspace,
+  loadingGranted = false,
   loadingCatalog = false,
   user,
   isAdmin,
@@ -65,9 +83,38 @@ export default function PublicHomeView({
   onOpenPdf,
 }: PublicHomeViewProps) {
   const [detailModal, setDetailModal] = useState<PublicDetailModalState>(null);
+  const [heroImgFailed, setHeroImgFailed] = useState(false);
+
   const flags = siteConfig.visibilityFlags;
   const visibleSections = siteConfig.sections.filter((s) => s.visible);
   const effectiveOwnerUid = siteConfig.ownerId || user?.uid;
+
+  const grantedCourses = grantedWorkspace?.courses ?? [];
+  const grantedNotes = grantedWorkspace?.bookNotes ?? [];
+  const grantedPaths = grantedWorkspace?.learningPaths ?? [];
+  const grantedBooks = grantedWorkspace?.readingItems ?? [];
+  const grantedReflections = grantedWorkspace?.reflections ?? [];
+  const totalGrantedCount =
+    grantedCourses.length +
+    grantedNotes.length +
+    grantedPaths.length +
+    grantedBooks.length +
+    grantedReflections.length;
+
+  const adminNotesForUser = (grantedWorkspace?.grants ?? [])
+    .map((g) => g.notesForUser.trim())
+    .filter(Boolean)
+    .join(' · ');
+
+  const openCourseModal = (course: PersonalCourse) => {
+    const matchingNotes = grantedNotes.filter(
+      (n) =>
+        n.courseId === course.id ||
+        (Boolean(n.courseTitle) &&
+          n.courseTitle!.trim().toLowerCase() === course.title.trim().toLowerCase())
+    );
+    setDetailModal({ type: 'course', item: course, linkedNotes: matchingNotes });
+  };
 
   return (
     <div className="space-y-8 pb-12">
@@ -101,7 +148,9 @@ export default function PublicHomeView({
                 مرحبًا {user.displayName || userProfile?.display_name || user.email}
               </p>
               <p className="text-xs text-slate-600">
-                حسابك مسجّل بصلاحية القراءة العامة فقط. يمكنك تصفح السيرة العامة والمواد المنشورة أدناه بكل هدوء.
+                {totalGrantedCount > 0
+                  ? `لديك محتوى مخصّص ومفتوح لحسابك (${totalGrantedCount} عنصر) بالإضافة إلى المواد المنشورة للعامة.`
+                  : 'حسابك مسجّل بصلاحية القراءة العامة فقط. يمكنك تصفح السيرة العامة والمواد المنشورة أدناه بكل هدوء.'}
               </p>
             </div>
           </div>
@@ -124,37 +173,216 @@ export default function PublicHomeView({
 
       {/* Customizable Hero Section */}
       {flags.showHero && (
-        <section className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-10 space-y-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="space-y-3 max-w-3xl">
-              <h1 className="font-editorial text-2xl sm:text-4xl font-bold text-slate-900 leading-tight">
-                {siteConfig.heroTitle}
-              </h1>
-              {siteConfig.heroSubtitle && (
-                <p className="text-base sm:text-lg font-medium text-[#1E3A5F]">
-                  {siteConfig.heroSubtitle}
-                </p>
-              )}
-              {siteConfig.introBio && (
-                <p className="text-sm sm:text-base text-slate-600 leading-loose whitespace-pre-wrap">
-                  {siteConfig.introBio}
-                </p>
+        <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+          <div className="grid grid-cols-1 lg:grid-cols-12 items-stretch">
+            <div className="lg:col-span-7 p-6 sm:p-10 flex flex-col justify-between gap-5">
+              <div className="space-y-3">
+                <h1 className="font-editorial text-2xl sm:text-4xl font-bold text-slate-900 leading-tight">
+                  {siteConfig.heroTitle}
+                </h1>
+                {siteConfig.heroSubtitle && (
+                  <p className="text-base sm:text-lg font-medium text-[#1E3A5F]">
+                    {siteConfig.heroSubtitle}
+                  </p>
+                )}
+                {siteConfig.introBio && (
+                  <p className="text-sm sm:text-base text-slate-600 leading-loose whitespace-pre-wrap">
+                    {siteConfig.introBio}
+                  </p>
+                )}
+              </div>
+
+              {!user && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={onGoogleSignIn}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[42px] text-xs sm:text-sm font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer"
+                  >
+                    <LogIn className="w-4 h-4" aria-hidden="true" />
+                    <span>تسجيل الدخول بحساب Google</span>
+                  </button>
+                </div>
               )}
             </div>
 
-            {!user && (
-              <div className="shrink-0">
-                <button
-                  type="button"
-                  onClick={onGoogleSignIn}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[42px] text-xs sm:text-sm font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer"
-                >
-                  <LogIn className="w-4 h-4" aria-hidden="true" />
-                  <span>تسجيل الدخول بحساب Google</span>
-                </button>
+            {!heroImgFailed && (
+              <div className="lg:col-span-5 relative min-h-[220px] lg:min-h-full bg-slate-100 border-t lg:border-t-0 lg:border-r border-slate-200">
+                <img
+                  src={HERO_IMAGE_PATH}
+                  alt={siteConfig.heroTitle}
+                  referrerPolicy="no-referrer"
+                  onError={() => setHeroImgFailed(true)}
+                  className="w-full h-full lg:absolute lg:inset-0 object-cover"
+                />
               </div>
             )}
           </div>
+        </section>
+      )}
+
+      {/* Granular Granted Workspace Content for Signed-In Non-Admin Accounts */}
+      {user && !isAdmin && (loadingGranted || totalGrantedCount > 0) && (
+        <section className="bg-white border border-[#1E3A5F]/25 rounded-2xl p-5 sm:p-6 space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-5 h-5 text-[#1E3A5F]" aria-hidden="true" />
+                <h2 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
+                  محتوى مخصّص لحسابك ({totalGrantedCount})
+                </h2>
+              </div>
+              {adminNotesForUser && (
+                <p className="text-xs text-[#1E3A5F]">{adminNotesForUser}</p>
+              )}
+            </div>
+            {loadingGranted && (
+              <Loader2 className="w-4 h-4 animate-spin text-[#1E3A5F]" aria-hidden="true" />
+            )}
+          </div>
+
+          {grantedCourses.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                <GraduationCap className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <span>كورسات مخصّصة لك ({grantedCourses.length})</span>
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                {grantedCourses.map((course) => {
+                  const hub = getHubMeta(course.hubId);
+                  return (
+                    <article
+                      key={course.docId || course.id}
+                      onClick={() => openCourseModal(course)}
+                      className="p-4 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 space-y-2 cursor-pointer transition-colors"
+                    >
+                      <p className="text-[11px] font-semibold text-[#1E3A5F]">
+                        {hub.title} · {course.category}
+                      </p>
+                      <h4 className="font-editorial text-base font-bold text-slate-900">
+                        {course.title}
+                      </h4>
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#1E3A5F]">
+                        <span>عرض الكورس وتلخيصاته</span>
+                        <ArrowLeft className="w-3 h-3" aria-hidden="true" />
+                      </span>
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {grantedNotes.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                <NotebookPen className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <span>تلخيصات وملاحظات مخصّصة لك ({grantedNotes.length})</span>
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                {grantedNotes.map((bn) => (
+                  <article
+                    key={bn.id}
+                    onClick={() => setDetailModal({ type: 'note', item: bn })}
+                    className="p-4 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 space-y-1.5 cursor-pointer transition-colors"
+                  >
+                    <p className="text-[11px] text-slate-500 truncate">
+                      {bn.courseTitle || bn.author || 'تلخيص وملاحظة'}
+                    </p>
+                    <h4 className="font-editorial text-base font-bold text-slate-900 line-clamp-1">
+                      <BidiText text={bn.bookTitle} />
+                    </h4>
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#1E3A5F]">
+                      <span>قراءة الملخص والمرفقات</span>
+                      <ArrowLeft className="w-3 h-3" aria-hidden="true" />
+                    </span>
+                  </article>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(grantedPaths.length > 0 || grantedBooks.length > 0) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {grantedPaths.length > 0 && (
+                <div className="space-y-2.5">
+                  <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                    <MapIcon className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                    <span>مسارات مخصّصة ({grantedPaths.length})</span>
+                  </h3>
+                  <div className="space-y-2">
+                    {grantedPaths.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setDetailModal({ type: 'path', item: p })}
+                        className="w-full text-right p-3.5 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 space-y-1 cursor-pointer"
+                      >
+                        <p className="text-sm font-bold text-slate-900">{p.title}</p>
+                        {p.description && (
+                          <p className="text-xs text-slate-600 line-clamp-2">{p.description}</p>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {grantedBooks.length > 0 && (
+                <div className="space-y-2.5">
+                  <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                    <BookOpen className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                    <span>كتب ومصادر مخصّصة ({grantedBooks.length})</span>
+                  </h3>
+                  <div className="space-y-2">
+                    {grantedBooks.map((b) => (
+                      <button
+                        key={b.id}
+                        type="button"
+                        onClick={() => setDetailModal({ type: 'book', item: b })}
+                        className="w-full text-right p-3.5 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 space-y-1 cursor-pointer"
+                      >
+                        <p className="text-sm font-bold text-slate-900">{b.title}</p>
+                        {b.author && <p className="text-xs text-slate-500">{b.author}</p>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {grantedReflections.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                <Feather className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <span>خواطر مخصّصة لحسابك ({grantedReflections.length})</span>
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {grantedReflections.map((r) => {
+                  const style = getReflectionCardStyle(r);
+                  return (
+                    <article
+                      key={r.id}
+                      onClick={() => setDetailModal({ type: 'reflection', item: r })}
+                      className={`p-4 rounded-xl border space-y-1.5 cursor-pointer ${style.cardBg} ${style.cardBorder}`}
+                    >
+                      <p className={`text-[11px] font-semibold ${style.accentText}`}>
+                        {r.moodTag}
+                        {r.categoryTag ? ` · ${r.categoryTag}` : ''}
+                      </p>
+                      <h4 className="font-editorial text-base font-bold text-slate-900 line-clamp-1">
+                        <BidiText text={r.title} />
+                      </h4>
+                      <p className="text-xs text-slate-700 line-clamp-3 leading-relaxed">
+                        <BidiText text={r.content} />
+                      </p>
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -281,7 +509,7 @@ export default function PublicHomeView({
               return (
                 <article
                   key={course.docId}
-                  onClick={() => setDetailModal({ type: 'course', item: course })}
+                  onClick={() => openCourseModal(course)}
                   className="bg-white border border-slate-200 hover:border-[#1E3A5F]/50 rounded-2xl p-5 space-y-3 cursor-pointer transition-colors"
                 >
                   <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
@@ -398,7 +626,42 @@ export default function PublicHomeView({
         </section>
       )}
 
-      {/* Read-Only Public Detail Modal */}
+      {/* Published Reflections */}
+      {flags.showReflections !== false && publicReflections.length > 0 && (
+        <section className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Feather className="w-5 h-5 text-[#1E3A5F]" aria-hidden="true" />
+            <h2 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
+              خواطر وتأملات منشورة ({publicReflections.length})
+            </h2>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {publicReflections.map((r) => {
+              const style = getReflectionCardStyle(r);
+              return (
+                <article
+                  key={r.id}
+                  onClick={() => setDetailModal({ type: 'reflection', item: r })}
+                  className={`rounded-xl border p-4 space-y-2 cursor-pointer transition-all hover:shadow-sm ${style.cardBg} ${style.cardBorder}`}
+                >
+                  <p className={`text-[11px] font-semibold ${style.accentText}`}>
+                    {r.moodTag}
+                    {r.categoryTag ? ` · ${r.categoryTag}` : ''}
+                  </p>
+                  <h3 className="font-editorial text-base font-bold text-slate-900 line-clamp-1">
+                    <BidiText text={r.title} />
+                  </h3>
+                  <p className="text-xs text-slate-700 leading-relaxed line-clamp-4 whitespace-pre-wrap">
+                    <BidiText text={r.content} />
+                  </p>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Read-Only Public / Granted Detail Modal */}
       {detailModal && (
         <div
           className="fixed inset-0 z-[70] bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
@@ -413,10 +676,14 @@ export default function PublicHomeView({
             <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
               <span className="text-xs font-semibold text-[#1E3A5F]">
                 {detailModal.type === 'course'
-                  ? 'تفاصيل الكورس المنشور'
+                  ? 'تفاصيل الكورس'
+                  : detailModal.type === 'note'
+                  ? 'تلخيص وملاحظة'
                   : detailModal.type === 'path'
                   ? 'تفاصيل المسار التعلّمي'
-                  : 'تفاصيل الكتاب المنشور'}
+                  : detailModal.type === 'reflection'
+                  ? 'خاطرة وتأمل'
+                  : 'تفاصيل الكتاب'}
               </span>
               <button
                 type="button"
@@ -495,6 +762,106 @@ export default function PublicHomeView({
                           </div>
                         ))}
                       </div>
+                    </div>
+                  )}
+
+                  {detailModal.linkedNotes && detailModal.linkedNotes.length > 0 && (
+                    <div className="space-y-2.5 pt-3 border-t border-slate-200">
+                      <h4 className="text-xs font-bold text-slate-800">
+                        التلخيصات والملاحظات المفتوحة لهذا الكورس ({detailModal.linkedNotes.length})
+                      </h4>
+                      <div className="space-y-2">
+                        {detailModal.linkedNotes.map((bn) => (
+                          <button
+                            key={bn.id}
+                            type="button"
+                            onClick={() => setDetailModal({ type: 'note', item: bn })}
+                            className="w-full text-right p-3 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-xl flex items-center justify-between gap-2 cursor-pointer"
+                          >
+                            <span className="text-xs font-bold text-slate-900">
+                              <BidiText text={bn.bookTitle} />
+                            </span>
+                            <span className="text-[11px] font-semibold text-[#1E3A5F]">
+                              قراءة الملخص ←
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {detailModal.type === 'note' && (
+                <>
+                  <div className="space-y-1">
+                    <p className="text-xs text-slate-500">
+                      {detailModal.item.courseTitle || detailModal.item.author || 'تلخيص وملاحظة'}
+                    </p>
+                    <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
+                      <BidiText text={detailModal.item.bookTitle} />
+                    </h3>
+                    {detailModal.item.lectureTitle && (
+                      <p className="text-xs text-[#1E3A5F] font-medium">
+                        {detailModal.item.lectureTitle}
+                      </p>
+                    )}
+                  </div>
+
+                  {detailModal.item.content && (
+                    <div
+                      dir="auto"
+                      className="rich-note-rendered text-sm text-slate-800 leading-relaxed bg-[#F7F8FA] border border-slate-200 rounded-xl p-4 sm:p-5"
+                      dangerouslySetInnerHTML={{
+                        __html: renderSafeBidiHtml(
+                          ensureRichHtml(detailModal.item.content)
+                        ),
+                      }}
+                    />
+                  )}
+
+                  {detailModal.item.quotes && (
+                    <div className="p-4 bg-amber-50/60 border border-amber-200/80 rounded-xl space-y-1">
+                      <h4 className="text-xs font-bold text-amber-900">اقتباسات ومقتطفات</h4>
+                      <p className="text-xs text-slate-800 whitespace-pre-wrap leading-relaxed">
+                        {detailModal.item.quotes}
+                      </p>
+                    </div>
+                  )}
+
+                  {(detailModal.item.resources?.length ?? 0) > 0 && (
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-bold text-slate-800">الملفات المرفقة</h4>
+                      {(detailModal.item.resources || []).map((res) => (
+                        <div
+                          key={res.id}
+                          className="p-3 bg-[#F7F8FA] border border-slate-200 rounded-lg flex flex-wrap items-center justify-between gap-2"
+                        >
+                          <span className="text-xs font-medium text-slate-800">
+                            {res.title || res.attachmentName}
+                          </span>
+                          {(res.storagePath || res.downloadUrl) && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onOpenPdf({
+                                  title: res.title || res.attachmentName || 'ملف مرفق',
+                                  fileName: res.attachmentName || 'document.pdf',
+                                  resourceId: res.id,
+                                  storagePath: res.storagePath,
+                                  downloadUrl: res.downloadUrl,
+                                  mimeType: res.mimeType,
+                                  contextLabel: detailModal.item.bookTitle,
+                                  uid: effectiveOwnerUid,
+                                })
+                              }
+                              className="px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                            >
+                              عرض الملف
+                            </button>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </>
@@ -585,7 +952,7 @@ export default function PublicHomeView({
                           resourceId: detailModal.item.attachmentResourceId,
                           storagePath: detailModal.item.storagePath,
                           downloadUrl: detailModal.item.downloadUrl,
-                          contextLabel: 'المكتبة العامة',
+                          contextLabel: 'المكتبة',
                           uid: effectiveOwnerUid,
                         })
                       }
@@ -596,6 +963,25 @@ export default function PublicHomeView({
                     </button>
                   )}
                 </>
+              )}
+
+              {detailModal.type === 'reflection' && (
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <p className="text-xs font-semibold text-[#1E3A5F]">
+                      {detailModal.item.moodTag}
+                      {detailModal.item.categoryTag
+                        ? ` · ${detailModal.item.categoryTag}`
+                        : ''}
+                    </p>
+                    <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
+                      <BidiText text={detailModal.item.title} />
+                    </h3>
+                  </div>
+                  <div className="text-sm text-slate-800 leading-loose whitespace-pre-wrap">
+                    <BidiText text={detailModal.item.content} />
+                  </div>
+                </div>
               )}
             </div>
           </div>

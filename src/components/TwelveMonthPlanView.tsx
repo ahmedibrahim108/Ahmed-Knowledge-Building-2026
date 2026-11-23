@@ -30,6 +30,7 @@ import {
   MonthStatus,
   PersonalCourse,
   QuarterInfo,
+  ReadingModeMeta,
   ResourceFormat,
   SmallTask,
   StudyResource,
@@ -121,6 +122,8 @@ interface TwelveMonthPlanViewProps {
     author: string,
     initialContent?: string
   ) => void;
+  customReadingModes?: ReadingModeMeta[];
+  onUpdateReadingModes?: (nextModes: ReadingModeMeta[]) => void;
 }
 
 const STATUS_META: Record<
@@ -181,6 +184,8 @@ export default function TwelveMonthPlanView({
   onUpdateMonthResource,
   onDeleteMonthResource,
   onOpenBookNote,
+  customReadingModes,
+  onUpdateReadingModes,
 }: TwelveMonthPlanViewProps) {
   const [quarterFilter, setQuarterFilter] = useState<number>(0);
   const [statusFilter, setStatusFilter] = useState<MonthStatus | 'all'>('all');
@@ -1973,6 +1978,8 @@ export default function TwelveMonthPlanView({
                 lastReviewedDateKey: activeMonth.lastReviewedDateKey,
               }}
               onChange={(updates) => onUpdateMonth(activeMonth.id, updates)}
+              customReadingModes={customReadingModes}
+              onUpdateReadingModes={onUpdateReadingModes}
             />
 
             {/* Month Reflection / Summary Box + Voice Dictation */}

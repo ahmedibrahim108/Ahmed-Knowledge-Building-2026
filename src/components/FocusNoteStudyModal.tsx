@@ -1404,6 +1404,10 @@ export default function FocusNoteStudyModal({
                       lastReviewedDateKey: note.lastReviewedDateKey,
                     }}
                     onChange={(updates) => onUpdateBookNote(note.id, updates)}
+                    customReadingModes={preferences.customReadingModes}
+                    onUpdateReadingModes={(nextModes) =>
+                      onUpdatePreferences({ customReadingModes: nextModes })
+                    }
                   />
                 </div>
               )}

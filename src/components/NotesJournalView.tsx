@@ -1337,6 +1337,10 @@ export default function NotesJournalView({
               lastReviewedDateKey: standaloneNote.lastReviewedDateKey,
             }}
             onChange={(updates) => onUpdateBookNote(standaloneNote.id, updates)}
+            customReadingModes={preferences.customReadingModes}
+            onUpdateReadingModes={(nextModes) =>
+              onUpdatePreferences({ customReadingModes: nextModes })
+            }
           />
 
           {/* Per-Note Download Actions */}
