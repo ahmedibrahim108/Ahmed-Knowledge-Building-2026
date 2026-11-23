@@ -2,15 +2,22 @@
 -- Migration 011: Granular Per-Account Access Modes & Annotations,
 -- Granted Blog Posts, and Dashboard Hero Image Preferences
 -- ============================================================================
--- Deadlock-Free & Idempotent (individual non-blocking DDL statements).
+-- NOTE FOR SUPABASE SQL EDITOR:
+-- Because your live app queries these tables concurrently, running all 4 steps
+-- together in one implicit transaction can trigger a 40P01 deadlock across tables.
+-- Run each Block (STEP 1, STEP 2, STEP 3, STEP 4) separately in SQL Editor!
 
+-- ----------------------------------------------------------------------------
+-- STEP 1: Dashboard Hero Image Customization (locks ONLY user_preferences)
+-- ----------------------------------------------------------------------------
 SET lock_timeout = '8s';
-
--- 1. Dashboard Hero Image Customization in user_preferences
 ALTER TABLE public.user_preferences
   ADD COLUMN IF NOT EXISTS dashboard_hero jsonb NOT NULL DEFAULT '{}'::jsonb;
 
--- 2. Extended Per-Account Permissions on content_access_grants
+-- ----------------------------------------------------------------------------
+-- STEP 2: Extended Per-Account Permissions (locks ONLY content_access_grants)
+-- ----------------------------------------------------------------------------
+SET lock_timeout = '8s';
 ALTER TABLE public.content_access_grants
   ADD COLUMN IF NOT EXISTS access_mode text NOT NULL DEFAULT 'read_only',
   ADD COLUMN IF NOT EXISTS allow_user_notes boolean NOT NULL DEFAULT false,
@@ -18,7 +25,10 @@ ALTER TABLE public.content_access_grants
   ADD COLUMN IF NOT EXISTS custom_addition_body text NOT NULL DEFAULT '',
   ADD COLUMN IF NOT EXISTS blog_ids jsonb NOT NULL DEFAULT '[]'::jsonb;
 
--- 3. Allow explicitly granted blog_posts to be read by granted accounts
+-- ----------------------------------------------------------------------------
+-- STEP 3: Allow explicitly granted blog_posts (locks ONLY blog_posts)
+-- ----------------------------------------------------------------------------
+SET lock_timeout = '8s';
 DROP POLICY IF EXISTS blog_posts_select_public_or_admin ON public.blog_posts;
 CREATE POLICY blog_posts_select_public_or_admin ON public.blog_posts
   FOR SELECT TO anon, authenticated
@@ -33,10 +43,13 @@ CREATE POLICY blog_posts_select_public_or_admin ON public.blog_posts
     )
   );
 
--- 4. Granted Item Notes & Annotations Table (for accounts permitted to add notes/questions)
+-- ----------------------------------------------------------------------------
+-- STEP 4: Granted Item Notes Table (no cross-table FK lock on user_profiles)
+-- ----------------------------------------------------------------------------
+SET lock_timeout = '8s';
 CREATE TABLE IF NOT EXISTS public.granted_item_notes (
   id text PRIMARY KEY,
-  owner_id text NOT NULL REFERENCES public.user_profiles(uid) ON DELETE CASCADE,
+  owner_id text NOT NULL,
   author_uid text NOT NULL DEFAULT public.firebase_uid(),
   author_email text NOT NULL DEFAULT '',
   author_name text NOT NULL DEFAULT '',
@@ -120,10 +133,3 @@ CREATE POLICY granted_item_notes_delete_policy ON public.granted_item_notes
     OR (public.is_verified_firebase_user() AND author_uid = public.firebase_uid())
   );
 
-ALTER TABLE public.granted_item_notes REPLICA IDENTITY FULL;
-
-DO $$
-BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.granted_item_notes;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
