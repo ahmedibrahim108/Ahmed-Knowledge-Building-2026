@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
   ArrowLeft,
@@ -15,6 +15,7 @@ import {
   KeyRound,
   ListTodo,
   LogIn,
+  Mic,
   NotebookPen,
   Pin,
   Plus,
@@ -64,13 +65,19 @@ import {
   setActiveLearningHubs,
 } from '../data/curriculumData';
 import type { CloudAttachmentItem } from '../services/supabaseSync';
+import {
+  SavedAudioClipSummary,
+  subscribeUserAudioClips,
+} from '../utils/audioCache';
 import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
 import { FramedImage } from './FramedImage';
 import { ActiveTab } from './Header';
 import type { ActivePdfTarget } from './PDFViewerModal';
 import ProgressCharts from './ProgressCharts';
+import ReflectionAudioPlayer from './ReflectionAudioPlayer';
 import TaskFormModal from './TaskFormModal';
+import VoiceRecorderButton from './VoiceRecorderButton';
 import WeeklyRhythmSection from './WeeklyRhythmSection';
 
 interface OverviewViewProps {
@@ -119,6 +126,7 @@ interface OverviewViewProps {
   onDeleteCustomCategory: (id: string) => void;
   onDeleteHistoryEntry: (id: string) => void;
   onAddReflection: (payload: {
+    id?: string;
     title: string;
     content: string;
     moodTag: ReflectionMood;
@@ -139,6 +147,7 @@ export default function OverviewView({
   user,
   canEdit,
   onRequireAuth,
+  voiceDialect,
   preferences,
   onUpdatePreferences,
   quarters,
@@ -171,6 +180,14 @@ export default function OverviewView({
 
   // Quick Home Reflection Composer & Tag Manager state
   const [quickReflOpen, setQuickReflOpen] = useState(false);
+  const [quickDraftId, setQuickDraftId] = useState(
+    () => `refl-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+  );
+  const [quickVoiceTrigger, setQuickVoiceTrigger] = useState(0);
+  const [quickVoiceClip, setQuickVoiceClip] = useState<{
+    cacheId: string;
+    durationSeconds: number;
+  } | null>(null);
   const [quickReflTitle, setQuickReflTitle] = useState('');
   const [quickReflContent, setQuickReflContent] = useState('');
   const [quickReflMood, setQuickReflMood] = useState<ReflectionMood>('تأمل');
@@ -178,6 +195,24 @@ export default function OverviewView({
   const [managingTags, setManagingTags] = useState(false);
   const [newTagInput, setNewTagInput] = useState('');
   const [homeReflTagFilter, setHomeReflTagFilter] = useState<string>('all');
+  const [reflectionAudioMap, setReflectionAudioMap] = useState<
+    Record<string, SavedAudioClipSummary[]>
+  >({});
+
+  useEffect(() => {
+    const unsubscribe = subscribeUserAudioClips(user?.uid, (clips) => {
+      const grouped: Record<string, SavedAudioClipSummary[]> = {};
+      for (const clip of clips) {
+        if (clip.entityId && clip.entityId.startsWith('reflection:')) {
+          const reflId = clip.entityId.slice('reflection:'.length);
+          if (!grouped[reflId]) grouped[reflId] = [];
+          grouped[reflId].push(clip);
+        }
+      }
+      setReflectionAudioMap(grouped);
+    });
+    return () => unsubscribe();
+  }, [user?.uid]);
 
   // Hub Create / Edit Modal State
   const [hubModalMode, setHubModalMode] = useState<'create' | 'edit' | null>(null);
@@ -892,12 +927,19 @@ export default function OverviewView({
                   <button
                     type="button"
                     onClick={() => {
-                      setQuickReflOpen((v) => !v);
-                      if (!quickReflTag && reflectionTags[0]) {
-                        setQuickReflTag(reflectionTags[0]);
+                      const nextOpen = !quickReflOpen;
+                      if (nextOpen) {
+                        setQuickDraftId(
+                          `refl-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+                        );
+                        setQuickVoiceClip(null);
+                        if (!quickReflTag && reflectionTags[0]) {
+                          setQuickReflTag(reflectionTags[0]);
+                        }
                       }
+                      setQuickReflOpen(nextOpen);
                     }}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border transition-colors cursor-pointer ${
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                       quickReflOpen
                         ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
                         : 'bg-[#F7F8FA] text-[#1E3A5F] border-slate-200 hover:bg-slate-100'
@@ -905,6 +947,28 @@ export default function OverviewView({
                   >
                     <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>خاطرة سريعة</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!quickReflOpen) {
+                        setQuickDraftId(
+                          `refl-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+                        );
+                        setQuickVoiceClip(null);
+                        if (!quickReflTag && reflectionTags[0]) {
+                          setQuickReflTag(reflectionTags[0]);
+                        }
+                        setQuickReflOpen(true);
+                      }
+                      setQuickVoiceTrigger((n) => n + 1);
+                    }}
+                    title="إنشاء خاطرة أو تسجيل صوتي بصوتك مباشرة"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Mic className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>خاطرة بالصوت</span>
                   </button>
 
                   <button
@@ -1055,40 +1119,114 @@ export default function OverviewView({
             </div>
           )}
 
-          {/* Quick Inline Reflection / Note Composer right inside Home */}
+          {/* Quick Inline Reflection / Voice Note Composer right inside Home */}
           {quickReflOpen && canEdit && (
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                const contentClean = quickReflContent.trim();
-                if (!contentClean) return;
+                const contentRaw = quickReflContent.trim();
+                const titleRaw = quickReflTitle.trim();
+                if (!contentRaw && !titleRaw && !quickVoiceClip) return;
+                const durationLabel = quickVoiceClip
+                  ? `${Math.floor(quickVoiceClip.durationSeconds / 60)
+                      .toString()
+                      .padStart(2, '0')}:${Math.round(
+                      quickVoiceClip.durationSeconds % 60
+                    )
+                      .toString()
+                      .padStart(2, '0')}`
+                  : '';
+                const contentClean =
+                  contentRaw ||
+                  (quickVoiceClip
+                    ? `تسجيل صوتي (${durationLabel}) — اضغط للاستماع.`
+                    : titleRaw);
                 const titleClean =
-                  quickReflTitle.trim() ||
-                  contentClean.split(/\s+/).slice(0, 6).join(' ');
+                  titleRaw ||
+                  (contentRaw
+                    ? contentRaw.split(/\s+/).slice(0, 6).join(' ')
+                    : `خاطرة صوتية (${durationLabel})`);
                 onAddReflection({
+                  id: quickDraftId,
                   title: titleClean,
                   content: contentClean,
                   moodTag: quickReflMood,
                   categoryTag: quickReflTag || reflectionTags[0] || '',
                 });
+                setQuickDraftId(
+                  `refl-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+                );
+                setQuickVoiceClip(null);
                 setQuickReflTitle('');
                 setQuickReflContent('');
                 setQuickReflOpen(false);
               }}
               className="p-3.5 bg-[#F8FAFC] border border-[#1E3A5F]/25 rounded-xl space-y-2.5 text-xs"
             >
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-1 border-b border-slate-200/80">
+                <span className="text-[11px] font-bold text-[#1E3A5F]">
+                  تدوين أو تسجيل صوتي سريع
+                </span>
+                <VoiceRecorderButton
+                  dialect={voiceDialect}
+                  label="سجّل صوتك أو أملِ النص"
+                  onRequireAuth={onRequireAuth}
+                  autoStartTrigger={quickVoiceTrigger}
+                  audioMeta={{
+                    entityType: 'other',
+                    entityId: `reflection:${quickDraftId}`,
+                    title: quickReflTitle.trim() || 'خاطرة صوتية',
+                  }}
+                  onTranscript={(spoken) =>
+                    setQuickReflContent((prev) =>
+                      prev ? `${prev}\n${spoken}` : spoken
+                    )
+                  }
+                  onAudioRecorded={(info) => {
+                    setQuickVoiceClip({
+                      cacheId: info.cacheId,
+                      durationSeconds: info.durationSeconds,
+                    });
+                    setReflectionAudioMap((prev) => {
+                      const existing = prev[quickDraftId] || [];
+                      if (existing.some((c) => c.id === info.cacheId)) return prev;
+                      const clipEntry: SavedAudioClipSummary = {
+                        id: info.cacheId,
+                        title: quickReflTitle.trim() || 'خاطرة صوتية',
+                        previewText: '',
+                        entityType: 'other',
+                        entityId: `reflection:${quickDraftId}`,
+                        voiceName: 'Kore',
+                        speed: 'normal',
+                        mimeType: 'audio/webm',
+                        sizeBytes: 0,
+                        durationSeconds: info.durationSeconds,
+                        lastPositionSeconds: 0,
+                        playbackRate: 1,
+                        updatedAtMs: Date.now(),
+                      };
+                      return {
+                        ...prev,
+                        [quickDraftId]: [clipEntry, ...existing],
+                      };
+                    });
+                  }}
+                  onAudioCleared={() => setQuickVoiceClip(null)}
+                />
+              </div>
+
               <input
                 type="text"
                 value={quickReflTitle}
                 onChange={(e) => setQuickReflTitle(e.target.value)}
-                placeholder="عنوان قصير للخاطرة أو النوتة (اختياري)..."
+                placeholder="عنوان قصير للخاطرة أو التسجيل (اختياري)..."
                 className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold"
               />
               <AutoResizeTextarea
                 minRows={2}
                 value={quickReflContent}
                 onChange={(e) => setQuickReflContent(e.target.value)}
-                placeholder="دوّن فكرة سريعة أو تأملًا أو ملاحظة..."
+                placeholder="دوّن فكرة سريعة أو تأملًا، أو سجّل صوتك مباشرة..."
                 className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs leading-relaxed"
               />
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1125,14 +1263,21 @@ export default function OverviewView({
                 <div className="flex items-center gap-1.5 mr-auto">
                   <button
                     type="button"
-                    onClick={() => setQuickReflOpen(false)}
+                    onClick={() => {
+                      setQuickReflOpen(false);
+                      setQuickVoiceClip(null);
+                    }}
                     className="px-2.5 py-1.5 text-[11px] text-slate-600 hover:bg-slate-200/70 rounded-lg cursor-pointer"
                   >
                     إلغاء
                   </button>
                   <button
                     type="submit"
-                    disabled={!quickReflContent.trim()}
+                    disabled={
+                      !quickReflContent.trim() &&
+                      !quickReflTitle.trim() &&
+                      !quickVoiceClip
+                    }
                     className="inline-flex items-center gap-1 px-3 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer disabled:opacity-50"
                   >
                     <Check className="w-3 h-3" aria-hidden="true" />
@@ -1144,31 +1289,62 @@ export default function OverviewView({
           )}
 
           {latestReflections.length === 0 ? (
-            <div className="p-5 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center space-y-2">
+            <div className="p-5 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center space-y-2.5">
               <p className="text-xs text-slate-500">
                 {homeReflTagFilter !== 'all'
                   ? `لا توجد خواطر تحت التاج #${homeReflTagFilter} حاليًا.`
-                  : 'مساحتك الخاصة للأفكار والخواطر الشخصية.'}
+                  : 'مساحتك الخاصة للأفكار والخواطر والتسجيلات الصوتية.'}
               </p>
               {canEdit && (
-                <button
-                  type="button"
-                  onClick={() => setQuickReflOpen(true)}
-                  className="px-3.5 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
-                >
-                  أضف خاطرة الآن
-                </button>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickDraftId(
+                        `refl-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+                      );
+                      setQuickVoiceClip(null);
+                      setQuickReflOpen(true);
+                    }}
+                    className="px-3.5 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                  >
+                    أضف خاطرة الآن
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickDraftId(
+                        `refl-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+                      );
+                      setQuickVoiceClip(null);
+                      setQuickReflOpen(true);
+                      setQuickVoiceTrigger((n) => n + 1);
+                    }}
+                    className="inline-flex items-center gap-1 px-3.5 py-1.5 text-xs font-semibold text-amber-900 bg-amber-50 border border-amber-300 rounded-lg cursor-pointer"
+                  >
+                    <Mic className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>تسجيل بالصوت</span>
+                  </button>
+                </div>
               )}
             </div>
           ) : (
             <div className="space-y-2.5">
               {latestReflections.map((r) => {
                 const cardStyle = getReflectionCardStyle(r);
+                const audioClips = reflectionAudioMap[r.id] || [];
                 return (
-                  <button
+                  <div
                     key={r.id}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => onNavigateTab('reflections')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onNavigateTab('reflections');
+                      }
+                    }}
                     className={`w-full text-right rounded-xl border overflow-hidden transition-colors cursor-pointer ${cardStyle.cardBg} ${cardStyle.cardBorder}`}
                   >
                     {(r.imageUrl || r.imageStoragePath) && (
@@ -1204,8 +1380,15 @@ export default function OverviewView({
                       <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
                         <BidiText text={r.content} />
                       </p>
+                      {audioClips.length > 0 && (
+                        <ReflectionAudioPlayer
+                          uid={user?.uid}
+                          clips={audioClips}
+                          compact
+                        />
+                      )}
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>

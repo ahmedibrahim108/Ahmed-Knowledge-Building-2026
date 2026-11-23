@@ -32,6 +32,10 @@ import {
   sanitizeImageFrameSpec,
 } from '../data/curriculumData';
 import {
+  SavedAudioClipSummary,
+  subscribeUserAudioClips,
+} from '../utils/audioCache';
+import {
   deleteReflectionImageStorage,
   getImagesForScope,
   isImageFile,
@@ -43,6 +47,7 @@ import ConfirmDialog from './ConfirmDialog';
 import { FramedImage, ImageFrameEditorModal } from './FramedImage';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
 import { MAIN_GALLERY_SCOPE_KEY } from './PhotoGalleryView';
+import ReflectionAudioPlayer from './ReflectionAudioPlayer';
 import VoiceRecorderButton from './VoiceRecorderButton';
 
 interface ReflectionsViewProps {
@@ -54,6 +59,7 @@ interface ReflectionsViewProps {
   publicReflectionCategories?: string[];
   voiceDialect: VoiceDialectMode;
   onAddReflection: (payload: {
+    id?: string;
     title: string;
     content: string;
     moodTag: ReflectionMood;
@@ -105,6 +111,13 @@ export default function ReflectionsView({
 
   // Composer state
   const [composerOpen, setComposerOpen] = useState(false);
+  const [composerDraftId, setComposerDraftId] = useState(
+    () => `refl-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+  );
+  const [composerVoiceClip, setComposerVoiceClip] = useState<{
+    cacheId: string;
+    durationSeconds: number;
+  } | null>(null);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [moodTag, setMoodTag] = useState<ReflectionMood>('تأمل');
@@ -119,6 +132,24 @@ export default function ReflectionsView({
   const [uploadingComposerImg, setUploadingComposerImg] = useState(false);
   const [composerImgErr, setComposerImgErr] = useState<string | null>(null);
   const composerFileRef = useRef<HTMLInputElement | null>(null);
+  const [reflectionAudioMap, setReflectionAudioMap] = useState<
+    Record<string, SavedAudioClipSummary[]>
+  >({});
+
+  useEffect(() => {
+    const unsubscribe = subscribeUserAudioClips(uid, (clips) => {
+      const grouped: Record<string, SavedAudioClipSummary[]> = {};
+      for (const clip of clips) {
+        if (clip.entityId && clip.entityId.startsWith('reflection:')) {
+          const reflId = clip.entityId.slice('reflection:'.length);
+          if (!grouped[reflId]) grouped[reflId] = [];
+          grouped[reflId].push(clip);
+        }
+      }
+      setReflectionAudioMap(grouped);
+    });
+    return () => unsubscribe();
+  }, [uid]);
 
   // Gallery Picker helper state
   const [galleryPickerTarget, setGalleryPickerTarget] = useState<
@@ -290,6 +321,18 @@ export default function ReflectionsView({
     [reflections, activeReflectionId]
   );
 
+  const openNewComposerModal = () => {
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    setActiveReflectionId(null);
+    setModalEditing(false);
+    setComposerDraftId(`refl-${Date.now()}-${Math.floor(Math.random() * 1000)}`);
+    setComposerVoiceClip(null);
+    setComposerOpen(true);
+  };
+
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canEdit) {
@@ -298,10 +341,24 @@ export default function ReflectionsView({
     }
     const cleanTitle = title.trim();
     const cleanContent = content.trim();
-    if (!cleanTitle && !cleanContent) return;
+    if (!cleanTitle && !cleanContent && !composerVoiceClip) return;
+    const durationLabel = composerVoiceClip
+      ? `${Math.floor(composerVoiceClip.durationSeconds / 60)
+          .toString()
+          .padStart(2, '0')}:${Math.round(composerVoiceClip.durationSeconds % 60)
+          .toString()
+          .padStart(2, '0')}`
+      : '';
     onAddReflection({
-      title: cleanTitle || 'خاطرة بلا عنوان',
-      content: cleanContent,
+      id: composerDraftId,
+      title:
+        cleanTitle ||
+        (composerVoiceClip ? `خاطرة صوتية (${durationLabel})` : 'خاطرة بلا عنوان'),
+      content:
+        cleanContent ||
+        (composerVoiceClip
+          ? `تسجيل صوتي (${durationLabel}) — اضغط للاستماع.`
+          : ''),
       moodTag,
       categoryTag: categoryTag.trim(),
       colorKey: composerColorKey === 'auto' ? undefined : composerColorKey,
@@ -314,6 +371,8 @@ export default function ReflectionsView({
           }
         : {}),
     });
+    setComposerDraftId(`refl-${Date.now()}-${Math.floor(Math.random() * 1000)}`);
+    setComposerVoiceClip(null);
     setTitle('');
     setContent('');
     setMoodTag('تأمل');
@@ -480,17 +539,11 @@ export default function ReflectionsView({
           </button>
           <button
             type="button"
-            onClick={() => {
-              if (!canEdit) {
-                onRequireAuth();
-                return;
-              }
-              setComposerOpen((v) => !v);
-            }}
+            onClick={openNewComposerModal}
             className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[38px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
           >
             <Plus className="w-4 h-4" aria-hidden="true" />
-            <span>{composerOpen ? 'إغلاق المحرر' : 'تدوين خاطرة جديدة'}</span>
+            <span>تدوين خاطرة جديدة</span>
           </button>
         </div>
       </div>
@@ -589,199 +642,264 @@ export default function ReflectionsView({
         </div>
       )}
 
-      {/* New Reflection Composer */}
+      {/* Balanced Centered New Reflection Composer Pop-Up */}
       {composerOpen && (
-        <form
-          onSubmit={handleCreate}
-          className={`border rounded-2xl p-5 sm:p-6 space-y-4 transition-colors ${composerStyle.cardBg} ${composerStyle.cardBorder}`}
+        <div
+          className="fixed inset-0 z-[72] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-reflection-popup-title"
+          onClick={() => setComposerOpen(false)}
         >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-base font-bold text-slate-900">خاطرة جديدة</h2>
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={composerIsPublic}
-                  onChange={(e) => setComposerIsPublic(e.target.checked)}
-                />
-                <Globe className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-                <span>نشر على الموقع العام</span>
-              </label>
-              <VoiceRecorderButton
-                dialect={voiceDialect}
-                label="إملاء صوتي"
-                onTranscript={(spoken) =>
-                  setContent((prev) => (prev ? `${prev}\n${spoken}` : spoken))
-                }
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                العنوان
-              </label>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="عنوان مختصر للفكرة..."
-                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                النوع الشعوري
-              </label>
-              <select
-                value={moodTag}
-                onChange={(e) => setMoodTag(e.target.value as ReflectionMood)}
-                className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg"
-              >
-                {MOOD_OPTIONS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                التصنيف الشخصي
-              </label>
-              <select
-                value={categoryTag}
-                onChange={(e) => setCategoryTag(e.target.value)}
-                className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg"
-              >
-                <option value="">بدون تصنيف محدد</option>
-                {categories.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {renderPalettePicker(composerColorKey, moodTag, setComposerColorKey)}
-
-          <div>
-            <AutoResizeTextarea
-              minRows={4}
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="اكتب بحرية... ما الفكرة أو الامتنان الذي استوقفك اليوم؟"
-              className="w-full px-3.5 py-3 text-sm leading-loose bg-white border border-slate-300 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
-            />
-          </div>
-
-          {/* Framed Image Control in New Reflection Composer */}
-          <div className="bg-white/80 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-bold text-slate-700 inline-flex items-center gap-1.5">
-                <Images className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-                <span>صورة داخل إطار مخصّص للخاطرة (اختياري)</span>
-              </span>
-              <div className="flex flex-wrap items-center gap-1.5">
-                <input
-                  ref={composerFileRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void handleUploadComposerImage(f);
-                    e.target.value = '';
-                  }}
-                />
-                <button
-                  type="button"
-                  disabled={uploadingComposerImg}
-                  onClick={() => composerFileRef.current?.click()}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-2xl max-h-[90dvh] flex flex-col border rounded-2xl shadow-2xl overflow-hidden transition-colors ${composerStyle.cardBg} ${composerStyle.cardBorder}`}
+          >
+            <form onSubmit={handleCreate} className="flex flex-col flex-1 min-h-0">
+              {/* Pop-Up Fixed Header */}
+              <div className="px-4 sm:px-5 py-3.5 bg-white/80 border-b border-black/5 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <h2
+                  id="new-reflection-popup-title"
+                  className="text-base font-bold text-slate-900 inline-flex items-center gap-2"
                 >
-                  <ImagePlus className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>{uploadingComposerImg ? 'جاري الرفع...' : 'رفع صورة'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setGalleryPickerTarget('composer')}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
-                >
-                  <Images className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>من معرض الصور</span>
-                </button>
-              </div>
-            </div>
-
-            {composerImgErr && (
-              <p className="text-[11px] text-red-700">{composerImgErr}</p>
-            )}
-
-            {(composerImageUrl || composerImageStoragePath) && (
-              <div className="space-y-2">
-                <FramedImage
-                  srcUrl={composerImageUrl}
-                  storagePath={composerImageStoragePath}
-                  frame={composerImageFrame}
-                  defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
-                  alt="صورة الخاطرة"
-                  mode="card"
-                  className="rounded-lg border border-slate-200"
-                />
-                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setFrameEditorState({
-                        mode: 'composer',
-                        srcUrl: composerImageUrl,
-                        storagePath: composerImageStoragePath,
-                        frame: composerImageFrame,
-                      })
-                    }
-                    className="inline-flex items-center gap-1 px-2.5 py-1 font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
-                  >
-                    <Crop className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>تحديد الجزء المعروض وتغيير الحجم</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setComposerImageUrl('');
-                      setComposerImageStoragePath('');
+                  <Feather className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                  <span>خاطرة جديدة</span>
+                </h2>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={composerIsPublic}
+                      onChange={(e) => setComposerIsPublic(e.target.checked)}
+                    />
+                    <Globe className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                    <span>نشر للعامة</span>
+                  </label>
+                  <VoiceRecorderButton
+                    dialect={voiceDialect}
+                    label="تسجيل / إملاء"
+                    onRequireAuth={onRequireAuth}
+                    audioMeta={{
+                      entityType: 'other',
+                      entityId: `reflection:${composerDraftId}`,
+                      title: title.trim() || 'خاطرة صوتية',
                     }}
-                    className="inline-flex items-center gap-1 text-red-700 hover:underline cursor-pointer"
+                    onTranscript={(spoken) =>
+                      setContent((prev) => (prev ? `${prev}\n${spoken}` : spoken))
+                    }
+                    onAudioRecorded={(info) => {
+                      setComposerVoiceClip({
+                        cacheId: info.cacheId,
+                        durationSeconds: info.durationSeconds,
+                      });
+                      setReflectionAudioMap((prev) => {
+                        const existing = prev[composerDraftId] || [];
+                        if (existing.some((c) => c.id === info.cacheId)) return prev;
+                        const clipEntry: SavedAudioClipSummary = {
+                          id: info.cacheId,
+                          title: title.trim() || 'خاطرة صوتية',
+                          previewText: '',
+                          entityType: 'other',
+                          entityId: `reflection:${composerDraftId}`,
+                          voiceName: 'Kore',
+                          speed: 'normal',
+                          mimeType: 'audio/webm',
+                          sizeBytes: 0,
+                          durationSeconds: info.durationSeconds,
+                          lastPositionSeconds: 0,
+                          playbackRate: 1,
+                          updatedAtMs: Date.now(),
+                        };
+                        return {
+                          ...prev,
+                          [composerDraftId]: [clipEntry, ...existing],
+                        };
+                      });
+                    }}
+                    onAudioCleared={() => setComposerVoiceClip(null)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setComposerOpen(false)}
+                    aria-label="إغلاق النافذة"
+                    className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer"
                   >
-                    <Trash2 className="w-3 h-3" aria-hidden="true" />
-                    <span>إزالة الصورة</span>
+                    <X className="w-4 h-4" />
                   </button>
                 </div>
               </div>
-            )}
-          </div>
 
-          <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setComposerOpen(false)}
-              className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
-            >
-              إلغاء
-            </button>
-            <button
-              type="submit"
-              disabled={!title.trim() && !content.trim()}
-              className="px-5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] disabled:opacity-45 rounded-lg cursor-pointer"
-            >
-              حفظ الخاطرة
-            </button>
+              {/* Pop-Up Scrollable Form Body */}
+              <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      العنوان
+                    </label>
+                    <input
+                      type="text"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      placeholder="عنوان مختصر للفكرة..."
+                      className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      النوع الشعوري
+                    </label>
+                    <select
+                      value={moodTag}
+                      onChange={(e) => setMoodTag(e.target.value as ReflectionMood)}
+                      className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg"
+                    >
+                      {MOOD_OPTIONS.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      التصنيف الشخصي
+                    </label>
+                    <select
+                      value={categoryTag}
+                      onChange={(e) => setCategoryTag(e.target.value)}
+                      className="w-full px-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg"
+                    >
+                      <option value="">بدون تصنيف محدد</option>
+                      {categories.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {renderPalettePicker(composerColorKey, moodTag, setComposerColorKey)}
+
+                <div>
+                  <AutoResizeTextarea
+                    minRows={5}
+                    value={content}
+                    onChange={(e) => setContent(e.target.value)}
+                    placeholder="اكتب بحرية... ما الفكرة أو الامتنان الذي استوقفك اليوم؟"
+                    className="w-full px-3.5 py-3 text-sm leading-loose bg-white border border-slate-300 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
+                  />
+                </div>
+
+                {/* Framed Image Control in New Reflection Composer */}
+                <div className="bg-white/80 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-slate-700 inline-flex items-center gap-1.5">
+                      <Images className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                      <span>صورة داخل إطار مخصّص للخاطرة (اختياري)</span>
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <input
+                        ref={composerFileRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void handleUploadComposerImage(f);
+                          e.target.value = '';
+                        }}
+                      />
+                      <button
+                        type="button"
+                        disabled={uploadingComposerImg}
+                        onClick={() => composerFileRef.current?.click()}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+                      >
+                        <ImagePlus className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>{uploadingComposerImg ? 'جاري الرفع...' : 'رفع صورة'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGalleryPickerTarget('composer')}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+                      >
+                        <Images className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>من معرض الصور</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {composerImgErr && (
+                    <p className="text-[11px] text-red-700">{composerImgErr}</p>
+                  )}
+
+                  {(composerImageUrl || composerImageStoragePath) && (
+                    <div className="space-y-2">
+                      <FramedImage
+                        srcUrl={composerImageUrl}
+                        storagePath={composerImageStoragePath}
+                        frame={composerImageFrame}
+                        defaultFrame={DEFAULT_REFLECTION_IMAGE_FRAME}
+                        alt="صورة الخاطرة"
+                        mode="card"
+                        className="rounded-lg border border-slate-200"
+                      />
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFrameEditorState({
+                              mode: 'composer',
+                              srcUrl: composerImageUrl,
+                              storagePath: composerImageStoragePath,
+                              frame: composerImageFrame,
+                            })
+                          }
+                          className="inline-flex items-center gap-1 px-2.5 py-1 font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                        >
+                          <Crop className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span>تحديد الجزء المعروض وتغيير الحجم</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setComposerImageUrl('');
+                            setComposerImageStoragePath('');
+                          }}
+                          className="inline-flex items-center gap-1 text-red-700 hover:underline cursor-pointer"
+                        >
+                          <Trash2 className="w-3 h-3" aria-hidden="true" />
+                          <span>إزالة الصورة</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Pop-Up Fixed Footer */}
+              <div className="px-4 sm:px-5 py-3 bg-white/80 border-t border-black/5 flex items-center justify-end gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setComposerOpen(false)}
+                  className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={!title.trim() && !content.trim() && !composerVoiceClip}
+                  className="px-5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] disabled:opacity-45 rounded-lg cursor-pointer"
+                >
+                  حفظ الخاطرة
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
+        </div>
       )}
 
       {/* Search & Mood Filter Ribbon */}
@@ -906,7 +1024,7 @@ export default function ReflectionsView({
           {canEdit && (
             <button
               type="button"
-              onClick={() => setComposerOpen(true)}
+              onClick={openNewComposerModal}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" aria-hidden="true" />
@@ -970,6 +1088,13 @@ export default function ReflectionsView({
                     <p className="text-xs text-slate-700 leading-relaxed line-clamp-4 whitespace-pre-wrap">
                       <BidiText text={r.content} />
                     </p>
+                    {(reflectionAudioMap[r.id]?.length ?? 0) > 0 && (
+                      <ReflectionAudioPlayer
+                        uid={uid}
+                        clips={reflectionAudioMap[r.id]}
+                        compact
+                      />
+                    )}
                   </div>
 
                   {/* Compact Footer Bar */}
@@ -1268,11 +1393,73 @@ export default function ReflectionsView({
                         )}
                       </div>
 
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-slate-700">
+                          محتوى الخاطرة
+                        </span>
+                        <VoiceRecorderButton
+                          dialect={voiceDialect}
+                          label="إضافة تسجيل / إملاء"
+                          onRequireAuth={onRequireAuth}
+                          audioMeta={{
+                            entityType: 'other',
+                            entityId: `reflection:${activeReflection.id}`,
+                            title: editTitle.trim() || activeReflection.title,
+                          }}
+                          onTranscript={(spoken) =>
+                            setEditContent((prev) =>
+                              prev ? `${prev}\n${spoken}` : spoken
+                            )
+                          }
+                          onAudioRecorded={(info) => {
+                            setReflectionAudioMap((prev) => {
+                              const existing = prev[activeReflection.id] || [];
+                              if (existing.some((c) => c.id === info.cacheId))
+                                return prev;
+                              const clipEntry: SavedAudioClipSummary = {
+                                id: info.cacheId,
+                                title:
+                                  editTitle.trim() || activeReflection.title,
+                                previewText: '',
+                                entityType: 'other',
+                                entityId: `reflection:${activeReflection.id}`,
+                                voiceName: 'Kore',
+                                speed: 'normal',
+                                mimeType: 'audio/webm',
+                                sizeBytes: 0,
+                                durationSeconds: info.durationSeconds,
+                                lastPositionSeconds: 0,
+                                playbackRate: 1,
+                                updatedAtMs: Date.now(),
+                              };
+                              return {
+                                ...prev,
+                                [activeReflection.id]: [clipEntry, ...existing],
+                              };
+                            });
+                          }}
+                        />
+                      </div>
+
                       <AutoResizeTextarea
                         minRows={7}
                         value={editContent}
                         onChange={(e) => setEditContent(e.target.value)}
                         className="w-full px-3.5 py-3 text-sm leading-loose bg-white border border-slate-300 rounded-xl"
+                      />
+
+                      <ReflectionAudioPlayer
+                        uid={uid}
+                        clips={reflectionAudioMap[activeReflection.id] || []}
+                        canEdit={canEdit}
+                        onClipDeleted={(clipId) =>
+                          setReflectionAudioMap((prev) => ({
+                            ...prev,
+                            [activeReflection.id]: (
+                              prev[activeReflection.id] || []
+                            ).filter((c) => c.id !== clipId),
+                          }))
+                        }
                       />
 
                       <div className="flex items-center justify-end gap-2">
@@ -1337,6 +1524,19 @@ export default function ReflectionsView({
                       <div className="text-sm text-slate-800 leading-loose whitespace-pre-wrap">
                         <BidiText text={activeReflection.content} />
                       </div>
+                      <ReflectionAudioPlayer
+                        uid={uid}
+                        clips={reflectionAudioMap[activeReflection.id] || []}
+                        canEdit={canEdit}
+                        onClipDeleted={(clipId) =>
+                          setReflectionAudioMap((prev) => ({
+                            ...prev,
+                            [activeReflection.id]: (
+                              prev[activeReflection.id] || []
+                            ).filter((c) => c.id !== clipId),
+                          }))
+                        }
+                      />
                       <div className="pt-3 border-t border-black/5">
                         <ImageAttachmentGallery
                           uid={uid}
@@ -1360,7 +1560,7 @@ export default function ReflectionsView({
       {/* Gallery Image Picker Modal for Reflections */}
       {galleryPickerTarget && (
         <div
-          className="fixed inset-0 z-[75] bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-[78] bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
           onClick={() => setGalleryPickerTarget(null)}

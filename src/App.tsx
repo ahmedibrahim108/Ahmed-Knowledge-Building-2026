@@ -2171,6 +2171,7 @@ export default function App() {
 
   // --- Personal Reflections («خواطري») CRUD ---
   const handleAddReflection = (payload: {
+    id?: string;
     title: string;
     content: string;
     moodTag: ReflectionMood;
@@ -2186,7 +2187,8 @@ export default function App() {
       return undefined;
     }
     const now = Date.now();
-    const newId = `refl-${now}-${Math.floor(Math.random() * 1000)}`;
+    const newId =
+      payload.id || `refl-${now}-${Math.floor(Math.random() * 1000)}`;
     const newReflection: PersonalReflection = {
       id: newId,
       title: payload.title,

@@ -26,6 +26,13 @@ interface VoiceRecorderButtonProps {
   onRequireAuth?: () => void;
   dialect?: VoiceDialectMode;
   audioMeta?: AudioEntityMeta;
+  autoStartTrigger?: number;
+  onAudioRecorded?: (info: {
+    cacheId: string;
+    durationSeconds: number;
+    cloudSaved: boolean;
+  }) => void;
+  onAudioCleared?: () => void;
 }
 
 type RecorderPhase =
@@ -84,6 +91,9 @@ export default function VoiceRecorderButton({
   onRequireAuth,
   dialect = 'standard_arabic',
   audioMeta,
+  autoStartTrigger = 0,
+  onAudioRecorded,
+  onAudioCleared,
 }: VoiceRecorderButtonProps) {
   const [phase, setPhase] = useState<RecorderPhase>('idle');
   const [seconds, setSeconds] = useState(0);
@@ -111,6 +121,20 @@ export default function VoiceRecorderButton({
   const startedAtMsRef = useRef<number>(0);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewUrlRef = useRef<string | null>(null);
+  const lastAutoTriggerRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (
+      autoStartTrigger > 0 &&
+      autoStartTrigger !== lastAutoTriggerRef.current &&
+      phase === 'idle' &&
+      !disabled
+    ) {
+      lastAutoTriggerRef.current = autoStartTrigger;
+      void handleStart();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStartTrigger]);
 
   useEffect(() => {
     if (phase !== 'recording') {
@@ -312,6 +336,7 @@ export default function VoiceRecorderButton({
       setPlayingPreview(false);
     }
     setLastClip(null);
+    onAudioCleared?.();
 
     if (!navigator.mediaDevices?.getUserMedia) {
       // Try pure browser SpeechRecognition if MediaDevices missing
@@ -416,35 +441,38 @@ export default function VoiceRecorderButton({
           durationSeconds: durationSec,
         });
 
-        // Automatically upload every recorded voice note directly to Supabase Storage when authenticated
+        // Automatically save recorded voice clip locally and to Supabase Storage when authenticated
         const currentUid = auth?.currentUser?.uid;
         if (currentUid) {
           setSavingClip(true);
-          const stamp = new Date().toLocaleTimeString('ar-EG', {
-            hour: '2-digit',
-            minute: '2-digit',
-          });
-          void saveVoiceRecordingToCache(
-            currentUid,
-            blob,
-            actualType,
-            durationSec,
-            audioMeta?.title
-              ? `تسجيل: ${audioMeta.title}`
-              : `تسجيل صوتي (${stamp})`,
-            audioMeta
-          )
-            .then((cloudRes) => {
-              if (cloudRes.cloudSaved) {
-                setLastClip((prev) =>
-                  prev ? { ...prev, savedCacheId: cloudRes.cacheId } : prev
-                );
-              }
-            })
-            .finally(() => {
-              setSavingClip(false);
-            });
         }
+        const stamp = new Date().toLocaleTimeString('ar-EG', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        void saveVoiceRecordingToCache(
+          currentUid,
+          blob,
+          actualType,
+          durationSec,
+          audioMeta?.title
+            ? `تسجيل: ${audioMeta.title}`
+            : `تسجيل صوتي (${stamp})`,
+          audioMeta
+        )
+          .then((cloudRes) => {
+            setLastClip((prev) =>
+              prev ? { ...prev, savedCacheId: cloudRes.cacheId } : prev
+            );
+            onAudioRecorded?.({
+              cacheId: cloudRes.cacheId,
+              durationSeconds: durationSec,
+              cloudSaved: cloudRes.cloudSaved,
+            });
+          })
+          .finally(() => {
+            if (currentUid) setSavingClip(false);
+          });
 
         setPhase('stopped_transcribing');
         try {
@@ -500,6 +528,14 @@ export default function VoiceRecorderButton({
           }
           setPhase('idle');
           setLivePreview('');
+          if (audioMeta?.entityId) {
+            // Audio clip itself was recorded and preserved; avoid blocking pure voice notes with transcription error noise if route is absent
+            const msg = err instanceof Error ? err.message : '';
+            if (msg.includes('خدمة التفريغ السحابية غير متوفرة')) {
+              setStatusNotice('تم حفظ التسجيل الصوتي بنجاح (بدون تفريغ نصي تلقائي)');
+              return;
+            }
+          }
           setStatusNotice('تم التوقف');
           setErrorMsg(
             err instanceof Error ? err.message : 'حدث خطأ أثناء التفريغ الصوتي.'
@@ -618,6 +654,7 @@ export default function VoiceRecorderButton({
       await deleteAudioClipFromCache(auth?.currentUser?.uid, lastClip.savedCacheId);
     }
     setLastClip(null);
+    onAudioCleared?.();
   };
 
   return (
