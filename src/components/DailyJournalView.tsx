@@ -279,10 +279,14 @@ export default function DailyJournalView({
 
       {surfaceTab === 'gallery' ? (
         <JournalGalleryView
+          uid={uid}
+          canEdit={canEdit}
+          onRequireAuth={onRequireAuth}
           dailyJournals={dailyJournals}
           analyticsInput={analyticsInput}
           journalImages={journalImages}
           savedAudioClips={savedAudioClips}
+          onSaveDailyJournal={onSaveDailyJournal}
           onOpenDay={(dk, openCustomize = false) => {
             setSelectedDateKey(dk);
             setModalInitialCustomize(openCustomize);

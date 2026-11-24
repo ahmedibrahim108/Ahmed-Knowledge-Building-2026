@@ -15,12 +15,15 @@ import {
 } from 'lucide-react';
 import {
   ARABIC_MONTH_NAMES,
+  DEFAULT_IMAGE_FRAME_SPEC,
   DailyJournalRecord,
+  ImageFrameSpec,
   JOURNAL_CARD_THEMES,
   formatShortArabicDate,
   getArabicMonthTitle,
   getDayArabicName,
   getMonthDaysList,
+  sanitizeImageFrameSpec,
   shiftMonthKey,
   toLocalDateKey,
 } from '../data/curriculumData';
@@ -35,6 +38,7 @@ import {
   buildDailyJournalSummary,
 } from '../utils/journalAnalytics';
 import { richHtmlToPlainText } from '../utils/richText';
+import JournalCardCustomizeModal from './JournalCardCustomizeModal';
 
 export type JournalGalleryFilter =
   | 'all'
@@ -44,20 +48,34 @@ export type JournalGalleryFilter =
   | 'notes';
 
 interface JournalGalleryViewProps {
+  uid?: string;
+  canEdit: boolean;
+  onRequireAuth: () => void;
   dailyJournals: DailyJournalRecord[];
   analyticsInput: WorkspaceAnalyticsInput;
   journalImages: StoredImageRecord[];
   savedAudioClips: SavedAudioClipSummary[];
+  onSaveDailyJournal: (rec: DailyJournalRecord) => void;
   onOpenDay: (dateKey: string, openCustomize?: boolean) => void;
 }
+
+const CARD_COVER_DEFAULT_FRAME: ImageFrameSpec = {
+  ...DEFAULT_IMAGE_FRAME_SPEC,
+  aspect: '16:9',
+  fitMode: 'cover',
+  sizePreset: 'sm',
+  customHeightPx: 112,
+};
 
 function JournalCardCover({
   coverStoragePath,
   coverImageUrl,
+  coverFrame,
   alt,
 }: {
   coverStoragePath?: string;
   coverImageUrl?: string;
+  coverFrame?: ImageFrameSpec;
   alt: string;
 }) {
   const [src, setSrc] = useState(coverImageUrl || '');
@@ -92,6 +110,8 @@ function JournalCardCover({
 
   if (!src || failed) return null;
 
+  const safeFrame = sanitizeImageFrameSpec(coverFrame, CARD_COVER_DEFAULT_FRAME);
+
   return (
     <div className="relative h-28 w-full overflow-hidden border-b border-black/5 bg-slate-100">
       <img
@@ -99,7 +119,17 @@ function JournalCardCover({
         alt={alt}
         referrerPolicy="no-referrer"
         onError={() => setFailed(true)}
-        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+        style={{
+          objectFit: safeFrame.fitMode,
+          objectPosition: `${safeFrame.offsetX}% ${safeFrame.offsetY}%`,
+          transform:
+            safeFrame.zoom !== 1 ? `scale(${safeFrame.zoom})` : undefined,
+          transformOrigin:
+            safeFrame.fitMode === 'contain' && safeFrame.zoom < 1
+              ? '50% 50%'
+              : `${safeFrame.offsetX}% ${safeFrame.offsetY}%`,
+        }}
+        className="w-full h-full transition-transform duration-300 group-hover:scale-[1.03]"
       />
     </div>
   );
@@ -140,10 +170,14 @@ function DayFallbackThumbnail({ record }: { record: StoredImageRecord }) {
 }
 
 export default function JournalGalleryView({
+  uid,
+  canEdit,
+  onRequireAuth,
   dailyJournals,
   analyticsInput,
   journalImages,
   savedAudioClips,
+  onSaveDailyJournal,
   onOpenDay,
 }: JournalGalleryViewProps) {
   const todayKey = toLocalDateKey();
@@ -153,6 +187,7 @@ export default function JournalGalleryView({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchAllMonths, setSearchAllMonths] = useState(false);
   const [activeFilter, setActiveFilter] = useState<JournalGalleryFilter>('all');
+  const [customizeDayKey, setCustomizeDayKey] = useState<string | null>(null);
 
   const journalByDate = useMemo(() => {
     const map = new Map<string, DailyJournalRecord>();
@@ -572,6 +607,7 @@ export default function JournalGalleryView({
                     <JournalCardCover
                       coverStoragePath={day.rec?.coverImageStoragePath}
                       coverImageUrl={day.rec?.coverImageUrl}
+                      coverFrame={day.rec?.coverFrame}
                       alt={day.rec?.title || day.shortLabel}
                     />
                   )}
@@ -601,11 +637,12 @@ export default function JournalGalleryView({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          onOpenDay(day.dateKey, true);
+                          if (!canEdit) return onRequireAuth();
+                          setCustomizeDayKey(day.dateKey);
                         }}
-                        title="تخصيص شكل البطاقة"
-                        aria-label={`تخصيص يومية ${day.shortLabel}`}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-[#1E3A5F] hover:bg-black/5 opacity-80 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 transition-opacity cursor-pointer shrink-0"
+                        title="تخصيص لون البطاقة وصورة الغلاف"
+                        aria-label={`تخصيص مظهر بطاقة ${day.shortLabel}`}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-[#1E3A5F] hover:bg-black/5 opacity-80 sm:opacity-65 sm:group-hover:opacity-100 focus:opacity-100 transition-opacity cursor-pointer shrink-0"
                       >
                         <Palette className="w-3.5 h-3.5" aria-hidden="true" />
                       </button>
@@ -709,6 +746,26 @@ export default function JournalGalleryView({
             );
           })}
         </div>
+      )}
+
+      {customizeDayKey && (
+        <JournalCardCustomizeModal
+          open={Boolean(customizeDayKey)}
+          dateKey={customizeDayKey}
+          existingRecord={journalByDate.get(customizeDayKey)}
+          dayPhotos={photosByDate.get(customizeDayKey) || []}
+          previewTitle={journalByDate.get(customizeDayKey)?.title}
+          previewExcerpt={
+            cardModels.find((c) => c.dateKey === customizeDayKey)
+              ?.previewExcerpt
+          }
+          uid={uid}
+          canEdit={canEdit}
+          onRequireAuth={onRequireAuth}
+          onSaveDailyJournal={onSaveDailyJournal}
+          onOpenFullDay={(dk) => onOpenDay(dk, false)}
+          onClose={() => setCustomizeDayKey(null)}
+        />
       )}
     </div>
   );

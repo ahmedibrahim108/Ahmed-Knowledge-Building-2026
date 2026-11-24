@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Crop,
   Edit3,
   ImagePlus,
   Layers,
@@ -27,7 +28,9 @@ import {
   X,
 } from 'lucide-react';
 import {
+  DEFAULT_IMAGE_FRAME_SPEC,
   DailyJournalRecord,
+  ImageFrameSpec,
   JOURNAL_CARD_THEMES,
   JOURNAL_QUICK_NOTE_META,
   JournalCardColorKey,
@@ -38,6 +41,7 @@ import {
   addDaysToDateKey,
   formatShortArabicDate,
   getDayArabicName,
+  sanitizeImageFrameSpec,
 } from '../data/curriculumData';
 import { SavedAudioClipSummary } from '../utils/audioCache';
 import {
@@ -62,6 +66,7 @@ import {
 import { renderSafeBidiHtml } from '../utils/richText';
 import AutoResizeTextarea from './AutoResizeTextarea';
 import ConfirmDialog from './ConfirmDialog';
+import { ImageFrameEditorModal } from './FramedImage';
 import JournalVoiceRecorder from './JournalVoiceRecorder';
 import RichTextNoteEditor from './RichTextNoteEditor';
 
@@ -138,6 +143,7 @@ function hasJournalDraftChanged(
     (a.cardColor || 'default') !== (b.cardColor || 'default') ||
     (a.coverImageUrl || '') !== (b.coverImageUrl || '') ||
     (a.coverImageStoragePath || '') !== (b.coverImageStoragePath || '') ||
+    JSON.stringify(a.coverFrame || null) !== JSON.stringify(b.coverFrame || null) ||
     JSON.stringify(a.sections || []) !== JSON.stringify(b.sections || []) ||
     JSON.stringify(a.quickNotes || []) !== JSON.stringify(b.quickNotes || [])
   );
@@ -197,6 +203,7 @@ export default function JournalDayModal({
     useState<ResolvedPhotoItem | null>(null);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [resolvedCoverUrl, setResolvedCoverUrl] = useState('');
+  const [coverFrameEditorOpen, setCoverFrameEditorOpen] = useState(false);
 
   // Quick Note composer + edit state
   const [noteKind, setNoteKind] = useState<JournalQuickNoteKind>('thought');
@@ -602,11 +609,19 @@ export default function JournalDayModal({
     setPhotoError(null);
     setUploadingCover(true);
     try {
+      const oldDedicated =
+        draft.coverImageStoragePath &&
+        draft.coverImageStoragePath.includes('/images/journal_cover_')
+          ? draft.coverImageStoragePath
+          : '';
       const res = await uploadJournalCoverImage(dateKey, file, uid);
+      if (oldDedicated && oldDedicated !== res.imageStoragePath) {
+        void deleteJournalCoverStorage(oldDedicated);
+      }
       updateDraft((prev) => ({
         ...prev,
         coverImageStoragePath: res.imageStoragePath,
-        coverImageUrl: res.imageUrl,
+        coverImageUrl: res.imageUrl || res.localObjectUrl || '',
       }));
     } catch (err) {
       setPhotoError(
@@ -1403,23 +1418,42 @@ export default function JournalDayModal({
         {/* Optional Cover Banner + Customization Panel */}
         {(resolvedCoverUrl || showCustomize) && (
           <div className="bg-white/80 border-b border-slate-200 px-4 sm:px-6 py-4 space-y-4 shrink-0 max-h-[42vh] overflow-y-auto thin-scrollbar">
-            {resolvedCoverUrl && (
-              <div className="relative h-36 sm:h-48 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
-                <img
-                  src={resolvedCoverUrl}
-                  alt={draft.title || 'غلاف اليومية'}
-                  referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover"
-                />
-                {draft.subtitle && (
-                  <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/75 via-black/35 to-transparent">
-                    <p className="text-xs sm:text-sm font-semibold text-white">
-                      {draft.subtitle}
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
+            {resolvedCoverUrl && (() => {
+              const safeCoverFrame = sanitizeImageFrameSpec(
+                draft.coverFrame,
+                DEFAULT_IMAGE_FRAME_SPEC
+              );
+              return (
+                <div className="relative h-36 sm:h-48 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
+                  <img
+                    src={resolvedCoverUrl}
+                    alt={draft.title || 'غلاف اليومية'}
+                    referrerPolicy="no-referrer"
+                    style={{
+                      objectFit: safeCoverFrame.fitMode,
+                      objectPosition: `${safeCoverFrame.offsetX}% ${safeCoverFrame.offsetY}%`,
+                      transform:
+                        safeCoverFrame.zoom !== 1
+                          ? `scale(${safeCoverFrame.zoom})`
+                          : undefined,
+                      transformOrigin:
+                        safeCoverFrame.fitMode === 'contain' &&
+                        safeCoverFrame.zoom < 1
+                          ? '50% 50%'
+                          : `${safeCoverFrame.offsetX}% ${safeCoverFrame.offsetY}%`,
+                    }}
+                    className="w-full h-full"
+                  />
+                  {draft.subtitle && (
+                    <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/75 via-black/35 to-transparent">
+                      <p className="text-xs sm:text-sm font-semibold text-white">
+                        {draft.subtitle}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {showCustomize && (
               <div className="space-y-4">
@@ -1510,20 +1544,31 @@ export default function JournalDayModal({
                     )}
 
                     {canEdit && resolvedCoverUrl && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          updateDraft((prev) => ({
-                            ...prev,
-                            coverImageUrl: '',
-                            coverImageStoragePath: '',
-                          }))
-                        }
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>إزالة الغلاف</span>
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setCoverFrameEditorOpen(true)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[#1E3A5F] bg-[#F0F4F9] hover:bg-[#E3ECF6] rounded-lg cursor-pointer"
+                        >
+                          <Crop className="w-3.5 h-3.5" />
+                          <span>ضبط الفريم</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateDraft((prev) => ({
+                              ...prev,
+                              coverImageUrl: '',
+                              coverImageStoragePath: '',
+                              coverFrame: undefined,
+                            }))
+                          }
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>إزالة الغلاف</span>
+                        </button>
+                      </>
                     )}
                   </div>
 
@@ -1730,6 +1775,22 @@ export default function JournalDayModal({
         onConfirm={() => void handleConfirmDeletePhoto()}
         onCancel={() => setConfirmDeletePhoto(null)}
       />
+
+      {resolvedCoverUrl && (
+        <ImageFrameEditorModal
+          open={coverFrameEditorOpen}
+          srcUrl={draft.coverImageUrl || resolvedCoverUrl}
+          storagePath={draft.coverImageStoragePath}
+          title="ضبط إطار وقص صورة الغلاف"
+          initialFrame={draft.coverFrame}
+          defaultFrame={DEFAULT_IMAGE_FRAME_SPEC}
+          onSave={(nextFrame: ImageFrameSpec) => {
+            updateDraft((prev) => ({ ...prev, coverFrame: nextFrame }));
+            setCoverFrameEditorOpen(false);
+          }}
+          onClose={() => setCoverFrameEditorOpen(false)}
+        />
+      )}
     </div>
   );
 }
