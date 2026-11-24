@@ -3952,6 +3952,9 @@ export default function App() {
             analyticsInput={analyticsInput}
             dailyJournals={dailyJournals}
             canEdit={canEdit}
+            uid={user?.uid}
+            preferences={preferences}
+            onUpdatePreferences={handleUpdatePreferences}
             onRequireAuth={handleRequireAuth}
             onSaveDailyJournal={handleSaveDailyJournal}
             onOpenEntity={handleJournalOpenEntity}

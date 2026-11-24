@@ -1556,8 +1556,149 @@ export interface ActivityLogEntry {
   occurredAtMs: number;
 }
 
+export type JournalCardColorKey =
+  | 'default'
+  | 'linen'
+  | 'sage'
+  | 'sky'
+  | 'rose'
+  | 'lavender'
+  | 'amber'
+  | 'slate';
+
+export const JOURNAL_CARD_THEMES: Record<
+  JournalCardColorKey,
+  {
+    label: string;
+    cardClass: string;
+    surfaceTintClass: string;
+    swatchClass: string;
+    borderClass: string;
+  }
+> = {
+  default: {
+    label: 'أبيض نقي',
+    cardClass: 'bg-white border-slate-200 hover:border-slate-300',
+    surfaceTintClass: 'bg-[#F7F8FA]',
+    swatchClass: 'bg-white border-slate-300',
+    borderClass: 'border-slate-200',
+  },
+  linen: {
+    label: 'ورق دافئ',
+    cardClass: 'bg-[#FAF6EF] border-[#E6DCCB] hover:border-[#D3C3A8]',
+    surfaceTintClass: 'bg-[#F3ECE0]',
+    swatchClass: 'bg-[#EFE6D5] border-[#D3C3A8]',
+    borderClass: 'border-[#E6DCCB]',
+  },
+  sage: {
+    label: 'أخضر هادئ',
+    cardClass: 'bg-[#F2F7F3] border-[#CFE0D4] hover:border-[#AECBB7]',
+    surfaceTintClass: 'bg-[#E6EFE8]',
+    swatchClass: 'bg-[#D5E7DA] border-[#9EBEAA]',
+    borderClass: 'border-[#CFE0D4]',
+  },
+  sky: {
+    label: 'سماوي لطيف',
+    cardClass: 'bg-[#F0F6FA] border-[#CCE0EE] hover:border-[#A7CBE2]',
+    surfaceTintClass: 'bg-[#E3EFF7]',
+    swatchClass: 'bg-[#D4E8F5] border-[#9BC2DC]',
+    borderClass: 'border-[#CCE0EE]',
+  },
+  rose: {
+    label: 'وردي خفيف',
+    cardClass: 'bg-[#FBF2F3] border-[#EED3D7] hover:border-[#DFB3BA]',
+    surfaceTintClass: 'bg-[#F6E6E9]',
+    swatchClass: 'bg-[#F3D8DD] border-[#DDA8B1]',
+    borderClass: 'border-[#EED3D7]',
+  },
+  lavender: {
+    label: 'خزامى ناعم',
+    cardClass: 'bg-[#F5F3FA] border-[#DCD5EE] hover:border-[#C2B6E1]',
+    surfaceTintClass: 'bg-[#ECE8F6]',
+    swatchClass: 'bg-[#E2DAF3] border-[#B6A7DC]',
+    borderClass: 'border-[#DCD5EE]',
+  },
+  amber: {
+    label: 'كهرماني دافئ',
+    cardClass: 'bg-[#FDF8EC] border-[#EEDFB8] hover:border-[#DEC68E]',
+    surfaceTintClass: 'bg-[#F8EED8]',
+    swatchClass: 'bg-[#F6E4BA] border-[#D8B872]',
+    borderClass: 'border-[#EEDFB8]',
+  },
+  slate: {
+    label: 'رمادي حجري',
+    cardClass: 'bg-[#F4F5F7] border-[#D6DCE5] hover:border-[#BAC4D4]',
+    surfaceTintClass: 'bg-[#EAECEF]',
+    swatchClass: 'bg-[#DCE1E9] border-[#A7B3C5]',
+    borderClass: 'border-[#D6DCE5]',
+  },
+};
+
+export interface JournalTextSection {
+  id: string;
+  heading: string;
+  bodyHtml: string;
+  updatedAtMs: number;
+}
+
+export type JournalQuickNoteKind =
+  | 'thought'
+  | 'learned'
+  | 'remember'
+  | 'event'
+  | 'idea';
+
+export const JOURNAL_QUICK_NOTE_META: Record<
+  JournalQuickNoteKind,
+  { label: string; hint: string; badgeClass: string }
+> = {
+  thought: {
+    label: 'خاطرة اليوم',
+    hint: 'فكرة عابرة أو تأمل شخصي',
+    badgeClass: 'bg-[#F0F4F9] text-[#1E3A5F] border-[#1E3A5F]/20',
+  },
+  learned: {
+    label: 'شيء تعلّمته',
+    hint: 'معرفة أو درس مستفاد اليوم',
+    badgeClass: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+  },
+  remember: {
+    label: 'تذكير مهم',
+    hint: 'شيء أريد تذكره لاحقًا',
+    badgeClass: 'bg-amber-50 text-amber-800 border-amber-200',
+  },
+  event: {
+    label: 'حدث بارز',
+    hint: 'موقف أو لحظة مميزة في اليوم',
+    badgeClass: 'bg-rose-50 text-rose-800 border-rose-200',
+  },
+  idea: {
+    label: 'فكرة مشروع',
+    hint: 'بذرة مشروع أو مبادرة مستقبلية',
+    badgeClass: 'bg-violet-50 text-violet-800 border-violet-200',
+  },
+};
+
+export interface JournalQuickNote {
+  id: string;
+  kind: JournalQuickNoteKind;
+  title?: string;
+  body: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
 export interface DailyJournalRecord {
   dateKey: string; // YYYY-MM-DD (one per user + local date)
+  title?: string;
+  subtitle?: string;
+  bodyHtml?: string;
+  sections?: JournalTextSection[];
+  quickNotes?: JournalQuickNote[];
+  cardColor?: JournalCardColorKey;
+  coverImageUrl?: string;
+  coverImageStoragePath?: string;
+  coverFrame?: ImageFrameSpec;
   reflectionText: string;
   highlightsText: string;
   moodLabel?: string;
@@ -1704,6 +1845,78 @@ export function getMonthRange(monthKey: string): {
     startKey: toLocalDateKey(start),
     endKey: toLocalDateKey(end),
   };
+}
+
+export const ARABIC_MONTH_NAMES = [
+  'يناير',
+  'فبراير',
+  'مارس',
+  'أبريل',
+  'مايو',
+  'يونيو',
+  'يوليو',
+  'أغسطس',
+  'سبتمبر',
+  'أكتوبر',
+  'نوفمبر',
+  'ديسمبر',
+] as const;
+
+export function getArabicMonthTitle(monthKey: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec((monthKey || '').trim());
+  const now = new Date();
+  const year = m ? Number(m[1]) : now.getFullYear();
+  const monthIdx = m ? Math.max(0, Math.min(11, Number(m[2]) - 1)) : now.getMonth();
+  return `${ARABIC_MONTH_NAMES[monthIdx]} ${year}`;
+}
+
+export function shiftMonthKey(monthKey: string, deltaMonths: number): string {
+  const m = /^(\d{4})-(\d{2})$/.exec((monthKey || '').trim());
+  const now = new Date();
+  const year = m ? Number(m[1]) : now.getFullYear();
+  const monthIdx = m ? Number(m[2]) - 1 : now.getMonth();
+  const shifted = new Date(year, monthIdx + deltaMonths, 1);
+  return `${shifted.getFullYear()}-${String(shifted.getMonth() + 1).padStart(2, '0')}`;
+}
+
+export function getMonthDaysList(monthKey: string): Array<{
+  dateKey: string;
+  dayNumber: number;
+  dayName: string;
+  shortLabel: string;
+}> {
+  const m = /^(\d{4})-(\d{2})$/.exec((monthKey || '').trim());
+  const now = new Date();
+  const year = m ? Number(m[1]) : now.getFullYear();
+  const monthIdx = m ? Math.max(0, Math.min(11, Number(m[2]) - 1)) : now.getMonth();
+  const daysInMonth = new Date(year, monthIdx + 1, 0).getDate();
+  const dayNames = [
+    'الأحد',
+    'الإثنين',
+    'الثلاثاء',
+    'الأربعاء',
+    'الخميس',
+    'الجمعة',
+    'السبت',
+  ];
+  const monthName = ARABIC_MONTH_NAMES[monthIdx];
+  const out: Array<{
+    dateKey: string;
+    dayNumber: number;
+    dayName: string;
+    shortLabel: string;
+  }> = [];
+  for (let d = 1; d <= daysInMonth; d += 1) {
+    const dt = new Date(year, monthIdx, d);
+    const dateKey = `${year}-${String(monthIdx + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    out.push({
+      dateKey,
+      dayNumber: d,
+      dayName: dayNames[dt.getDay()],
+      shortLabel: `${d} ${monthName}`,
+    });
+  }
+  return out;
 }
 
 export function getQuarterRange(quarterKey: string): {

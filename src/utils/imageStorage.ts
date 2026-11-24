@@ -74,9 +74,37 @@ function sanitizeStorageImageName(name: string): string {
   return `${stem || 'image'}${ext}`;
 }
 
+export const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024; // 20 MB client cap before compression
+
 export function isImageFile(file: File): boolean {
   if (file.type && file.type.startsWith('image/')) return true;
   return /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif)$/i.test(file.name);
+}
+
+export function validateImageFileForUpload(file: File): {
+  valid: boolean;
+  error?: string;
+} {
+  if (!isImageFile(file)) {
+    return {
+      valid: false,
+      error: `الملف «${file.name}» ليس صورة مدعومة. الصيغ المدعومة: JPG, PNG, WebP, GIF, HEIC.`,
+    };
+  }
+  const lowerType = (file.type || '').toLowerCase();
+  if (lowerType === 'image/svg+xml' || /\.svg$/i.test(file.name)) {
+    return {
+      valid: false,
+      error: 'ملفات SVG غير مسموح برفعها كصور يومية لأسباب أمنية. استخدم PNG أو JPG أو WebP.',
+    };
+  }
+  if (file.size > MAX_IMAGE_UPLOAD_BYTES) {
+    return {
+      valid: false,
+      error: `حجم الصورة «${file.name}» يتجاوز الحد الأقصى المسموح (20 ميجابايت).`,
+    };
+  }
+  return { valid: true };
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -1134,5 +1162,333 @@ export async function deleteDentalCaseCoverStorage(
   } catch {
     // Non-fatal storage cleanup
   }
+}
+
+export async function replaceStoredImage(
+  existing: StoredImageRecord,
+  newFile: File,
+  uidOverride?: string
+): Promise<StoredImageRecord> {
+  const check = validateImageFileForUpload(newFile);
+  if (!check.valid) {
+    throw new Error(check.error || 'ملف غير صالح.');
+  }
+  const uid = uidOverride || auth?.currentUser?.uid;
+  const oldStoragePath = existing.storagePath;
+  const compressed = await compressImageFileForCloud(newFile);
+  const updatedRecord: StoredImageRecord = {
+    ...existing,
+    name: newFile.name,
+    mimeType: compressed.mimeType,
+    sizeKb: Math.max(1, Math.round(compressed.blob.size / 1024)),
+    width: compressed.width,
+    height: compressed.height,
+    blob: compressed.blob,
+    dataUrl: compressed.dataUrl,
+    cloudSynced: false,
+  };
+  await putLocalImageRecord(updatedRecord);
+
+  if (uid && isSupabaseConfigured && supabase) {
+    const synced = await uploadImageRecordToCloud(uid, updatedRecord, compressed.blob);
+    if (
+      oldStoragePath &&
+      oldStoragePath !== synced.storagePath &&
+      !oldStoragePath.startsWith('users/')
+    ) {
+      try {
+        await withFirebaseTokenRetry(async (client) =>
+          client.storage.from(USER_IMAGES_BUCKET).remove([oldStoragePath])
+        );
+      } catch {
+        // Non-fatal cleanup
+      }
+    }
+    return synced;
+  }
+  return updatedRecord;
+}
+
+export async function uploadJournalCoverImage(
+  dateKey: string,
+  file: File,
+  uidOverride?: string
+): Promise<{
+  imageUrl: string;
+  imageStoragePath: string;
+  localObjectUrl: string;
+}> {
+  const check = validateImageFileForUpload(file);
+  if (!check.valid) {
+    throw new Error(check.error || 'ملف غير صالح.');
+  }
+  const uid = uidOverride || auth?.currentUser?.uid;
+  const compressed = await compressImageFileForCloud(file);
+  const localObjectUrl = URL.createObjectURL(compressed.blob);
+  let imageStoragePath = '';
+  let imageUrl = '';
+
+  if (uid && isSupabaseConfigured && supabase) {
+    const safeId = sanitizeImageId(dateKey);
+    const safeName = sanitizeStorageImageName(file.name || 'journal-cover.jpg');
+    const storagePath = `${uid}/images/journal_cover_${safeId}/${safeName}`;
+    await withFirebaseTokenRetry(async (client) => {
+      const { error: uploadErr } = await client.storage
+        .from(USER_IMAGES_BUCKET)
+        .upload(storagePath, compressed.blob, {
+          contentType: compressed.mimeType || 'image/jpeg',
+          upsert: true,
+        });
+      if (uploadErr) throw uploadErr;
+
+      const { data: signed } = await client.storage
+        .from(USER_IMAGES_BUCKET)
+        .createSignedUrl(storagePath, 3600);
+      imageStoragePath = storagePath;
+      imageUrl = signed?.signedUrl || '';
+    });
+  }
+
+  return {
+    imageUrl: imageUrl || compressed.dataUrl || localObjectUrl,
+    imageStoragePath,
+    localObjectUrl,
+  };
+}
+
+export async function deleteJournalCoverStorage(
+  storagePath?: string
+): Promise<void> {
+  if (
+    !storagePath ||
+    storagePath.startsWith('users/') ||
+    !isSupabaseConfigured ||
+    !supabase
+  ) {
+    return;
+  }
+  try {
+    await withFirebaseTokenRetry(async (client) =>
+      client.storage.from(USER_IMAGES_BUCKET).remove([storagePath])
+    );
+  } catch {
+    // Non-fatal cleanup
+  }
+}
+
+async function getAllLocalJournalImages(): Promise<StoredImageRecord[]> {
+  try {
+    const idb = await openImagesDb();
+    const tx = idb.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).getAll();
+    const all = await new Promise<StoredImageRecord[]>((resolve, reject) => {
+      req.onsuccess = () => resolve((req.result as StoredImageRecord[]) ?? []);
+      req.onerror = () => reject(req.error);
+    });
+    return all
+      .filter((r) => typeof r.scopeKey === 'string' && r.scopeKey.startsWith('journal:'))
+      .sort((a, b) => a.createdAtMs - b.createdAtMs);
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchAllJournalImagesSummary(
+  uidOverride?: string
+): Promise<StoredImageRecord[]> {
+  const uid = uidOverride || auth?.currentUser?.uid;
+  const localItems = await getAllLocalJournalImages();
+  if (!uid || !isSupabaseConfigured || !supabase) {
+    return localItems;
+  }
+
+  const rows = await withFirebaseTokenRetry(async (client) => {
+    const { data, error } = await client
+      .from('image_attachments')
+      .select('*')
+      .eq('owner_id', uid)
+      .like('scope_key', 'journal:%')
+      .order('created_at_ms', { ascending: true });
+    if (error) throw error;
+    return (data || []) as Record<string, unknown>[];
+  });
+
+  const storagePaths = rows
+    .map((r) => (r.storage_path ? String(r.storage_path) : ''))
+    .filter((p) => p && !p.startsWith('users/'));
+
+  const signedUrlMap = new Map<string, string>();
+  if (storagePaths.length > 0 && supabase) {
+    try {
+      const { data: signedList } = await supabase.storage
+        .from(USER_IMAGES_BUCKET)
+        .createSignedUrls(storagePaths, 3600);
+      if (Array.isArray(signedList)) {
+        for (const item of signedList) {
+          if (item.path && item.signedUrl) {
+            signedUrlMap.set(item.path, item.signedUrl);
+          }
+        }
+      }
+    } catch {
+      // Fallback resolves via download()
+    }
+  }
+
+  const localById = new Map<string, StoredImageRecord>();
+  for (const l of localItems) localById.set(l.id, l);
+
+  const merged = new Map<string, StoredImageRecord>();
+  for (const raw of rows) {
+    const id = String(raw.id);
+    const storagePath = raw.storage_path ? String(raw.storage_path) : undefined;
+    const freshSigned = storagePath ? signedUrlMap.get(storagePath) : undefined;
+    const loc = localById.get(id);
+    merged.set(id, {
+      id,
+      scopeKey: String(raw.scope_key || ''),
+      name: String(raw.file_name || 'image.jpg'),
+      mimeType: String(raw.mime_type || 'image/jpeg'),
+      sizeKb: Math.max(1, Math.round(Number(raw.size_bytes ?? 0) / 1024)),
+      width: typeof raw.width === 'number' ? raw.width : undefined,
+      height: typeof raw.height === 'number' ? raw.height : undefined,
+      caption: String(raw.caption || ''),
+      frameConfig: raw.frame_config
+        ? sanitizeImageFrameSpec(raw.frame_config)
+        : undefined,
+      categoryLabel: raw.category_label ? String(raw.category_label) : '',
+      sortOrder: typeof raw.sort_order === 'number' ? raw.sort_order : 0,
+      createdAtMs: Number(raw.created_at_ms ?? 0),
+      storagePath,
+      downloadUrl:
+        freshSigned || (raw.download_url ? String(raw.download_url) : undefined),
+      blob: loc?.blob,
+      dataUrl: loc?.dataUrl,
+      cloudSynced: true,
+    });
+  }
+  for (const l of localItems) {
+    if (!merged.has(l.id) && !l.cloudSynced) {
+      merged.set(l.id, l);
+    }
+  }
+  return Array.from(merged.values()).sort((a, b) => a.createdAtMs - b.createdAtMs);
+}
+
+export function subscribeJournalImagesSummary(
+  uid: string | undefined,
+  onData: (records: StoredImageRecord[]) => void,
+  onSyncError?: (err: unknown) => void
+): () => void {
+  const effectiveUid = uid || auth?.currentUser?.uid;
+
+  if (!effectiveUid || !isSupabaseConfigured || !supabase) {
+    void getAllLocalJournalImages().then((items) => onData(items));
+    return () => {};
+  }
+
+  let disposed = false;
+
+  const refresh = async () => {
+    if (disposed) return;
+    try {
+      const items = await fetchAllJournalImagesSummary(effectiveUid);
+      if (!disposed) onData(items);
+    } catch (err) {
+      if (!disposed) {
+        onSyncError?.(err);
+        const fallback = await getAllLocalJournalImages();
+        if (!disposed) onData(fallback);
+      }
+    }
+  };
+
+  void refresh();
+
+  let activeChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+  let reconnectTimer: number | null = null;
+  let realtimeSubscribed = false;
+
+  const setupRealtimeChannel = async (forceRefreshToken = false) => {
+    if (disposed || !supabase) return;
+    await ensureSupabaseRealtimeAuth(forceRefreshToken);
+    if (disposed || !supabase) return;
+
+    if (activeChannel) {
+      void supabase.removeChannel(activeChannel);
+      activeChannel = null;
+    }
+
+    const ch = supabase
+      .channel(`journal_images_${effectiveUid}_${Date.now()}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'image_attachments',
+          filter: `owner_id=eq.${effectiveUid}`,
+        },
+        () => {
+          if (!disposed) void refresh();
+        }
+      )
+      .subscribe((status) => {
+        if (disposed) return;
+        if (status === 'SUBSCRIBED') {
+          realtimeSubscribed = true;
+          return;
+        }
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          realtimeSubscribed = false;
+          if (!reconnectTimer && typeof window !== 'undefined') {
+            reconnectTimer = window.setTimeout(() => {
+              reconnectTimer = null;
+              void setupRealtimeChannel(true);
+            }, 4000);
+          }
+        }
+      });
+
+    activeChannel = ch;
+  };
+
+  void setupRealtimeChannel(false);
+
+  const onResumeSync = () => {
+    if (disposed) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      return;
+    }
+    void refresh();
+    if (!realtimeSubscribed) {
+      void setupRealtimeChannel(false);
+    }
+  };
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onResumeSync);
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', onResumeSync);
+    window.addEventListener('online', onResumeSync);
+  }
+
+  return () => {
+    disposed = true;
+    if (reconnectTimer && typeof window !== 'undefined') {
+      window.clearTimeout(reconnectTimer);
+    }
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onResumeSync);
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('focus', onResumeSync);
+      window.removeEventListener('online', onResumeSync);
+    }
+    if (supabase && activeChannel) {
+      void supabase.removeChannel(activeChannel);
+    }
+  };
 }
 

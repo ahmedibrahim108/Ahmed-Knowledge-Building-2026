@@ -85,6 +85,7 @@ import {
   isPending007Migration,
   isPending011Migration,
   isPending012Migration,
+  isPending013Migration,
   updateContactMessageStatus,
   updateUserProfileAccess,
   upsertContentAccessGrant,
@@ -3149,6 +3150,16 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                     012_journals_reviews_planner_pins_contact.sql
                   </code>{' '}
                   خطوة بخطوة في محرر SQL بلوحة Supabase لتفعيل جداول اليوميات التلقائية، المراجعات الدورية، التخطيط الأسبوعي، قوائم التثبيت، وصندوق رسائل التواصل سحابيًا.
+                </div>
+              )}
+
+              {isPending013Migration() && (
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                  يرجى تشغيل ملف التحديث{' '}
+                  <code className="font-mono font-bold">
+                    013_visual_journal_gallery.sql
+                  </code>{' '}
+                  في محرر SQL بلوحة Supabase لتفعيل حفظ حقول معرض اليوميات المرئي (الألوان، الأغلفة، التدوين الحر، والملاحظات السريعة) سحابيًا.
                 </div>
               )}
 

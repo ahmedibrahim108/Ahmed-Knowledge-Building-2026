@@ -32,6 +32,11 @@ import {
   GrantedItemNote,
   GrantedWorkspaceData,
   HUB_ACCENT_PRESETS,
+  JOURNAL_CARD_THEMES,
+  JournalCardColorKey,
+  JournalQuickNote,
+  JournalQuickNoteKind,
+  JournalTextSection,
   LearningHubId,
   LearningHubMeta,
   LearningObjective,
@@ -2705,6 +2710,11 @@ export function isPending012Migration(): boolean {
   return hasPending012Migration;
 }
 
+let hasPending013Migration = false;
+export function isPending013Migration(): boolean {
+  return hasPending013Migration;
+}
+
 const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
   courses: ['learning_objectives', 'sort_order', 'is_public'],
   learning_paths: ['learning_objectives', 'sort_order', 'is_public'],
@@ -4138,7 +4148,50 @@ export async function saveActivityLogDoc(
   }
 }
 
-export function buildDailyJournalRow(uid: string, rec: DailyJournalRecord) {
+function sanitizeJournalSections(raw: unknown): JournalTextSection[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((s): s is Record<string, unknown> => Boolean(s) && typeof s === 'object')
+    .slice(0, 30)
+    .map((s, idx) => ({
+      id: sanitizeId(typeof s.id === 'string' && s.id ? s.id : `jsec_${idx + 1}`),
+      heading: clip(typeof s.heading === 'string' ? s.heading : '', 200),
+      bodyHtml: clip(typeof s.bodyHtml === 'string' ? s.bodyHtml : '', 60000),
+      updatedAtMs: Number(s.updatedAtMs ?? 0) || 0,
+    }));
+}
+
+function sanitizeJournalQuickNotes(raw: unknown): JournalQuickNote[] {
+  if (!Array.isArray(raw)) return [];
+  const validKinds: JournalQuickNoteKind[] = [
+    'thought',
+    'learned',
+    'remember',
+    'event',
+    'idea',
+  ];
+  return raw
+    .filter((n): n is Record<string, unknown> => Boolean(n) && typeof n === 'object')
+    .slice(0, 80)
+    .map((n, idx) => ({
+      id: sanitizeId(typeof n.id === 'string' && n.id ? n.id : `jqn_${idx + 1}`),
+      kind: pickEnum(n.kind, validKinds, 'thought'),
+      title: clip(typeof n.title === 'string' ? n.title : '', 200),
+      body: clip(typeof n.body === 'string' ? n.body : '', 4000),
+      createdAtMs: Number(n.createdAtMs ?? 0) || Date.now(),
+      updatedAtMs: Number(n.updatedAtMs ?? 0) || Date.now(),
+    }))
+    .filter((n) => n.body.trim().length > 0 || (n.title ?? '').trim().length > 0);
+}
+
+function sanitizeJournalCardColor(raw: unknown): JournalCardColorKey {
+  if (typeof raw === 'string' && raw in JOURNAL_CARD_THEMES) {
+    return raw as JournalCardColorKey;
+  }
+  return 'default';
+}
+
+export function buildDailyJournalBaseRow(uid: string, rec: DailyJournalRecord) {
   return {
     owner_id: uid,
     date_key: sanitizeDateKeyOrEmpty(rec.dateKey) || toLocalDateKey(),
@@ -4153,9 +4206,42 @@ export function buildDailyJournalRow(uid: string, rec: DailyJournalRecord) {
   };
 }
 
+export function buildDailyJournalRow(uid: string, rec: DailyJournalRecord) {
+  return {
+    ...buildDailyJournalBaseRow(uid, rec),
+    title: clip(rec.title || '', 240),
+    subtitle: clip(rec.subtitle || '', 400),
+    body_html: clip(rec.bodyHtml || '', 80000),
+    sections: sanitizeJournalSections(rec.sections),
+    quick_notes: sanitizeJournalQuickNotes(rec.quickNotes),
+    card_color: sanitizeJournalCardColor(rec.cardColor),
+    cover_image_storage_path: clip(rec.coverImageStoragePath || '', 500),
+    cover_image_url: sanitizeSafeHttpUrl(rec.coverImageUrl),
+    cover_frame: rec.coverFrame ? sanitizeImageFrameSpec(rec.coverFrame) : null,
+  };
+}
+
 function mapDailyJournalRow(raw: Record<string, unknown>): DailyJournalRecord {
   return {
     dateKey: String(raw.date_key || toLocalDateKey()),
+    title: raw.title ? String(raw.title) : undefined,
+    subtitle: raw.subtitle ? String(raw.subtitle) : undefined,
+    bodyHtml: raw.body_html ? String(raw.body_html) : undefined,
+    sections: Array.isArray(raw.sections)
+      ? sanitizeJournalSections(raw.sections)
+      : undefined,
+    quickNotes: Array.isArray(raw.quick_notes)
+      ? sanitizeJournalQuickNotes(raw.quick_notes)
+      : undefined,
+    cardColor: sanitizeJournalCardColor(raw.card_color),
+    coverImageStoragePath: raw.cover_image_storage_path
+      ? String(raw.cover_image_storage_path)
+      : undefined,
+    coverImageUrl: raw.cover_image_url ? String(raw.cover_image_url) : undefined,
+    coverFrame:
+      raw.cover_frame && typeof raw.cover_frame === 'object'
+        ? sanitizeImageFrameSpec(raw.cover_frame)
+        : undefined,
     reflectionText: String(raw.reflection_text || ''),
     highlightsText: String(raw.highlights_text || ''),
     moodLabel: raw.mood_label ? String(raw.mood_label) : undefined,
@@ -4169,16 +4255,24 @@ export async function saveDailyJournalDoc(
   uid: string,
   rec: DailyJournalRecord
 ): Promise<void> {
-  upsertLocalFallbackItem(uid, 'daily_journals', rec, (x) => x.dateKey, 400);
+  upsertLocalFallbackItem(uid, 'daily_journals', rec, (x) => x.dateKey, 500);
   if (!isSupabaseConfigured || !supabase) return;
-  const row = buildDailyJournalRow(uid, rec);
+  const fullRow = buildDailyJournalRow(uid, rec);
   try {
     await runWrite((c) =>
-      c.from('daily_journals').upsert(row, { onConflict: 'owner_id,date_key' })
+      c.from('daily_journals').upsert(fullRow, { onConflict: 'owner_id,date_key' })
     );
   } catch (err) {
     if (isMissingTableError(err)) {
       hasPending012Migration = true;
+      return;
+    }
+    if (isMissingColumnError(err)) {
+      hasPending013Migration = true;
+      const baseRow = buildDailyJournalBaseRow(uid, rec);
+      await runWrite((c) =>
+        c.from('daily_journals').upsert(baseRow, { onConflict: 'owner_id,date_key' })
+      );
       return;
     }
     throw err;
