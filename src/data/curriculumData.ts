@@ -1365,7 +1365,7 @@ export const DEFAULT_PUBLIC_SITE_CONFIG: PublicSiteConfig = {
   publicReflectionCategories: [],
   creatorName: 'Ahmed Ibrahim',
   linkedinUrl: '',
-  contactEmail: '',
+  contactEmail: 'ahmedibrahim108@outlook.com',
   showContactForm: true,
   updatedAtMs: 0,
 };

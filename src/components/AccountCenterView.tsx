@@ -1212,23 +1212,26 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                        البريد الرسمي للتواصل (اختياري)
+                        البريد الرسمي المعروض للتواصل
                       </label>
                       <input
                         type="email"
-                        value={siteDraft.contactEmail ?? ''}
+                        value={siteDraft.contactEmail ?? 'ahmedibrahim108@outlook.com'}
                         onChange={(e) =>
                           setSiteDraft((p) => ({
                             ...p,
                             contactEmail: e.target.value,
                           }))
                         }
-                        placeholder="name@example.com"
+                        placeholder="ahmedibrahim108@outlook.com"
                         dir="ltr"
                         className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
                       />
                     </div>
                   </div>
+                  <p className="text-[11px] text-slate-500">
+                    تُرسل رسائل نموذج «تواصل معنا» عبر الخادم مباشرة إلى <span dir="ltr" className="font-semibold text-slate-700">ahmedibrahim108@outlook.com</span> عند ضبط متغير <span dir="ltr" className="font-mono">RESEND_API_KEY</span> في بيئة الخادم.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import {
+  AlertCircle,
   CheckCircle2,
   ExternalLink,
   Loader2,
@@ -7,7 +8,6 @@ import {
   Send,
 } from 'lucide-react';
 import { PublicSiteConfig } from '../data/curriculumData';
-import { saveContactMessageLocalFallback } from '../services/supabaseSync';
 import AutoResizeTextarea from './AutoResizeTextarea';
 
 interface ContactUsSectionProps {
@@ -15,6 +15,8 @@ interface ContactUsSectionProps {
   defaultName?: string;
   defaultEmail?: string;
 }
+
+const FALLBACK_CONTACT_EMAIL = 'ahmedibrahim108@outlook.com';
 
 export default function ContactUsSection({
   siteConfig,
@@ -28,15 +30,20 @@ export default function ContactUsSection({
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [partialNotice, setPartialNotice] = useState<string | null>(null);
 
   if (siteConfig.showContactForm === false) {
     return null;
   }
 
+  const displayEmail =
+    siteConfig.contactEmail?.trim() || FALLBACK_CONTACT_EMAIL;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     setSuccessMsg(null);
+    setPartialNotice(null);
 
     const cleanName = name.trim();
     const cleanEmail = email.trim();
@@ -71,8 +78,8 @@ export default function ContactUsSection({
       const json = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
         id?: string;
+        emailSent?: boolean;
         persisted?: boolean;
-        needsMigration012?: boolean;
         message?: string;
         error?: string;
       };
@@ -82,21 +89,16 @@ export default function ContactUsSection({
         return;
       }
 
-      if (json.needsMigration012 || !json.persisted) {
-        saveContactMessageLocalFallback({
-          id: json.id || `msg_${Date.now()}`,
-          senderName: cleanName,
-          senderEmail: cleanEmail,
-          subject: cleanSubject,
-          message: cleanMessage,
-          status: 'unread',
-          createdAtMs: Date.now(),
-        });
+      if (json.emailSent) {
+        setSuccessMsg(
+          json.message || 'تم إرسال رسالتك إلى البريد الإلكتروني بنجاح.'
+        );
+      } else {
+        setPartialNotice(
+          json.message ||
+            'تم حفظ رسالتك في صندوق رسائل المنصة، لكن الإرسال البريدي المباشر غير مفعّل حاليًا.'
+        );
       }
-
-      setSuccessMsg(
-        json.message || 'تم استلام رسالتك وحفظها في صندوق رسائل المنصة بنجاح.'
-      );
       setSubject('');
       setMessage('');
     } catch {
@@ -120,7 +122,7 @@ export default function ContactUsSection({
             </h2>
           </div>
           <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-            هل لديك سؤال حول المحتوى المعرفي أو مقترح تعاون؟ أرسل رسالتك مباشرة وستُحفظ في صندوق رسائل{' '}
+            هل لديك سؤال حول المحتوى المعرفي أو مقترح تعاون؟ أرسل رسالتك مباشرة إلى بريد{' '}
             <span className="font-semibold text-slate-900">
               {siteConfig.creatorName || 'Ahmed Ibrahim'}
             </span>
@@ -140,21 +142,27 @@ export default function ContactUsSection({
               <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
             </a>
           )}
-          {siteConfig.contactEmail && (
-            <a
-              href={`mailto:${siteConfig.contactEmail}`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-xl"
-            >
-              <Mail className="w-3.5 h-3.5" aria-hidden="true" />
-              <span dir="ltr">{siteConfig.contactEmail}</span>
-            </a>
-          )}
+          <a
+            href={`mailto:${displayEmail}`}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-xl"
+          >
+            <Mail className="w-3.5 h-3.5" aria-hidden="true" />
+            <span dir="ltr">{displayEmail}</span>
+          </a>
         </div>
       </div>
 
       {errorMsg && (
-        <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-800">
-          {errorMsg}
+        <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-red-800 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
+
+      {partialNotice && (
+        <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs font-semibold text-amber-900 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
+          <span>{partialNotice}</span>
         </div>
       )}
 

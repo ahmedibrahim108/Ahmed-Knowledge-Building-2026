@@ -248,6 +248,7 @@ app.post('/api/tts', async (req, res) => {
   }
 });
 
+const CONTACT_RECIPIENT_EMAIL = 'ahmedibrahim108@outlook.com';
 const contactRateLimiter = new Map<string, { count: number; resetAt: number }>();
 
 function sanitizeContactString(raw: unknown, maxLen: number): string {
@@ -256,6 +257,29 @@ function sanitizeContactString(raw: unknown, maxLen: number): string {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
     .trim()
     .slice(0, maxLen);
+}
+
+function sanitizeSingleLineHeader(raw: unknown, maxLen: number): string {
+  return sanitizeContactString(raw, maxLen)
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+}
+
+function escapeEmailHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function resolveResendFromAddress(): string {
+  const raw = sanitizeSingleLineHeader(process.env.RESEND_FROM_EMAIL, 200);
+  if (raw && /^([^<>]+<\s*[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,}\s*>|[^\s@<>]+@[^\s@<>]+\.[^\s@<>]{2,})$/.test(raw)) {
+    return raw;
+  }
+  return 'Knowledge Balance <onboarding@resend.dev>';
 }
 
 app.post('/api/contact', async (req, res) => {
@@ -282,9 +306,9 @@ app.post('/api/contact', async (req, res) => {
     }
 
     const body = (req.body || {}) as Record<string, unknown>;
-    const senderName = sanitizeContactString(body.name, 100);
-    const senderEmail = sanitizeContactString(body.email, 160);
-    const subject = sanitizeContactString(body.subject, 200);
+    const senderName = sanitizeSingleLineHeader(body.name, 100);
+    const senderEmail = sanitizeSingleLineHeader(body.email, 160);
+    const subject = sanitizeSingleLineHeader(body.subject, 200);
     const message = sanitizeContactString(body.message, 3200);
 
     if (senderName.length < 2) {
@@ -302,6 +326,102 @@ app.post('/api/contact', async (req, res) => {
     }
 
     const id = `msg_${now}_${Math.floor(Math.random() * 10000)}`;
+    const sentAtIso = new Date(now).toISOString();
+
+    // 1. Direct email delivery to ahmedibrahim108@outlook.com via Resend HTTPS API
+    const resendApiKey = (process.env.RESEND_API_KEY || '').trim();
+    const emailConfigured = resendApiKey.length > 0;
+    let emailSent = false;
+    let emailErrorDetail = '';
+
+    if (emailConfigured) {
+      const emailSubject = subject
+        ? `[Knowledge Balance] ${subject}`
+        : `[Knowledge Balance] رسالة جديدة من ${senderName}`;
+      const fromAddress = resolveResendFromAddress();
+
+      const textBody = [
+        'رسالة جديدة من نموذج «تواصل معنا» — ميزان المعرفة (Knowledge Balance)',
+        '',
+        `المرسل: ${senderName}`,
+        `البريد الإلكتروني: ${senderEmail}`,
+        `الموضوع: ${subject || 'بدون موضوع'}`,
+        `التاريخ (UTC): ${sentAtIso}`,
+        `المعرف: ${id}`,
+        '',
+        'الرسالة:',
+        message,
+      ].join('\n');
+
+      const htmlBody = `
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+  <body style="margin:0;padding:24px;background-color:#f8fafc;font-family:Segoe UI,Tahoma,Arial,sans-serif;color:#0f172a;">
+    <div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+      <div style="background:#1e3a5f;color:#ffffff;padding:20px 24px;">
+        <h1 style="margin:0;font-size:18px;font-weight:700;">رسالة جديدة من نموذج تواصل معنا</h1>
+        <p style="margin:6px 0 0;font-size:13px;color:#cbd5e1;">ميزان المعرفة · Knowledge Balance</p>
+      </div>
+      <div style="padding:24px;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:16px;">
+          <tr>
+            <td style="padding:8px 0;color:#64748b;width:130px;font-weight:600;">الاسم:</td>
+            <td style="padding:8px 0;color:#0f172a;font-weight:600;">${escapeEmailHtml(senderName)}</td>
+          </tr>
+          <tr>
+            <td style="padding:8px 0;color:#64748b;font-weight:600;">البريد الإلكتروني:</td>
+            <td style="padding:8px 0;color:#1e3a5f;" dir="ltr">${escapeEmailHtml(senderEmail)}</td>
+          </tr>
+          <tr>
+            <td style="padding:8px 0;color:#64748b;font-weight:600;">الموضوع:</td>
+            <td style="padding:8px 0;color:#0f172a;">${escapeEmailHtml(subject || 'بدون موضوع')}</td>
+          </tr>
+          <tr>
+            <td style="padding:8px 0;color:#64748b;font-weight:600;">التاريخ (UTC):</td>
+            <td style="padding:8px 0;color:#475569;font-size:12px;" dir="ltr">${escapeEmailHtml(sentAtIso)}</td>
+          </tr>
+        </table>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px;">
+          <div style="font-size:12px;color:#64748b;font-weight:600;margin-bottom:8px;">نص الرسالة:</div>
+          <div style="font-size:14px;line-height:1.7;color:#1e293b;white-space:pre-wrap;">${escapeEmailHtml(message)}</div>
+        </div>
+        <p style="margin:16px 0 0;font-size:11px;color:#94a3b8;" dir="ltr">Reference ID: ${escapeEmailHtml(id)}</p>
+      </div>
+    </div>
+  </body>
+</html>`.trim();
+
+      try {
+        const resendRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${resendApiKey}`,
+          },
+          body: JSON.stringify({
+            from: fromAddress,
+            to: [CONTACT_RECIPIENT_EMAIL],
+            reply_to: senderEmail,
+            subject: emailSubject,
+            text: textBody,
+            html: htmlBody,
+          }),
+        });
+
+        if (resendRes.ok) {
+          emailSent = true;
+        } else {
+          const errBody = await resendRes.text().catch(() => '');
+          emailErrorDetail = `HTTP ${resendRes.status}`;
+          console.warn('Resend delivery failed:', resendRes.status, errBody.slice(0, 300));
+        }
+      } catch (err) {
+        emailErrorDetail = 'network_error';
+        console.warn('Resend delivery error:', err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    // 2. Persist record to Supabase contact_messages if configured and migrated
     const payload = {
       id,
       sender_name: senderName,
@@ -347,55 +467,58 @@ app.post('/api/contact', async (req, res) => {
       }
     }
 
-    let webhookSent = false;
-    const webhookUrl = (process.env.CONTACT_WEBHOOK_URL || '').trim();
-    if (webhookUrl && /^https?:\/\//i.test(webhookUrl)) {
-      try {
-        const whRes = await fetch(webhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id,
-            name: senderName,
-            email: senderEmail,
-            subject,
-            message,
-            createdAt: new Date(now).toISOString(),
-          }),
-        });
-        webhookSent = whRes.ok;
-      } catch (err) {
-        console.warn('CONTACT_WEBHOOK_URL error:', err);
-      }
+    if (emailSent) {
+      res.status(201).json({
+        ok: true,
+        id,
+        emailSent: true,
+        emailConfigured: true,
+        persisted,
+        needsMigration012,
+        message: persisted
+          ? 'تم إرسال رسالتك إلى البريد الإلكتروني وحفظها في صندوق رسائل المنصة بنجاح.'
+          : 'تم إرسال رسالتك مباشرة إلى البريد الإلكتروني بنجاح.',
+      });
+      return;
     }
 
-    if (!persisted && !webhookSent && needsMigration012) {
+    if (persisted) {
       res.status(202).json({
         ok: true,
         id,
-        persisted: false,
-        webhookSent: false,
-        needsMigration012: true,
-        message: 'تم التحقق من الرسالة وحفظها محليًا لحين تشغيل التحديث SQL 012 في قاعدة البيانات.',
+        emailSent: false,
+        emailConfigured,
+        persisted: true,
+        needsMigration012: false,
+        message: emailConfigured
+          ? 'تم حفظ رسالتك في صندوق رسائل المنصة، لكن تعذر تسليم النسخة البريدية حاليًا.'
+          : 'تم حفظ رسالتك في صندوق رسائل المنصة، لكن خدمة الإرسال البريدي المباشر (RESEND_API_KEY) غير مفعّلة على الخادم بعد.',
       });
       return;
     }
 
-    if (!persisted && !webhookSent) {
+    if (!emailConfigured) {
       res.status(503).json({
-        error: 'تعذر حفظ الرسالة حاليًا على الخادم. يرجى المحاولة لاحقًا أو التواصل عبر وسائل الاتصال المعروضة.',
+        ok: false,
+        emailSent: false,
+        emailConfigured: false,
+        persisted: false,
+        needsMigration012,
+        error:
+          'خدمة إرسال البريد على الخادم غير مهيأة بعد (مفتاح RESEND_API_KEY غير مضبوط). يمكنك التواصل مباشرة عبر البريد الإلكتروني الظاهر في الصفحة.',
       });
       return;
     }
 
-    res.status(201).json({
-      ok: true,
-      id,
-      persisted,
-      webhookSent,
-      message: webhookSent
-        ? 'تم استلام رسالتك وحفظها وإرسال إشعار بها بنجاح.'
-        : 'تم استلام رسالتك وحفظها في صندوق رسائل المنصة بنجاح.',
+    res.status(502).json({
+      ok: false,
+      emailSent: false,
+      emailConfigured: true,
+      persisted: false,
+      needsMigration012,
+      error: emailErrorDetail
+        ? `تعذر تسليم الرسالة عبر مزود البريد الإلكتروني حاليًا (${emailErrorDetail}). يرجى المحاولة لاحقًا أو مراسلتنا عبر البريد المباشر.`
+        : 'تعذر تسليم الرسالة عبر مزود البريد الإلكتروني حاليًا. يرجى المحاولة لاحقًا.',
     });
   } catch (err) {
     console.error('Contact route error:', err);

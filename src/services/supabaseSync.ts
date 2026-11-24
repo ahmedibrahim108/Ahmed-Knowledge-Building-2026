@@ -469,9 +469,9 @@ function mapPublicSiteConfigRow(raw: Record<string, unknown> | null | undefined)
         : DEFAULT_PUBLIC_SITE_CONFIG.creatorName,
     linkedinUrl: sanitizeSafeHttpUrl(rawFlags.linkedinUrl),
     contactEmail:
-      typeof rawFlags.contactEmail === 'string'
+      typeof rawFlags.contactEmail === 'string' && rawFlags.contactEmail.trim()
         ? clip(rawFlags.contactEmail.trim(), 160)
-        : '',
+        : DEFAULT_PUBLIC_SITE_CONFIG.contactEmail,
     showContactForm: rawFlags.showContactForm !== false,
     updatedAtMs: Number(raw.updated_at_ms ?? 0),
   };
