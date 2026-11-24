@@ -2842,8 +2842,8 @@ export default function CourseDetailPage({
                       }}
                       className={`w-full text-right p-3.5 rounded-xl border transition-colors cursor-pointer space-y-1.5 ${
                         isSelected
-                          ? 'bg-[#1E3A5F]/5 border-[#1E3A5F]'
-                          : 'bg-slate-50/70 border-slate-200 hover:bg-slate-100/70'
+                          ? 'bg-[var(--kb-selected-bg)] border-[var(--kb-selected-border)] ring-1 ring-[var(--kb-selected-border)]'
+                          : 'bg-[var(--kb-surface)] border-slate-200 hover:bg-[var(--kb-hover-bg)]'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">

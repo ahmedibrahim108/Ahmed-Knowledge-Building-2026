@@ -1,5 +1,12 @@
-export type QuickDropItemType = 'url' | 'text' | 'mixed';
-export type QuickDropStatus = 'active' | 'trashed';
+export type QuickDropItemType =
+  | 'url'
+  | 'text'
+  | 'mixed'
+  | 'pdf'
+  | 'image'
+  | 'file';
+
+export type QuickDropStatus = 'active' | 'archived' | 'trashed';
 
 export interface QuickDropItem {
   id: string;
@@ -10,8 +17,15 @@ export interface QuickDropItem {
   createdAt: string;
   expiresAt: string;
   status: QuickDropStatus;
+  archivedAt: string | null;
   trashedAt: string | null;
   updatedAt: string;
+  attachmentName?: string;
+  attachmentMime?: string;
+  attachmentSize?: number;
+  attachmentBucket?: string;
+  attachmentPath?: string;
+  attachmentPreview?: string;
   pendingSync?: boolean;
 }
 
@@ -22,6 +36,8 @@ export interface QuickDropTextSegment {
 }
 
 export const QUICK_DROP_LIFETIME_MS = 24 * 60 * 60 * 1000;
+export const QUICK_DROP_MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB (matches study-files bucket)
+export const QUICK_DROP_MAX_IMAGE_BYTES = 25 * 1024 * 1024; // 25 MB (matches user-images bucket)
 
 const RAW_URL_PATTERN = /(https?:\/\/[^\s<>"'`]+|www\.[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+(?:\/[^\s<>"'`]*)?)/gi;
 const TRAILING_PUNCT_RE = /[),.;:!?،؛]+$/;
@@ -34,7 +50,6 @@ export function normalizeSafeHttpUrl(rawCandidate: string): string | null {
   let candidate = (rawCandidate || '').trim();
   if (!candidate) return null;
 
-  // Strip unmatched trailing punctuation cleanly
   while (TRAILING_PUNCT_RE.test(candidate)) {
     const ch = candidate.slice(-1);
     if (ch === ')') {
@@ -80,7 +95,41 @@ export function extractSafeUrls(content: string): string[] {
   return unique;
 }
 
-export function classifyQuickDropContent(content: string): QuickDropItemType {
+export function isImageQuickDropAttachment(
+  fileName?: string,
+  mime?: string
+): boolean {
+  const m = (mime || '').toLowerCase();
+  if (m.startsWith('image/')) return true;
+  const lower = (fileName || '').toLowerCase();
+  return /\.(png|jpe?g|webp|gif|heic|heif|bmp|svg)$/.test(lower);
+}
+
+export function isPdfQuickDropAttachment(
+  fileName?: string,
+  mime?: string
+): boolean {
+  const m = (mime || '').toLowerCase();
+  const lower = (fileName || '').toLowerCase();
+  return m === 'application/pdf' || lower.endsWith('.pdf');
+}
+
+export function classifyQuickDropAttachmentType(
+  fileName?: string,
+  mime?: string
+): 'pdf' | 'image' | 'file' {
+  if (isPdfQuickDropAttachment(fileName, mime)) return 'pdf';
+  if (isImageQuickDropAttachment(fileName, mime)) return 'image';
+  return 'file';
+}
+
+export function classifyQuickDropContent(
+  content: string,
+  attachment?: { name?: string; mime?: string } | null
+): QuickDropItemType {
+  if (attachment && (attachment.name || attachment.mime)) {
+    return classifyQuickDropAttachmentType(attachment.name, attachment.mime);
+  }
   const trimmed = (content || '').trim();
   if (!trimmed) return 'text';
   const urls = extractSafeUrls(trimmed);
@@ -90,6 +139,32 @@ export function classifyQuickDropContent(content: string): QuickDropItemType {
     if (asUrl) return 'url';
   }
   return 'mixed';
+}
+
+export function formatQuickDropFileSize(bytes?: number): string {
+  if (!bytes || !Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+}
+
+export function sanitizeQuickDropStorageFileName(fileName: string): string {
+  const cleaned = (fileName || 'file')
+    .trim()
+    .replace(/[^\w.\-\u0600-\u06FF]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return (cleaned || 'file').slice(0, 96);
+}
+
+export function hasQuickDropAttachment(
+  item: Pick<QuickDropItem, 'attachmentName' | 'attachmentPath'>
+): boolean {
+  return Boolean(
+    (item.attachmentPath && item.attachmentPath.trim()) ||
+      (item.attachmentName && item.attachmentName.trim())
+  );
 }
 
 export function splitQuickDropTextSegments(
@@ -147,44 +222,59 @@ export function splitQuickDropTextSegments(
 
 export function buildQuickDropTitlePreview(
   title: string,
-  content: string
+  content: string,
+  attachmentName?: string
 ): string {
   const cleanTitle = (title || '').trim();
   if (cleanTitle) return cleanTitle;
 
   const trimmed = (content || '').trim();
-  if (!trimmed) return 'عنصر مؤقت';
-
-  const firstUrl = extractSafeUrls(trimmed)[0];
-  if (firstUrl && classifyQuickDropContent(trimmed) === 'url') {
-    try {
-      const parsed = new URL(firstUrl);
-      const host = parsed.hostname.replace(/^www\./i, '');
-      const pathPart =
-        parsed.pathname && parsed.pathname !== '/'
-          ? parsed.pathname.slice(0, 28)
-          : '';
-      return `${host}${pathPart}`;
-    } catch {
-      return trimmed.slice(0, 64);
+  if (trimmed) {
+    const firstUrl = extractSafeUrls(trimmed)[0];
+    if (firstUrl && classifyQuickDropContent(trimmed) === 'url') {
+      try {
+        const parsed = new URL(firstUrl);
+        const host = parsed.hostname.replace(/^www\./i, '');
+        const pathPart =
+          parsed.pathname && parsed.pathname !== '/'
+            ? parsed.pathname.slice(0, 28)
+            : '';
+        return `${host}${pathPart}`;
+      } catch {
+        return trimmed.slice(0, 64);
+      }
     }
+
+    const singleLine = trimmed.replace(/\s+/g, ' ');
+    return singleLine.length > 68 ? `${singleLine.slice(0, 65)}...` : singleLine;
   }
 
-  const singleLine = trimmed.replace(/\s+/g, ' ');
-  return singleLine.length > 68 ? `${singleLine.slice(0, 65)}...` : singleLine;
+  if (attachmentName && attachmentName.trim()) {
+    return attachmentName.trim();
+  }
+
+  return 'عنصر مؤقت';
 }
 
 export function buildWhatsAppShareUrl(item: {
   title?: string;
   content: string;
+  attachmentName?: string;
 }): string {
   const titleClean = (item.title || '').trim();
   const bodyClean = (item.content || '').trim();
-  const payload =
-    titleClean && titleClean !== bodyClean && !bodyClean.startsWith(titleClean)
-      ? `${titleClean}\n${bodyClean}`
-      : bodyClean;
-  return `https://wa.me/?text=${encodeURIComponent(payload)}`;
+  const fileClean = (item.attachmentName || '').trim();
+  const parts: string[] = [];
+  if (titleClean && titleClean !== bodyClean && !bodyClean.startsWith(titleClean)) {
+    parts.push(titleClean);
+  }
+  if (bodyClean) {
+    parts.push(bodyClean);
+  }
+  if (fileClean && !bodyClean.includes(fileClean)) {
+    parts.push(`ملف مرفق: ${fileClean}`);
+  }
+  return `https://wa.me/?text=${encodeURIComponent(parts.join('\n') || 'Quick Drop')}`;
 }
 
 export function formatQuickDropDateTime(iso: string): string {

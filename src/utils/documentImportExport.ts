@@ -356,7 +356,7 @@ export interface UploadedAttachmentResult {
   errorMessage?: string;
 }
 
-function buildSafeStorageFileName(fileName: string): string {
+export function buildSafeStorageFileName(fileName: string): string {
   const clean = fileName
     .replace(/[^a-zA-Z0-9._\-\u0600-\u06FF]/g, '_')
     .replace(/^_+/, '')
@@ -382,7 +382,7 @@ function toBase64Utf8(value: string): string {
   return btoa(binary);
 }
 
-async function uploadViaSupabaseTus(
+export async function uploadViaSupabaseTus(
   bucket: string,
   storagePath: string,
   file: Blob,

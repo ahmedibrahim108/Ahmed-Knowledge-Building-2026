@@ -516,7 +516,7 @@ export default function CoursesView({
                 onClick={() => setStageFilter('all')}
                 className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border cursor-pointer transition-colors ${
                   stageFilter === 'all'
-                    ? 'bg-slate-900 text-white border-slate-900'
+                    ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
                     : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
                 }`}
               >

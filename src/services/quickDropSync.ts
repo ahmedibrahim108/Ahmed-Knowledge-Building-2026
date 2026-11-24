@@ -1,5 +1,19 @@
 import {
+  buildSafeStorageFileName,
+  findCachedAttachmentBlob,
+  inferMimeTypeFromFileName,
+  parseDocumentFile,
+  saveLocalAttachment,
+  uploadViaSupabaseTus,
+} from '../utils/documentImportExport';
+import {
+  compressImageFileForCloud,
+  isImageFile,
+} from '../utils/imageStorage';
+import {
   QUICK_DROP_LIFETIME_MS,
+  QUICK_DROP_MAX_FILE_BYTES,
+  QUICK_DROP_MAX_IMAGE_BYTES,
   QuickDropItem,
   QuickDropItemType,
   QuickDropStatus,
@@ -17,6 +31,28 @@ import {
 const CACHE_PREFIX = 'kb_quick_drop_cache_v1_';
 const QUEUE_PREFIX = 'kb_quick_drop_queue_v1_';
 
+const STUDY_FILES_BUCKET = 'study-files';
+const USER_IMAGES_BUCKET = 'user-images';
+const TUS_THRESHOLD_BYTES = 5 * 1024 * 1024;
+
+const STUDY_FILES_ALLOWED_MIMES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+  'text/markdown',
+  'application/octet-stream',
+]);
+
+const USER_IMAGES_ALLOWED_MIMES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/heic',
+  'image/heif',
+]);
+
 export type QuickDropSyncState =
   | 'idle'
   | 'loading'
@@ -30,6 +66,12 @@ type PendingMutation =
   | {
       kind: 'create';
       item: QuickDropItem;
+      queuedAt: number;
+    }
+  | {
+      kind: 'archive';
+      id: string;
+      archivedAt: string;
       queuedAt: number;
     }
   | {
@@ -47,16 +89,24 @@ type PendingMutation =
   | {
       kind: 'delete';
       id: string;
+      attachmentBucket?: string;
+      attachmentPath?: string;
       queuedAt: number;
     }
   | {
       kind: 'empty_trash';
+      attachments?: Array<{ bucket: string; path: string }>;
       queuedAt: number;
     };
 
 let hasPending016Migration = false;
 export function isPending016Migration(): boolean {
   return hasPending016Migration;
+}
+
+let hasPending017Migration = false;
+export function isPending017Migration(): boolean {
+  return hasPending017Migration;
 }
 
 function isMissing016TableError(err: unknown): boolean {
@@ -70,6 +120,23 @@ function isMissing016TableError(err: unknown): boolean {
     e.status === 404 ||
     (msg.includes('quick_drop_items') &&
       (msg.includes('does not exist') || msg.includes('schema cache')))
+  );
+}
+
+function isMissing017ColumnOrCheckError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; message?: string };
+  const code = (e.code || '').toUpperCase();
+  const msg = (e.message || '').toLowerCase();
+  return (
+    code === '42703' ||
+    code === 'PGRST204' ||
+    code === '23514' ||
+    msg.includes('archived_at') ||
+    msg.includes('attachment_path') ||
+    msg.includes('attachment_name') ||
+    msg.includes('quick_drop_items_status_check') ||
+    msg.includes('quick_drop_items_item_type_check')
   );
 }
 
@@ -112,14 +179,24 @@ export function readCachedQuickDropItems(uid: string): QuickDropItem[] {
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is QuickDropItem =>
-        Boolean(item) &&
-        typeof item === 'object' &&
-        typeof item.id === 'string' &&
-        typeof item.content === 'string' &&
-        item.userId === uid
-    );
+    return parsed
+      .filter(
+        (item): item is QuickDropItem =>
+          Boolean(item) &&
+          typeof item === 'object' &&
+          typeof item.id === 'string' &&
+          item.userId === uid
+      )
+      .map((item) => ({
+        ...item,
+        content: typeof item.content === 'string' ? item.content : '',
+        archivedAt: item.archivedAt ?? null,
+        trashedAt: item.trashedAt ?? null,
+        status:
+          item.status === 'archived' || item.status === 'trashed'
+            ? item.status
+            : 'active',
+      }));
   } catch {
     return [];
   }
@@ -149,7 +226,6 @@ function writeQueue(uid: string, queue: PendingMutation[]): void {
 
 function enqueueMutation(uid: string, op: PendingMutation): void {
   const prev = readQueue(uid);
-  // Deduplicate identical create IDs or repeated state ops for the same ID
   const filtered = prev.filter((existing) => {
     if (op.kind === 'empty_trash') {
       return existing.kind !== 'empty_trash';
@@ -181,6 +257,19 @@ function applyMutationsToList(
       if (!list.some((x) => x.id === op.item.id)) {
         list.unshift({ ...op.item, pendingSync: true });
       }
+    } else if (op.kind === 'archive') {
+      list = list.map((x) =>
+        x.id === op.id
+          ? {
+              ...x,
+              status: 'archived',
+              archivedAt: op.archivedAt,
+              trashedAt: null,
+              updatedAt: op.archivedAt,
+              pendingSync: true,
+            }
+          : x
+      );
     } else if (op.kind === 'trash') {
       list = list.map((x) =>
         x.id === op.id
@@ -199,6 +288,7 @@ function applyMutationsToList(
           ? {
               ...x,
               status: 'active',
+              archivedAt: null,
               trashedAt: null,
               expiresAt: op.expiresAt,
               updatedAt: new Date(op.queuedAt).toISOString(),
@@ -224,17 +314,32 @@ interface RawQuickDropRow {
   created_at?: string | null;
   expires_at?: string | null;
   status?: string | null;
+  archived_at?: string | null;
   trashed_at?: string | null;
   updated_at?: string | null;
+  attachment_name?: string | null;
+  attachment_mime?: string | null;
+  attachment_size?: number | null;
+  attachment_bucket?: string | null;
+  attachment_path?: string | null;
+  attachment_preview?: string | null;
 }
 
 function mapQuickDropRow(row: RawQuickDropRow): QuickDropItem {
   const itemType: QuickDropItemType =
-    row.item_type === 'url' || row.item_type === 'mixed'
+    row.item_type === 'url' ||
+    row.item_type === 'mixed' ||
+    row.item_type === 'pdf' ||
+    row.item_type === 'image' ||
+    row.item_type === 'file'
       ? row.item_type
       : 'text';
   const status: QuickDropStatus =
-    row.status === 'trashed' ? 'trashed' : 'active';
+    row.status === 'archived'
+      ? 'archived'
+      : row.status === 'trashed'
+      ? 'trashed'
+      : 'active';
   const createdAt = row.created_at || new Date().toISOString();
   const createdMs = Date.parse(createdAt) || Date.now();
   const expiresAt =
@@ -250,8 +355,21 @@ function mapQuickDropRow(row: RawQuickDropRow): QuickDropItem {
     createdAt,
     expiresAt,
     status,
+    archivedAt: row.archived_at ?? null,
     trashedAt: row.trashed_at ?? null,
     updatedAt: row.updated_at || createdAt,
+    ...(row.attachment_name ? { attachmentName: row.attachment_name } : {}),
+    ...(row.attachment_mime ? { attachmentMime: row.attachment_mime } : {}),
+    ...(typeof row.attachment_size === 'number' && row.attachment_size > 0
+      ? { attachmentSize: row.attachment_size }
+      : {}),
+    ...(row.attachment_bucket
+      ? { attachmentBucket: row.attachment_bucket }
+      : {}),
+    ...(row.attachment_path ? { attachmentPath: row.attachment_path } : {}),
+    ...(row.attachment_preview
+      ? { attachmentPreview: row.attachment_preview }
+      : {}),
     pendingSync: false,
   };
 }
@@ -264,6 +382,221 @@ export function generateQuickDropId(): string {
     return crypto.randomUUID();
   }
   return `qd_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function deleteStorageObjectsBestEffort(
+  objects: Array<{ bucket?: string; path?: string }>
+): Promise<void> {
+  if (!isSupabaseConfigured || !supabase || objects.length === 0) return;
+  const byBucket = new Map<string, string[]>();
+  for (const obj of objects) {
+    if (!obj.bucket || !obj.path) continue;
+    const list = byBucket.get(obj.bucket) ?? [];
+    list.push(obj.path);
+    byBucket.set(obj.bucket, list);
+  }
+  for (const [bucket, paths] of byBucket.entries()) {
+    try {
+      await withFirebaseTokenRetry(async (client) => {
+        await client.storage.from(bucket).remove(paths);
+      });
+    } catch {
+      // Non-fatal storage cleanup
+    }
+  }
+}
+
+export interface QuickDropUploadedAttachment {
+  attachmentName: string;
+  attachmentMime: string;
+  attachmentSize: number;
+  attachmentBucket: string;
+  attachmentPath: string;
+  attachmentPreview?: string;
+}
+
+export async function uploadQuickDropAttachment(
+  uid: string,
+  itemId: string,
+  file: File,
+  onProgress?: (percent: number) => void
+): Promise<QuickDropUploadedAttachment> {
+  if (!uid) {
+    throw new Error('يجب تسجيل الدخول لرفع الملفات إلى النقل السريع.');
+  }
+
+  const isImg = isImageFile(file) && file.type !== 'image/svg+xml';
+  if (isImg && file.size > QUICK_DROP_MAX_IMAGE_BYTES) {
+    throw new Error('الحد الأقصى لحجم الصورة هو 25 ميجابايت.');
+  }
+  if (!isImg && file.size > QUICK_DROP_MAX_FILE_BYTES) {
+    throw new Error('الحد الأقصى لحجم الملف هو 100 ميجابايت.');
+  }
+
+  const safeId = itemId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
+  const safeName = buildSafeStorageFileName(file.name || 'attachment');
+  const storagePath = `${uid}/quick-drop/${safeId}/${safeName}`;
+
+  let uploadBlob: Blob = file;
+  let displayMime = inferMimeTypeFromFileName(file.name, file.type);
+  let bucket = STUDY_FILES_BUCKET;
+  let uploadMime = STUDY_FILES_ALLOWED_MIMES.has(displayMime)
+    ? displayMime
+    : 'application/octet-stream';
+  let previewText = '';
+
+  if (isImg) {
+    let workingMime = (file.type || displayMime || 'image/jpeg').toLowerCase();
+    if (workingMime !== 'image/gif' && file.size > 180 * 1024) {
+      const compressed = await compressImageFileForCloud(file, workingMime);
+      uploadBlob = compressed.blob;
+      workingMime = (compressed.mimeType || workingMime).toLowerCase();
+    }
+    displayMime = workingMime;
+    if (USER_IMAGES_ALLOWED_MIMES.has(workingMime)) {
+      bucket = USER_IMAGES_BUCKET;
+      uploadMime = workingMime;
+    } else {
+      bucket = STUDY_FILES_BUCKET;
+      uploadMime = 'application/octet-stream';
+    }
+  } else {
+    try {
+      const parsed = await parseDocumentFile(file);
+      if (parsed.extractedText && parsed.extractedText.trim()) {
+        previewText = parsed.extractedText.trim().slice(0, 1200);
+      }
+    } catch {
+      // Optional text preview extraction; non-blocking
+    }
+  }
+
+  // Persist locally in IndexedDB right away so preview works offline & instantly
+  await saveLocalAttachment(`qd_${itemId}`, uploadBlob, file.name);
+
+  if (
+    !isSupabaseConfigured ||
+    !supabase ||
+    (typeof navigator !== 'undefined' && navigator.onLine === false)
+  ) {
+    throw new Error(
+      'يتطلب رفع الملفات والمرفقات اتصالاً بالإنترنت لتخزينها ومشاركتها بين أجهزتك.'
+    );
+  }
+
+  onProgress?.(5);
+  const standardUpload = async () => {
+    await withFirebaseTokenRetry(async (client) => {
+      const { error: uploadErr } = await client.storage
+        .from(bucket)
+        .upload(storagePath, uploadBlob, {
+          contentType: uploadMime,
+          upsert: true,
+        });
+      if (uploadErr) throw uploadErr;
+    });
+    onProgress?.(95);
+  };
+
+  if (bucket === STUDY_FILES_BUCKET && uploadBlob.size > TUS_THRESHOLD_BYTES) {
+    try {
+      await uploadViaSupabaseTus(
+        bucket,
+        storagePath,
+        uploadBlob,
+        uploadMime,
+        onProgress
+      );
+    } catch (tusErr) {
+      const status = (tusErr as { status?: number })?.status;
+      if (status !== 413 && uploadBlob.size <= 50 * 1024 * 1024) {
+        await standardUpload();
+      } else {
+        throw tusErr;
+      }
+    }
+  } else {
+    await standardUpload();
+  }
+
+  onProgress?.(100);
+
+  return {
+    attachmentName: (file.name || safeName).slice(0, 200),
+    attachmentMime: displayMime.slice(0, 120),
+    attachmentSize: Math.max(0, Math.round(file.size)),
+    attachmentBucket: bucket,
+    attachmentPath: storagePath,
+    ...(previewText ? { attachmentPreview: previewText } : {}),
+  };
+}
+
+export async function getQuickDropAttachmentBlob(item: QuickDropItem): Promise<{
+  blob: Blob;
+  fileName: string;
+  mimeType: string;
+} | null> {
+  const fileName = item.attachmentName || 'quick-drop-file';
+  const fallbackMime =
+    item.attachmentMime || inferMimeTypeFromFileName(fileName);
+
+  // 1) Local IndexedDB cache first (instant & works offline)
+  const cached = await findCachedAttachmentBlob({
+    resourceId: `qd_${item.id}`,
+    storagePath: item.attachmentPath,
+    fileName,
+  });
+  if (cached?.blob) {
+    return {
+      blob: cached.blob,
+      fileName: cached.name || fileName,
+      mimeType: cached.type || fallbackMime,
+    };
+  }
+
+  // 2) Private authenticated download from Supabase Storage
+  if (
+    !item.attachmentPath ||
+    !item.attachmentBucket ||
+    !isSupabaseConfigured ||
+    !supabase
+  ) {
+    return null;
+  }
+
+  const blob = await withFirebaseTokenRetry(async (client) => {
+    const { data, error } = await client.storage
+      .from(item.attachmentBucket!)
+      .download(item.attachmentPath!);
+    if (error || !data) {
+      throw error || new Error('تعذر تنزيل المرفق من التخزين السحابي.');
+    }
+    return data;
+  });
+
+  await saveLocalAttachment(`qd_${item.id}`, blob, fileName);
+
+  return {
+    blob,
+    fileName,
+    mimeType: blob.type || fallbackMime,
+  };
+}
+
+export async function downloadQuickDropAttachment(
+  item: QuickDropItem
+): Promise<boolean> {
+  const result = await getQuickDropAttachmentBlob(item);
+  if (!result?.blob) return false;
+  const url = URL.createObjectURL(result.blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = result.fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+  return true;
 }
 
 async function executeCloudMutation(
@@ -284,10 +617,31 @@ async function executeCloudMutation(
           created_at: op.item.createdAt,
           expires_at: op.item.expiresAt,
           status: op.item.status,
+          archived_at: op.item.archivedAt,
           trashed_at: op.item.trashedAt,
+          attachment_name: op.item.attachmentName ?? '',
+          attachment_mime: op.item.attachmentMime ?? '',
+          attachment_size: op.item.attachmentSize ?? 0,
+          attachment_bucket: op.item.attachmentBucket ?? '',
+          attachment_path: op.item.attachmentPath ?? '',
+          attachment_preview: (op.item.attachmentPreview ?? '').slice(0, 1500),
         },
         { onConflict: 'user_id,id' }
       );
+      if (error) throw error;
+      return;
+    }
+
+    if (op.kind === 'archive') {
+      const { error } = await client
+        .from('quick_drop_items')
+        .update({
+          status: 'archived',
+          archived_at: op.archivedAt,
+          trashed_at: null,
+        })
+        .eq('user_id', uid)
+        .eq('id', op.id);
       if (error) throw error;
       return;
     }
@@ -310,6 +664,7 @@ async function executeCloudMutation(
         .from('quick_drop_items')
         .update({
           status: 'active',
+          archived_at: null,
           trashed_at: null,
           expires_at: op.expiresAt,
         })
@@ -326,6 +681,11 @@ async function executeCloudMutation(
         .eq('user_id', uid)
         .eq('id', op.id);
       if (error) throw error;
+      if (op.attachmentBucket && op.attachmentPath) {
+        await deleteStorageObjectsBestEffort([
+          { bucket: op.attachmentBucket, path: op.attachmentPath },
+        ]);
+      }
       return;
     }
 
@@ -336,6 +696,9 @@ async function executeCloudMutation(
         .eq('user_id', uid)
         .eq('status', 'trashed');
       if (error) throw error;
+      if (op.attachments && op.attachments.length > 0) {
+        await deleteStorageObjectsBestEffort(op.attachments);
+      }
     }
   });
 }
@@ -356,9 +719,15 @@ export async function flushQuickDropQueue(uid: string): Promise<number> {
       await executeCloudMutation(uid, op);
       flushed += 1;
       hasPending016Migration = false;
+      hasPending017Migration = false;
     } catch (err) {
       if (isMissing016TableError(err)) {
         hasPending016Migration = true;
+        remaining.push(...queue.slice(i));
+        break;
+      }
+      if (isMissing017ColumnOrCheckError(err)) {
+        hasPending017Migration = true;
         remaining.push(...queue.slice(i));
         break;
       }
@@ -366,7 +735,6 @@ export async function flushQuickDropQueue(uid: string): Promise<number> {
         remaining.push(...queue.slice(i));
         break;
       }
-      // Re-throw auth/validation errors after keeping remaining queue safe
       remaining.push(...queue.slice(i));
       writeQueue(uid, remaining);
       throw err;
@@ -389,7 +757,6 @@ export async function archiveMyExpiredQuickDropItems(
     );
     if (error) {
       const msg = (error.message || '').toLowerCase();
-      // Fallback direct update if RPC wasn't created yet
       if (
         error.code === '42883' ||
         error.code === 'PGRST202' ||
@@ -399,7 +766,7 @@ export async function archiveMyExpiredQuickDropItems(
         await withFirebaseTokenRetry(async (client) =>
           client
             .from('quick_drop_items')
-            .update({ status: 'trashed', trashed_at: nowIso })
+            .update({ status: 'archived', archived_at: nowIso })
             .eq('user_id', uid)
             .eq('status', 'active')
             .lte('expires_at', nowIso)
@@ -428,16 +795,35 @@ export async function fetchQuickDropItemsFromCloud(
   await flushQuickDropQueue(uid);
   await archiveMyExpiredQuickDropItems(uid);
 
-  const { data, error } = await withFirebaseTokenRetry(async (client) =>
+  const selectCols017 =
+    'id, user_id, title, content, item_type, created_at, expires_at, status, archived_at, trashed_at, updated_at, attachment_name, attachment_mime, attachment_size, attachment_bucket, attachment_path, attachment_preview';
+  const selectCols016 =
+    'id, user_id, title, content, item_type, created_at, expires_at, status, trashed_at, updated_at';
+
+  let { data, error } = await withFirebaseTokenRetry(async (client) =>
     client
       .from('quick_drop_items')
-      .select(
-        'id, user_id, title, content, item_type, created_at, expires_at, status, trashed_at, updated_at'
-      )
+      .select(selectCols017)
       .eq('user_id', uid)
       .order('created_at', { ascending: false })
       .limit(150)
   );
+
+  if (error && isMissing017ColumnOrCheckError(error)) {
+    hasPending017Migration = true;
+    const legacy = await withFirebaseTokenRetry(async (client) =>
+      client
+        .from('quick_drop_items')
+        .select(selectCols016)
+        .eq('user_id', uid)
+        .order('created_at', { ascending: false })
+        .limit(150)
+    );
+    data = legacy.data as typeof data;
+    error = legacy.error;
+  } else if (!error) {
+    hasPending017Migration = false;
+  }
 
   if (error) {
     if (isMissing016TableError(error)) {
@@ -450,14 +836,13 @@ export async function fetchQuickDropItemsFromCloud(
   const mapped = ((data as RawQuickDropRow[] | null) ?? []).map(mapQuickDropRow);
   const withPending = applyMutationsToList(mapped, readQueue(uid));
 
-  // Client safety check if an item crossed expiresAt milliseconds before fetch
   const nowMs = Date.now();
   const normalized = withPending.map((item) =>
     isQuickDropItemExpired(item, nowMs)
       ? {
           ...item,
-          status: 'trashed' as const,
-          trashedAt: item.trashedAt || item.expiresAt,
+          status: 'archived' as const,
+          archivedAt: item.archivedAt || item.expiresAt,
         }
       : item
   );
@@ -468,29 +853,56 @@ export async function fetchQuickDropItemsFromCloud(
 
 export async function createQuickDropItem(
   uid: string,
-  payload: { id?: string; title?: string; content: string }
+  payload: {
+    id?: string;
+    title?: string;
+    content: string;
+    file?: File | null;
+    onUploadProgress?: (percent: number) => void;
+  }
 ): Promise<{ item: QuickDropItem; synced: boolean; offlineQueued: boolean }> {
   const cleanContent = payload.content.trim().slice(0, 12000);
   const cleanTitle = (payload.title || '').trim().slice(0, 140);
+  const itemId = payload.id || generateQuickDropId();
+
+  let uploadedAttachment: QuickDropUploadedAttachment | null = null;
+  if (payload.file) {
+    uploadedAttachment = await uploadQuickDropAttachment(
+      uid,
+      itemId,
+      payload.file,
+      payload.onUploadProgress
+    );
+  }
+
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const expiresAtIso = new Date(now + QUICK_DROP_LIFETIME_MS).toISOString();
 
   const item: QuickDropItem = {
-    id: payload.id || generateQuickDropId(),
+    id: itemId,
     userId: uid,
     title: cleanTitle,
     content: cleanContent,
-    itemType: classifyQuickDropContent(cleanContent),
+    itemType: classifyQuickDropContent(
+      cleanContent,
+      uploadedAttachment
+        ? {
+            name: uploadedAttachment.attachmentName,
+            mime: uploadedAttachment.attachmentMime,
+          }
+        : null
+    ),
     createdAt: nowIso,
     expiresAt: expiresAtIso,
     status: 'active',
+    archivedAt: null,
     trashedAt: null,
     updatedAt: nowIso,
+    ...(uploadedAttachment ?? {}),
     pendingSync: false,
   };
 
-  // Update per-user cache optimistically right away
   const prevCache = readCachedQuickDropItems(uid);
   const nextCache = [item, ...prevCache.filter((x) => x.id !== item.id)];
   writeCachedQuickDropItems(uid, nextCache);
@@ -514,12 +926,20 @@ export async function createQuickDropItem(
   try {
     await executeCloudMutation(uid, op);
     hasPending016Migration = false;
+    hasPending017Migration = false;
     return { item, synced: true, offlineQueued: false };
   } catch (err) {
     if (isMissing016TableError(err)) {
       hasPending016Migration = true;
     }
-    if (isNetworkFailure(err) || isMissing016TableError(err)) {
+    if (isMissing017ColumnOrCheckError(err)) {
+      hasPending017Migration = true;
+    }
+    if (
+      isNetworkFailure(err) ||
+      isMissing016TableError(err) ||
+      isMissing017ColumnOrCheckError(err)
+    ) {
       enqueueMutation(uid, op);
       const queuedItem = { ...item, pendingSync: true };
       writeCachedQuickDropItems(
@@ -528,10 +948,68 @@ export async function createQuickDropItem(
       );
       return { item: queuedItem, synced: false, offlineQueued: true };
     }
-    // Rollback cache on real permission/validation error
     writeCachedQuickDropItems(uid, prevCache);
     throw new Error(
       formatSupabaseErrorMessage(err, 'تعذر حفظ العنصر في النقل السريع.')
+    );
+  }
+}
+
+export async function archiveQuickDropItem(
+  uid: string,
+  id: string
+): Promise<{ synced: boolean; offlineQueued: boolean }> {
+  const now = Date.now();
+  const archivedAt = new Date(now).toISOString();
+  const prevCache = readCachedQuickDropItems(uid);
+  writeCachedQuickDropItems(
+    uid,
+    prevCache.map((x) =>
+      x.id === id
+        ? {
+            ...x,
+            status: 'archived',
+            archivedAt,
+            trashedAt: null,
+            updatedAt: archivedAt,
+          }
+        : x
+    )
+  );
+
+  const op: PendingMutation = {
+    kind: 'archive',
+    id,
+    archivedAt,
+    queuedAt: now,
+  };
+
+  if (
+    !isSupabaseConfigured ||
+    !supabase ||
+    (typeof navigator !== 'undefined' && navigator.onLine === false)
+  ) {
+    enqueueMutation(uid, op);
+    return { synced: false, offlineQueued: true };
+  }
+
+  try {
+    await executeCloudMutation(uid, op);
+    return { synced: true, offlineQueued: false };
+  } catch (err) {
+    if (isMissing017ColumnOrCheckError(err)) hasPending017Migration = true;
+    if (isMissing016TableError(err)) hasPending016Migration = true;
+    if (
+      isNetworkFailure(err) ||
+      isMissing016TableError(err) ||
+      isMissing017ColumnOrCheckError(err)
+    ) {
+      enqueueMutation(uid, op);
+      return { synced: false, offlineQueued: true };
+    }
+    writeCachedQuickDropItems(uid, prevCache);
+    throw new Error(
+      formatSupabaseErrorMessage(err, 'تعذر أرشفة العنصر.')
     );
   }
 }
@@ -595,6 +1073,7 @@ export async function restoreQuickDropItem(
         ? {
             ...x,
             status: 'active',
+            archivedAt: null,
             trashedAt: null,
             expiresAt,
             updatedAt: nowIso,
@@ -618,30 +1097,45 @@ export async function restoreQuickDropItem(
     await executeCloudMutation(uid, op);
     return { expiresAt, synced: true, offlineQueued: false };
   } catch (err) {
-    if (isNetworkFailure(err) || isMissing016TableError(err)) {
+    if (
+      isNetworkFailure(err) ||
+      isMissing016TableError(err) ||
+      isMissing017ColumnOrCheckError(err)
+    ) {
       if (isMissing016TableError(err)) hasPending016Migration = true;
+      if (isMissing017ColumnOrCheckError(err)) hasPending017Migration = true;
       enqueueMutation(uid, op);
       return { expiresAt, synced: false, offlineQueued: true };
     }
     writeCachedQuickDropItems(uid, prevCache);
     throw new Error(
-      formatSupabaseErrorMessage(err, 'تعذر استعادة العنصر من سلة المهملات.')
+      formatSupabaseErrorMessage(err, 'تعذر استعادة العنصر إلى الوارد.')
     );
   }
 }
 
 export async function deleteQuickDropItemPermanently(
   uid: string,
-  id: string
+  item: Pick<QuickDropItem, 'id' | 'attachmentBucket' | 'attachmentPath'> | string
 ): Promise<{ synced: boolean; offlineQueued: boolean }> {
+  const targetId = typeof item === 'string' ? item : item.id;
+  const bucket = typeof item === 'string' ? undefined : item.attachmentBucket;
+  const path = typeof item === 'string' ? undefined : item.attachmentPath;
+
   const now = Date.now();
   const prevCache = readCachedQuickDropItems(uid);
   writeCachedQuickDropItems(
     uid,
-    prevCache.filter((x) => x.id !== id)
+    prevCache.filter((x) => x.id !== targetId)
   );
 
-  const op: PendingMutation = { kind: 'delete', id, queuedAt: now };
+  const op: PendingMutation = {
+    kind: 'delete',
+    id: targetId,
+    attachmentBucket: bucket,
+    attachmentPath: path,
+    queuedAt: now,
+  };
 
   if (
     !isSupabaseConfigured ||
@@ -669,16 +1163,28 @@ export async function deleteQuickDropItemPermanently(
 }
 
 export async function emptyQuickDropTrash(
-  uid: string
+  uid: string,
+  trashedItems: Array<Pick<QuickDropItem, 'attachmentBucket' | 'attachmentPath'>> = []
 ): Promise<{ synced: boolean; offlineQueued: boolean }> {
   const now = Date.now();
   const prevCache = readCachedQuickDropItems(uid);
+  const attachments = trashedItems
+    .filter((x) => x.attachmentBucket && x.attachmentPath)
+    .map((x) => ({
+      bucket: x.attachmentBucket!,
+      path: x.attachmentPath!,
+    }));
+
   writeCachedQuickDropItems(
     uid,
     prevCache.filter((x) => x.status !== 'trashed')
   );
 
-  const op: PendingMutation = { kind: 'empty_trash', queuedAt: now };
+  const op: PendingMutation = {
+    kind: 'empty_trash',
+    attachments,
+    queuedAt: now,
+  };
 
   if (
     !isSupabaseConfigured ||
@@ -722,7 +1228,6 @@ export function subscribeQuickDropInbox(
   let reconnectTimer: number | null = null;
   let inFlightRefresh: Promise<void> | null = null;
 
-  // Immediate cache hydration for crisp startup
   const cached = applyMutationsToList(
     readCachedQuickDropItems(uid),
     readQueue(uid)

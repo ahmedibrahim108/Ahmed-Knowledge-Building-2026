@@ -39,6 +39,16 @@
     --kb-border-strong: #CBD5E1;
     --kb-input: #FFFFFF;
     --kb-ring: #1E3A5F;
+    --kb-hover-bg: #EBEFF5;
+    --kb-selected-bg: #EEF2F7;
+    --kb-selected-border: #6A809C;
+    --kb-selected-fg: #0F172A;
+    --kb-highlight-bg: rgba(254, 240, 138, 0.85);
+    --kb-highlight-fg: #0F172A;
+    --kb-muted-fg: #5D6D84;
+    --kb-disabled-bg: #F4F6F9;
+    --kb-disabled-fg: #8292A8;
+    --kb-focus-ring: rgba(30, 58, 95, 0.38);
     --kb-success: #059669;
     --kb-warning: #D97706;
     --kb-destructive: #DC2626;
@@ -109,6 +119,16 @@
   h1, h2, .font-editorial {
     font-family: var(--font-display);
     text-wrap: balance;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid var(--kb-focus-ring);
+    outline-offset: 2px;
   }
 }
 
@@ -442,20 +462,26 @@ html[data-kb-themed="true"] .bg-white\/60 {
 }
 
 html[data-kb-themed="true"] .bg-slate-50,
+html[data-kb-themed="true"] .bg-slate-50\/95,
 html[data-kb-themed="true"] .bg-slate-50\/90,
 html[data-kb-themed="true"] .bg-slate-50\/80,
+html[data-kb-themed="true"] .bg-slate-50\/75,
 html[data-kb-themed="true"] .bg-slate-50\/70,
-html[data-kb-themed="true"] .bg-slate-50\/50 {
+html[data-kb-themed="true"] .bg-slate-50\/60,
+html[data-kb-themed="true"] .bg-slate-50\/50,
+html[data-kb-themed="true"] .bg-slate-50\/40 {
   background-color: var(--kb-surface) !important;
 }
 
 html[data-kb-themed="true"] .bg-slate-100,
+html[data-kb-themed="true"] .bg-slate-100\/90,
 html[data-kb-themed="true"] .bg-slate-100\/80,
 html[data-kb-themed="true"] .bg-slate-100\/70 {
   background-color: var(--kb-surface-2) !important;
 }
 
 html[data-kb-themed="true"] .bg-slate-200,
+html[data-kb-themed="true"] .bg-slate-200\/75,
 html[data-kb-themed="true"] .bg-slate-200\/70,
 html[data-kb-themed="true"] .bg-slate-200\/60 {
   background-color: var(--kb-border) !important;
@@ -465,8 +491,14 @@ html[data-kb-themed="true"] .hover\:bg-white:hover {
   background-color: var(--kb-card) !important;
 }
 
+html[data-kb-themed="true"] .hover\:bg-white\/70:hover {
+  background-color: color-mix(in srgb, var(--kb-card) 82%, transparent) !important;
+}
+
 html[data-kb-themed="true"] .hover\:bg-slate-50:hover,
+html[data-kb-themed="true"] .hover\:bg-slate-50\/70:hover,
 html[data-kb-themed="true"] .hover\:bg-slate-100:hover,
+html[data-kb-themed="true"] .hover\:bg-slate-100\/70:hover,
 html[data-kb-themed="true"] .hover\:bg-slate-200:hover,
 html[data-kb-themed="true"] .hover\:bg-slate-200\/60:hover,
 html[data-kb-themed="true"] .hover\:bg-slate-200\/70:hover,
@@ -474,7 +506,7 @@ html[data-kb-themed="true"] .hover\:bg-slate-200\/80:hover,
 html[data-kb-themed="true"] .hover\:bg-\[\#F7F8FA\]:hover,
 html[data-kb-themed="true"] .hover\:bg-\[\#F1F5F9\]:hover,
 html[data-kb-themed="true"] .hover\:bg-\[\#F0F4F9\]:hover {
-  background-color: var(--kb-surface-2) !important;
+  background-color: var(--kb-hover-bg) !important;
 }
 
 html[data-kb-themed="true"] .hover\:bg-\[\#E3ECF6\]:hover {
@@ -513,7 +545,8 @@ html[data-kb-themed="true"] .text-slate-300 {
 }
 
 html[data-kb-themed="true"] .hover\:text-slate-900:hover,
-html[data-kb-themed="true"] .hover\:text-slate-800:hover {
+html[data-kb-themed="true"] .hover\:text-slate-800:hover,
+html[data-kb-themed="true"] .hover\:text-slate-700:hover {
   color: var(--kb-fg) !important;
 }
 
@@ -524,11 +557,13 @@ html[data-kb-themed="true"] .placeholder\:text-slate-400::placeholder {
 /* Borders & dividers */
 html[data-kb-themed="true"] .border-slate-100,
 html[data-kb-themed="true"] .border-slate-200\/60,
+html[data-kb-themed="true"] .border-slate-200\/70,
 html[data-kb-themed="true"] .border-slate-200\/80 {
   border-color: var(--kb-border-subtle) !important;
 }
 
-html[data-kb-themed="true"] .border-slate-200 {
+html[data-kb-themed="true"] .border-slate-200,
+html[data-kb-themed="true"] .border-slate-200\/90 {
   border-color: var(--kb-border) !important;
 }
 
@@ -563,7 +598,7 @@ html[data-kb-themed="true"] .hover\:bg-\[\#1E3A5F\]:hover {
 html[data-kb-themed="true"] .bg-\[\#1E3A5F\]\/5,
 html[data-kb-themed="true"] .bg-\[\#1E3A5F\]\/8,
 html[data-kb-themed="true"] .bg-\[\#1E3A5F\]\/10 {
-  background-color: var(--kb-primary-soft) !important;
+  background-color: var(--kb-selected-bg) !important;
 }
 
 html[data-kb-themed="true"] .hover\:bg-\[\#1E3A5F\]\/10:hover,
@@ -571,16 +606,14 @@ html[data-kb-themed="true"] .hover\:bg-\[\#1E3A5F\]\/15:hover {
   background-color: var(--kb-primary-soft-hover) !important;
 }
 
-html[data-kb-themed="true"] .text-\[\#1E3A5F\] {
-  color: var(--kb-primary-ink) !important;
-}
-
-html[data-kb-themed="true"] .hover\:text-\[\#1E3A5F\]:hover {
+html[data-kb-themed="true"] .text-\[\#1E3A5F\],
+html[data-kb-themed="true"] .hover\:text-\[\#1E3A5F\]:hover,
+html[data-kb-themed="true"] .group:hover .group-hover\:text-\[\#1E3A5F\] {
   color: var(--kb-primary-ink) !important;
 }
 
 html[data-kb-themed="true"] .border-\[\#1E3A5F\] {
-  border-color: var(--kb-primary) !important;
+  border-color: var(--kb-selected-border) !important;
 }
 
 html[data-kb-themed="true"] .border-\[\#1E3A5F\]\/20,
@@ -595,6 +628,7 @@ html[data-kb-themed="true"] .focus\:border-\[\#1E3A5F\]:focus {
   border-color: var(--kb-ring) !important;
 }
 
+html[data-kb-themed="true"] .ring-\[\#1E3A5F\],
 html[data-kb-themed="true"] .ring-\[\#1E3A5F\]\/10,
 html[data-kb-themed="true"] .ring-\[\#1E3A5F\]\/20,
 html[data-kb-themed="true"] .ring-\[\#1E3A5F\]\/25,
@@ -608,118 +642,202 @@ html[data-kb-themed="true"] .bg-\[\#1E3A5F\].text-white {
   color: var(--kb-primary-fg) !important;
 }
 
-/* Subtle gradients on hero/featured banners */
+/* Subtle gradients on hero/featured banners & media placeholders */
 html[data-kb-themed="true"] .from-\[\#F8FAFC\],
 html[data-kb-themed="true"] .from-white {
   --tw-gradient-from: var(--kb-card) !important;
 }
 
+html[data-kb-themed="true"] .via-slate-50 {
+  --tw-gradient-via: var(--kb-surface) !important;
+}
+
 html[data-kb-themed="true"] .to-\[\#F0F4F9\],
-html[data-kb-themed="true"] .to-slate-50 {
+html[data-kb-themed="true"] .to-slate-50,
+html[data-kb-themed="true"] .to-slate-100 {
   --tw-gradient-to: var(--kb-surface-2) !important;
 }
 
-/* Dark mode semantic status badge & subtle tint contrast harmonization */
+html[data-theme-mode="dark"] .from-emerald-50 {
+  --tw-gradient-from: rgba(16, 185, 129, 0.16) !important;
+}
+
+/* Dark mode semantic status badge, surface & hover contrast harmonization */
 html[data-theme-mode="dark"] .bg-emerald-50,
-html[data-theme-mode="dark"] .bg-emerald-50\/70,
+html[data-theme-mode="dark"] .bg-emerald-50\/40,
+html[data-theme-mode="dark"] .bg-emerald-50\/45,
 html[data-theme-mode="dark"] .bg-emerald-50\/60,
+html[data-theme-mode="dark"] .bg-emerald-50\/70,
 html[data-theme-mode="dark"] .bg-emerald-100 {
   background-color: rgba(16, 185, 129, 0.16) !important;
 }
+html[data-theme-mode="dark"] .hover\:bg-emerald-50:hover,
+html[data-theme-mode="dark"] .hover\:bg-emerald-100:hover {
+  background-color: rgba(16, 185, 129, 0.25) !important;
+}
+html[data-theme-mode="dark"] .text-emerald-600,
 html[data-theme-mode="dark"] .text-emerald-700,
 html[data-theme-mode="dark"] .text-emerald-800,
-html[data-theme-mode="dark"] .text-emerald-900 {
+html[data-theme-mode="dark"] .text-emerald-800\/70,
+html[data-theme-mode="dark"] .text-emerald-900,
+html[data-theme-mode="dark"] .text-emerald-950,
+html[data-theme-mode="dark"] .hover\:text-emerald-600:hover,
+html[data-theme-mode="dark"] .hover\:text-emerald-700:hover,
+html[data-theme-mode="dark"] .group:hover .group-hover\:text-emerald-800 {
   color: #6EE7B7 !important;
 }
 html[data-theme-mode="dark"] .border-emerald-200,
+html[data-theme-mode="dark"] .border-emerald-200\/80,
 html[data-theme-mode="dark"] .border-emerald-300 {
-  border-color: rgba(16, 185, 129, 0.34) !important;
+  border-color: rgba(16, 185, 129, 0.36) !important;
 }
 
 html[data-theme-mode="dark"] .bg-amber-50,
+html[data-theme-mode="dark"] .bg-amber-50\/40,
+html[data-theme-mode="dark"] .bg-amber-50\/55,
+html[data-theme-mode="dark"] .bg-amber-50\/60,
 html[data-theme-mode="dark"] .bg-amber-50\/70,
 html[data-theme-mode="dark"] .bg-amber-100,
 html[data-theme-mode="dark"] .bg-amber-200\/70 {
   background-color: rgba(245, 158, 11, 0.16) !important;
 }
+html[data-theme-mode="dark"] .hover\:bg-amber-50:hover,
+html[data-theme-mode="dark"] .hover\:bg-amber-100:hover,
+html[data-theme-mode="dark"] .hover\:bg-amber-200:hover {
+  background-color: rgba(245, 158, 11, 0.26) !important;
+}
+html[data-theme-mode="dark"] .text-amber-600,
 html[data-theme-mode="dark"] .text-amber-700,
 html[data-theme-mode="dark"] .text-amber-800,
 html[data-theme-mode="dark"] .text-amber-900,
-html[data-theme-mode="dark"] .text-amber-950 {
+html[data-theme-mode="dark"] .text-amber-950,
+html[data-theme-mode="dark"] .hover\:text-amber-950:hover {
   color: #FCD34D !important;
 }
 html[data-theme-mode="dark"] .border-amber-200,
+html[data-theme-mode="dark"] .border-amber-200\/80,
 html[data-theme-mode="dark"] .border-amber-300 {
-  border-color: rgba(245, 158, 11, 0.34) !important;
+  border-color: rgba(245, 158, 11, 0.36) !important;
 }
 
 html[data-theme-mode="dark"] .bg-red-50,
+html[data-theme-mode="dark"] .bg-red-50\/50,
+html[data-theme-mode="dark"] .bg-red-50\/70,
 html[data-theme-mode="dark"] .bg-red-100,
 html[data-theme-mode="dark"] .bg-rose-50,
+html[data-theme-mode="dark"] .bg-rose-50\/50,
+html[data-theme-mode="dark"] .bg-rose-50\/90,
 html[data-theme-mode="dark"] .bg-rose-100 {
   background-color: rgba(244, 63, 94, 0.16) !important;
 }
+html[data-theme-mode="dark"] .hover\:bg-red-50:hover,
+html[data-theme-mode="dark"] .hover\:bg-red-100:hover,
+html[data-theme-mode="dark"] .hover\:bg-rose-50:hover,
+html[data-theme-mode="dark"] .hover\:bg-rose-100:hover {
+  background-color: rgba(244, 63, 94, 0.25) !important;
+}
+html[data-theme-mode="dark"] .text-red-600,
 html[data-theme-mode="dark"] .text-red-700,
+html[data-theme-mode="dark"] .text-red-700\/80,
 html[data-theme-mode="dark"] .text-red-800,
+html[data-theme-mode="dark"] .text-red-900,
+html[data-theme-mode="dark"] .hover\:text-red-600:hover,
+html[data-theme-mode="dark"] .hover\:text-red-700:hover,
+html[data-theme-mode="dark"] .text-rose-600,
 html[data-theme-mode="dark"] .text-rose-700,
-html[data-theme-mode="dark"] .text-rose-800 {
+html[data-theme-mode="dark"] .text-rose-800,
+html[data-theme-mode="dark"] .text-rose-900,
+html[data-theme-mode="dark"] .text-rose-950 {
   color: #FDA4AF !important;
 }
 html[data-theme-mode="dark"] .border-red-200,
-html[data-theme-mode="dark"] .border-rose-200 {
-  border-color: rgba(244, 63, 94, 0.34) !important;
+html[data-theme-mode="dark"] .border-red-300,
+html[data-theme-mode="dark"] .border-rose-200,
+html[data-theme-mode="dark"] .border-rose-300 {
+  border-color: rgba(244, 63, 94, 0.36) !important;
 }
 
 html[data-theme-mode="dark"] .bg-sky-50,
+html[data-theme-mode="dark"] .bg-sky-50\/70,
 html[data-theme-mode="dark"] .bg-sky-100,
 html[data-theme-mode="dark"] .bg-blue-50,
 html[data-theme-mode="dark"] .bg-blue-100 {
   background-color: rgba(56, 189, 248, 0.16) !important;
 }
+html[data-theme-mode="dark"] .hover\:bg-sky-50:hover,
+html[data-theme-mode="dark"] .hover\:bg-sky-100:hover,
+html[data-theme-mode="dark"] .hover\:bg-blue-50:hover,
+html[data-theme-mode="dark"] .hover\:bg-blue-100:hover {
+  background-color: rgba(56, 189, 248, 0.25) !important;
+}
+html[data-theme-mode="dark"] .text-sky-600,
 html[data-theme-mode="dark"] .text-sky-700,
 html[data-theme-mode="dark"] .text-sky-800,
 html[data-theme-mode="dark"] .text-sky-900,
+html[data-theme-mode="dark"] .text-sky-950,
+html[data-theme-mode="dark"] .text-blue-600,
 html[data-theme-mode="dark"] .text-blue-700,
-html[data-theme-mode="dark"] .text-blue-800 {
+html[data-theme-mode="dark"] .text-blue-800,
+html[data-theme-mode="dark"] .text-blue-900 {
   color: #7DD3FC !important;
 }
 html[data-theme-mode="dark"] .border-sky-200,
+html[data-theme-mode="dark"] .border-sky-200\/80,
 html[data-theme-mode="dark"] .border-blue-200 {
-  border-color: rgba(56, 189, 248, 0.34) !important;
+  border-color: rgba(56, 189, 248, 0.36) !important;
 }
 
 html[data-theme-mode="dark"] .bg-indigo-50,
+html[data-theme-mode="dark"] .bg-indigo-50\/90,
 html[data-theme-mode="dark"] .bg-indigo-100,
 html[data-theme-mode="dark"] .bg-violet-50,
+html[data-theme-mode="dark"] .bg-violet-50\/50,
 html[data-theme-mode="dark"] .bg-violet-100,
 html[data-theme-mode="dark"] .bg-purple-50,
 html[data-theme-mode="dark"] .bg-purple-100 {
   background-color: rgba(139, 92, 246, 0.18) !important;
 }
+html[data-theme-mode="dark"] .hover\:bg-indigo-50:hover,
+html[data-theme-mode="dark"] .hover\:bg-indigo-100:hover,
+html[data-theme-mode="dark"] .hover\:bg-violet-50:hover,
+html[data-theme-mode="dark"] .hover\:bg-violet-100:hover {
+  background-color: rgba(139, 92, 246, 0.27) !important;
+}
+html[data-theme-mode="dark"] .text-indigo-600,
 html[data-theme-mode="dark"] .text-indigo-700,
 html[data-theme-mode="dark"] .text-indigo-800,
+html[data-theme-mode="dark"] .text-indigo-900,
+html[data-theme-mode="dark"] .text-indigo-950,
+html[data-theme-mode="dark"] .text-violet-600,
 html[data-theme-mode="dark"] .text-violet-700,
 html[data-theme-mode="dark"] .text-violet-800,
+html[data-theme-mode="dark"] .text-violet-900,
+html[data-theme-mode="dark"] .text-purple-600,
 html[data-theme-mode="dark"] .text-purple-700,
-html[data-theme-mode="dark"] .text-purple-800 {
+html[data-theme-mode="dark"] .text-purple-800,
+html[data-theme-mode="dark"] .text-purple-900 {
   color: #C4B5FD !important;
 }
 html[data-theme-mode="dark"] .border-indigo-200,
+html[data-theme-mode="dark"] .border-indigo-300,
 html[data-theme-mode="dark"] .border-violet-200,
+html[data-theme-mode="dark"] .border-violet-300,
 html[data-theme-mode="dark"] .border-purple-200 {
-  border-color: rgba(139, 92, 246, 0.34) !important;
+  border-color: rgba(139, 92, 246, 0.36) !important;
 }
 
 html[data-theme-mode="dark"] .bg-teal-50,
 html[data-theme-mode="dark"] .bg-teal-100 {
   background-color: rgba(20, 184, 166, 0.16) !important;
 }
+html[data-theme-mode="dark"] .text-teal-600,
 html[data-theme-mode="dark"] .text-teal-700,
-html[data-theme-mode="dark"] .text-teal-800 {
+html[data-theme-mode="dark"] .text-teal-800,
+html[data-theme-mode="dark"] .text-teal-900 {
   color: #5EEAD4 !important;
 }
 html[data-theme-mode="dark"] .border-teal-200 {
-  border-color: rgba(20, 184, 166, 0.34) !important;
+  border-color: rgba(20, 184, 166, 0.36) !important;
 }
 
 /* Keep <mark> and pastel highlight chips dark-ink legible in dark themes */
@@ -728,11 +846,31 @@ html[data-theme-mode="dark"] mark.bg-amber-200\/80 {
   color: #0F172A !important;
 }
 
+/* Remap stored rich-text dark slate/navy inline ink colors when rendered on Dark Mode clean surfaces */
+html[data-theme-mode="dark"] .prose-bidi [style*="color: #0f172a"],
+html[data-theme-mode="dark"] .prose-bidi [style*="color:#0f172a"],
+html[data-theme-mode="dark"] .prose-bidi [style*="color: #1e293b"],
+html[data-theme-mode="dark"] .prose-bidi [style*="color:#1e293b"],
+html[data-theme-mode="dark"] .prose-bidi [style*="color: rgb(15, 23, 42)"],
+html[data-theme-mode="dark"] .prose-bidi [style*="color: rgb(30, 41, 59)"] {
+  color: var(--kb-fg-800) !important;
+}
+html[data-theme-mode="dark"] .prose-bidi [style*="color: #1e3a5f"],
+html[data-theme-mode="dark"] .prose-bidi [style*="color:#1e3a5f"],
+html[data-theme-mode="dark"] .prose-bidi [style*="color: rgb(30, 58, 95)"] {
+  color: var(--kb-primary-ink) !important;
+}
+html[data-theme-mode="dark"] .prose-bidi [style*="color: #475569"],
+html[data-theme-mode="dark"] .prose-bidi [style*="color:#475569"],
+html[data-theme-mode="dark"] .prose-bidi [style*="color: rgb(71, 85, 105)"] {
+  color: var(--kb-fg-600) !important;
+}
+
 /* =========================================================================
    CUSTOM PERSONAL CARD / PAPER PROTECTION (Journal Gallery, Reflections,
    and custom Warm/Slate Note Paper Tones)
-   Preserves bespoke pastel card colors & legible dark ink independently of
-   the global theme (even in Dark/Midnight/Forest/Lavender modes).
+   Uses html[data-kb-themed="true"] prefix (specificity 0,3,1 > dark-mode 0,2,1)
+   so bespoke pastel card surfaces & inks remain immune in Dark Mode.
    ========================================================================= */
 
 [data-custom-card-surface="light"] {
@@ -753,58 +891,130 @@ html[data-theme-mode="dark"] mark.bg-amber-200\/80 {
   --kb-primary-ink: #1E3A5F;
   --kb-primary: #1E3A5F;
   --kb-primary-fg: #FFFFFF;
+  --kb-hover-bg: #F1F5F9;
+  --kb-selected-bg: rgba(30, 58, 95, 0.08);
+  --kb-selected-border: #1E3A5F;
   --kb-glass-header: rgba(255, 255, 255, 0.92);
   color: #0F172A;
   color-scheme: light;
 }
 
-[data-custom-card-surface="light"] .bg-emerald-50,
-[data-custom-card-surface="light"] .bg-emerald-100 {
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-white {
+  background-color: #FFFFFF !important;
+}
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .hover\:bg-white\/70:hover {
+  background-color: rgba(255, 255, 255, 0.78) !important;
+}
+
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-emerald-50,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-emerald-50\/45,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-emerald-100 {
   background-color: #ECFDF5 !important;
 }
-[data-custom-card-surface="light"] .text-emerald-700,
-[data-custom-card-surface="light"] .text-emerald-800,
-[data-custom-card-surface="light"] .text-emerald-900 {
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-emerald-600,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-emerald-700,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-emerald-800,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-emerald-900,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-emerald-950 {
   color: #047857 !important;
 }
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .border-emerald-200 {
+  border-color: #A7F3D0 !important;
+}
 
-[data-custom-card-surface="light"] .bg-amber-50,
-[data-custom-card-surface="light"] .bg-amber-100 {
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-amber-50,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-amber-50\/55,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-amber-100 {
   background-color: #FFFBEB !important;
 }
-[data-custom-card-surface="light"] .text-amber-700,
-[data-custom-card-surface="light"] .text-amber-800,
-[data-custom-card-surface="light"] .text-amber-900 {
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-amber-600,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-amber-700,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-amber-800,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-amber-900,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-amber-950 {
   color: #B45309 !important;
 }
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .border-amber-200 {
+  border-color: #FDE68A !important;
+}
 
-[data-custom-card-surface="light"] .bg-sky-50,
-[data-custom-card-surface="light"] .bg-blue-50 {
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-sky-50,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-blue-50 {
   background-color: #F0F9FF !important;
 }
-[data-custom-card-surface="light"] .text-sky-700,
-[data-custom-card-surface="light"] .text-sky-800,
-[data-custom-card-surface="light"] .text-blue-700,
-[data-custom-card-surface="light"] .text-blue-800 {
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-sky-600,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-sky-700,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-sky-800,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-sky-900,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-blue-600,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-blue-700,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-blue-800 {
   color: #0369A1 !important;
 }
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .border-sky-200,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .border-blue-200 {
+  border-color: #BAE6FD !important;
+}
 
-[data-custom-card-surface="light"] .bg-indigo-50,
-[data-custom-card-surface="light"] .bg-violet-50 {
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-indigo-50,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-violet-50,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-violet-50\/50 {
   background-color: #EEF2FF !important;
 }
-[data-custom-card-surface="light"] .text-indigo-700,
-[data-custom-card-surface="light"] .text-violet-700 {
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-indigo-600,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-indigo-700,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-indigo-900,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-violet-600,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-violet-700,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-violet-900 {
   color: #4338CA !important;
 }
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .border-indigo-200,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .border-violet-200 {
+  border-color: #C7D2FE !important;
+}
 
-[data-custom-card-surface="light"] .bg-rose-50,
-[data-custom-card-surface="light"] .bg-red-50 {
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-rose-50,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-rose-50\/50,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .bg-red-50 {
   background-color: #FFF1F2 !important;
 }
-[data-custom-card-surface="light"] .text-rose-700,
-[data-custom-card-surface="light"] .text-red-700 {
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-rose-600,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-rose-700,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-rose-800,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-rose-900,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-red-600,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-red-700,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .hover\:text-red-700:hover {
   color: #BE123C !important;
+}
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .border-rose-200,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .border-red-200 {
+  border-color: #FECDD3 !important;
+}
+
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-teal-700,
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .text-teal-900 {
+  color: #0F766E !important;
+}
+
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color: #0f172a"],
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color:#0f172a"],
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color: #1e293b"],
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color:#1e293b"],
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color: rgb(15, 23, 42)"],
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color: rgb(30, 41, 59)"] {
+  color: #1E293B !important;
+}
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color: #1e3a5f"],
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color:#1e3a5f"],
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color: rgb(30, 58, 95)"] {
+  color: #1E3A5F !important;
+}
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color: #475569"],
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color:#475569"],
+html[data-kb-themed="true"] [data-custom-card-surface="light"] .prose-bidi [style*="color: rgb(71, 85, 105)"] {
+  color: #475569 !important;
 }
 
 /* Smooth theme switch transition (respects prefers-reduced-motion) */

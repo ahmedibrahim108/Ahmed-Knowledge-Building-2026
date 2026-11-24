@@ -536,7 +536,7 @@ export default function JournalCardCustomizeModal({
                 onClick={() => setShowGalleryPicker((v) => !v)}
                 className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl border cursor-pointer ${
                   showGalleryPicker
-                    ? 'bg-slate-900 text-white border-slate-900'
+                    ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
                     : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
                 }`}
               >

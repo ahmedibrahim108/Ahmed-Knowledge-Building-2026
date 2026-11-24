@@ -264,7 +264,7 @@ export function PinCollectionsBar({
                     onClick={() => setNewColor(c.key)}
                     aria-label={c.label}
                     className={`w-5 h-5 rounded-full ${c.dotClass} cursor-pointer ${
-                      newColor === c.key ? 'ring-2 ring-offset-1 ring-slate-900' : 'opacity-70 hover:opacity-100'
+                      newColor === c.key ? 'ring-2 ring-offset-1 ring-[#1E3A5F]' : 'opacity-70 hover:opacity-100'
                     }`}
                   />
                 ))}
@@ -312,7 +312,7 @@ export function PinCollectionsBar({
                               onClick={() => setEditColor(c.key)}
                               aria-label={c.label}
                               className={`w-4 h-4 rounded-full ${c.dotClass} cursor-pointer ${
-                                editColor === c.key ? 'ring-2 ring-offset-1 ring-slate-900' : 'opacity-70'
+                                editColor === c.key ? 'ring-2 ring-offset-1 ring-[#1E3A5F]' : 'opacity-70'
                               }`}
                             />
                           ))}

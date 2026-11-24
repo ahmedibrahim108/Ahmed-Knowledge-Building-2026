@@ -257,7 +257,7 @@ export default function SpacedRepetitionPanel({
                 {mode.description && (
                   <p
                     className={`text-[10px] mt-0.5 leading-snug ${
-                      active ? 'text-slate-200' : 'text-slate-500'
+                      active ? 'opacity-85' : 'text-slate-500'
                     }`}
                   >
                     {mode.description}
