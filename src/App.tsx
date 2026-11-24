@@ -4,7 +4,7 @@
  */
 
 import { User, onAuthStateChanged } from 'firebase/auth';
-import { Suspense, lazy, useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CalendarDays,
   CheckCircle2,
@@ -16,6 +16,7 @@ import {
   Target,
 } from 'lucide-react';
 import AccountCenterView from './components/AccountCenterView';
+import AdvancedSearchModal from './components/AdvancedSearchModal';
 import BlogsView from './components/BlogsView';
 import CalendarView from './components/CalendarView';
 import ConfirmDialog from './components/ConfirmDialog';
@@ -34,7 +35,9 @@ import OverviewView from './components/OverviewView';
 import PathsView from './components/PathsView';
 import type { ActivePdfTarget } from './components/PDFViewerModal';
 import PhotoGalleryView from './components/PhotoGalleryView';
-import PublicHomeView from './components/PublicHomeView';
+import PublicHomeView, {
+  PublicDetailModalState,
+} from './components/PublicHomeView';
 import ReflectionsView from './components/ReflectionsView';
 import ReviewsView from './components/ReviewsView';
 import SiteFooter from './components/SiteFooter';
@@ -119,6 +122,11 @@ import type {
   JournalNavAction,
   WorkspaceAnalyticsInput,
 } from './utils/journalAnalytics';
+import {
+  SearchActionPayload,
+  buildAdminSearchIndex,
+  buildPublicSearchIndex,
+} from './utils/searchEngine';
 import {
   CloudAttachmentItem,
   PublicCatalogData,
@@ -402,6 +410,18 @@ export default function App() {
   const [domainFilter, setDomainFilter] = useState<DomainId | 'all'>('all');
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [authPromptNotice, setAuthPromptNotice] = useState<string | null>(null);
+  const [advancedSearchOpen, setAdvancedSearchOpen] = useState(false);
+  const [pendingJournalDayKey, setPendingJournalDayKey] = useState<string | null>(
+    null
+  );
+  const [pendingReflectionId, setPendingReflectionId] = useState<string | null>(
+    null
+  );
+  const [pendingBlogPostId, setPendingBlogPostId] = useState<string | null>(
+    null
+  );
+  const [pendingPublicDetail, setPendingPublicDetail] =
+    useState<PublicDetailModalState>(null);
 
   // Firebase Auth, RBAC & Public Catalog state
   const [user, setUser] = useState<User | null>(null);
@@ -3265,6 +3285,208 @@ export default function App() {
     hubs: resolveLearningHubs(preferences.customHubs),
   };
 
+  const isAdminSearchSurface = isAdmin && !isPreviewingPublic;
+  const resolvedHubsList = useMemo(
+    () => resolveLearningHubs(preferences.customHubs),
+    [preferences.customHubs]
+  );
+
+  // Global keyboard shortcut: Ctrl+K / Cmd+K or '/' (outside form inputs) opens Advanced Search anywhere
+  useEffect(() => {
+    const onGlobalKeyDown = (e: KeyboardEvent) => {
+      const keyLower = (e.key || '').toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && keyLower === 'k') {
+        e.preventDefault();
+        setAdvancedSearchOpen((prev) => !prev);
+        return;
+      }
+      if (
+        e.key === '/' &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !advancedSearchOpen
+      ) {
+        const el = document.activeElement as HTMLElement | null;
+        const tag = (el?.tagName || '').toUpperCase();
+        const isTyping =
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          Boolean(el?.isContentEditable);
+        if (!isTyping) {
+          e.preventDefault();
+          setAdvancedSearchOpen(true);
+        }
+      }
+    };
+    window.addEventListener('keydown', onGlobalKeyDown);
+    return () => window.removeEventListener('keydown', onGlobalKeyDown);
+  }, [advancedSearchOpen]);
+
+  const searchDocuments = useMemo(() => {
+    if (!advancedSearchOpen) return [];
+    if (isAdminSearchSurface) {
+      return buildAdminSearchIndex({
+        courses,
+        bookNotes,
+        unifiedTasks,
+        projects,
+        dailyJournals,
+        reflections,
+        blogPosts,
+        learningPaths,
+        readingItems,
+        months,
+        domains,
+        calendarEvents,
+        weeklyMeetings,
+        dentalCases,
+        cloudAttachments,
+        hubs: resolvedHubsList,
+      });
+    }
+    const pubCourses =
+      isAdmin && isPreviewingPublic
+        ? courses.filter((c) => c.isPublic)
+        : publicCatalog.courses;
+    const pubPaths =
+      isAdmin && isPreviewingPublic
+        ? learningPaths.filter((p) => p.isPublic)
+        : publicCatalog.learningPaths;
+    const pubBooks =
+      isAdmin && isPreviewingPublic
+        ? readingItems.filter((b) => b.isPublic)
+        : publicCatalog.readingItems;
+    const pubRefl =
+      isAdmin && isPreviewingPublic
+        ? reflections.filter(
+            (r) =>
+              Boolean(r.isPublic) ||
+              (Boolean(r.categoryTag) &&
+                (publicSiteConfig.publicReflectionCategories ?? []).includes(
+                  r.categoryTag!
+                ))
+          )
+        : publicCatalog.reflections;
+    const pubBlogs =
+      isAdmin && isPreviewingPublic
+        ? blogPosts.filter((b) => b.isPublic)
+        : publicCatalog.blogPosts;
+
+    return buildPublicSearchIndex({
+      publicCourses: pubCourses,
+      publicPaths: pubPaths,
+      publicBooks: pubBooks,
+      publicReflections: pubRefl,
+      publicBlogs: pubBlogs,
+      grantedWorkspace: isAdmin ? null : grantedWorkspace,
+      hubs: resolvedHubsList,
+    });
+  }, [
+    advancedSearchOpen,
+    isAdminSearchSurface,
+    isAdmin,
+    isPreviewingPublic,
+    courses,
+    bookNotes,
+    unifiedTasks,
+    projects,
+    dailyJournals,
+    reflections,
+    blogPosts,
+    learningPaths,
+    readingItems,
+    months,
+    domains,
+    calendarEvents,
+    weeklyMeetings,
+    dentalCases,
+    cloudAttachments,
+    resolvedHubsList,
+    publicCatalog,
+    publicSiteConfig.publicReflectionCategories,
+    grantedWorkspace,
+  ]);
+
+  const handleExecuteSearchAction = (action: SearchActionPayload) => {
+    switch (action.type) {
+      case 'tab':
+        navigateToTab(action.tab);
+        safeScrollToTop();
+        break;
+      case 'course':
+        navigateToCourseRoute(action.courseId);
+        break;
+      case 'note':
+        handleOpenNoteById(action.noteId, false);
+        break;
+      case 'task':
+        setQuickTaskModal({ open: true, task: action.task });
+        break;
+      case 'daily_journal':
+        navigateToTab('daily_journal');
+        setPendingJournalDayKey(action.dateKey);
+        safeScrollToTop();
+        break;
+      case 'reflection':
+        navigateToTab('reflections');
+        setPendingReflectionId(action.reflectionId);
+        safeScrollToTop();
+        break;
+      case 'blog':
+        navigateToTab('blogs');
+        setPendingBlogPostId(action.blogId);
+        safeScrollToTop();
+        break;
+      case 'month':
+        handleJumpToMonth(action.monthId);
+        break;
+      case 'domain':
+        handleFilterByDomain(action.domainId);
+        break;
+      case 'dental_cases':
+        handleOpenDentalCases();
+        break;
+      case 'attachment':
+        setActivePdfTarget({
+          title: action.title,
+          fileName: action.fileName,
+          resourceId: action.resourceId,
+          storagePath: action.storagePath,
+          downloadUrl: action.downloadUrl,
+          mimeType: action.mimeType,
+          contextLabel: action.contextLabel,
+          uid: user?.uid,
+        });
+        break;
+      case 'public_page':
+        setPublicPage(action.page);
+        if (isAdmin && !isPreviewingPublic && activeTab !== 'public') {
+          setIsPreviewingPublic(true);
+          setActiveTab('public');
+        }
+        syncLocationHash('public', null, null, action.page);
+        if (action.scrollToSectionId) {
+          window.setTimeout(() => {
+            document
+              .getElementById(action.scrollToSectionId!)
+              ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 120);
+        } else {
+          safeScrollToTop();
+        }
+        break;
+      case 'public_detail':
+        if (isAdmin && !isPreviewingPublic && activeTab !== 'public') {
+          setIsPreviewingPublic(true);
+          setActiveTab('public');
+        }
+        setPendingPublicDetail(action.detail);
+        break;
+    }
+  };
+
   const handleResetPlan = () => {
     if (!user || !isAdmin) {
       handleRequireAuth();
@@ -3363,6 +3585,7 @@ export default function App() {
         }
         onGoBack={handleGoBack}
         onGoForward={handleGoForward}
+        onOpenAdvancedSearch={() => setAdvancedSearchOpen(true)}
       />
 
       {/* Auth Prompt Notice when a read-only trigger is fired */}
@@ -3547,6 +3770,8 @@ export default function App() {
                   }
                 : undefined
             }
+            externalOpenDetail={pendingPublicDetail}
+            onConsumeExternalOpenDetail={() => setPendingPublicDetail(null)}
           />
         ) : (
           <>
@@ -3959,6 +4184,8 @@ export default function App() {
             onSaveDailyJournal={handleSaveDailyJournal}
             onOpenEntity={handleJournalOpenEntity}
             hubs={resolveLearningHubs(preferences.customHubs)}
+            externalOpenDayKey={pendingJournalDayKey}
+            onConsumeExternalOpenDayKey={() => setPendingJournalDayKey(null)}
           />
         )}
 
@@ -4023,6 +4250,8 @@ export default function App() {
               await savePublicSiteConfig(user.uid, nextCfg);
               void refreshPublicCatalog(nextCats);
             }}
+            externalFocusReflectionId={pendingReflectionId}
+            onConsumeExternalFocusReflectionId={() => setPendingReflectionId(null)}
           />
         )}
 
@@ -4038,6 +4267,8 @@ export default function App() {
             onAddPost={handleAddBlogPost}
             onUpdatePost={handleUpdateBlogPost}
             onDeletePost={handleDeleteBlogPost}
+            externalFocusPostId={pendingBlogPostId}
+            onConsumeExternalFocusPostId={() => setPendingBlogPostId(null)}
           />
         )}
 
@@ -4319,6 +4550,15 @@ export default function App() {
       )}
 
       <OfflineIndicator />
+
+      <AdvancedSearchModal
+        open={advancedSearchOpen}
+        onClose={() => setAdvancedSearchOpen(false)}
+        documents={searchDocuments}
+        hubs={resolvedHubsList}
+        isAdminMode={isAdminSearchSurface}
+        onSelectAction={handleExecuteSearchAction}
+      />
 
       {/* Mobile-First Thumb-Friendly Bottom Navigation Bar (Admin Workspace Only) */}
       {isAdmin && !isPreviewingPublic && (

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
   ArrowLeft,
@@ -79,9 +79,11 @@ interface PublicHomeViewProps {
     content: string
   ) => Promise<void> | void;
   onDeleteGrantedItemNote?: (noteId: string) => Promise<void> | void;
+  externalOpenDetail?: PublicDetailModalState;
+  onConsumeExternalOpenDetail?: () => void;
 }
 
-type PublicDetailModalState =
+export type PublicDetailModalState =
   | { type: 'course'; item: PersonalCourse; linkedNotes?: BookNote[] }
   | { type: 'note'; item: BookNote }
   | { type: 'path'; item: LearningPath }
@@ -120,8 +122,18 @@ export default function PublicHomeView({
   onOpenPdf,
   onAddGrantedItemNote,
   onDeleteGrantedItemNote,
+  externalOpenDetail,
+  onConsumeExternalOpenDetail,
 }: PublicHomeViewProps) {
   const [detailModal, setDetailModal] = useState<PublicDetailModalState>(null);
+
+  useEffect(() => {
+    if (!externalOpenDetail) return;
+    setGrantedNoteDraft('');
+    setGrantedNoteError(null);
+    setDetailModal(externalOpenDetail);
+    onConsumeExternalOpenDetail?.();
+  }, [externalOpenDetail, onConsumeExternalOpenDetail]);
   const [heroImgFailed, setHeroImgFailed] = useState(false);
   const [grantedNoteDraft, setGrantedNoteDraft] = useState('');
   const [savingGrantedNote, setSavingGrantedNote] = useState(false);

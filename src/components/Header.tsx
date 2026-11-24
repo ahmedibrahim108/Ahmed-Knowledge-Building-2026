@@ -17,6 +17,7 @@ import {
   LogOut,
   NotebookPen,
   RefreshCw,
+  Search,
   Settings2,
 } from 'lucide-react';
 import {
@@ -79,6 +80,7 @@ interface HeaderProps {
   forwardLabel?: string;
   onGoBack?: () => void;
   onGoForward?: () => void;
+  onOpenAdvancedSearch?: () => void;
 }
 
 export default function Header({
@@ -113,6 +115,7 @@ export default function Header({
   forwardLabel,
   onGoBack,
   onGoForward,
+  onOpenAdvancedSearch,
 }: HeaderProps) {
   const showAdminNav = isAdmin && !isPreviewingPublic;
   const [reloading, setReloading] = useState(false);
@@ -325,8 +328,23 @@ export default function Header({
           </nav>
         )}
 
-        {/* Zone 3: User Account / Google Auth Control */}
+        {/* Zone 3: Global Search · Public Preview · User Account */}
         <div className="flex items-center gap-2 shrink-0 relative" ref={menuRef}>
+          {onOpenAdvancedSearch && (
+            <button
+              type="button"
+              onClick={onOpenAdvancedSearch}
+              title="بحث متقدم في كل المنصة (Ctrl+K)"
+              aria-label="بحث متقدم في كل المنصة"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 min-h-[34px] text-xs font-semibold text-slate-700 hover:text-[#1E3A5F] bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
+            >
+              <Search className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+              <span className="hidden sm:inline">بحث</span>
+              <span className="hidden xl:inline text-[10px] font-mono text-slate-400">
+                Ctrl+K
+              </span>
+            </button>
+          )}
           {isAdmin && onTogglePreviewPublic && (
             <button
               type="button"

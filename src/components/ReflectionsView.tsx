@@ -74,6 +74,8 @@ interface ReflectionsViewProps {
   onDeleteReflection: (id: string) => void;
   onSaveCategories: (next: string[]) => void;
   onTogglePublicCategory?: (category: string, makePublic: boolean) => void;
+  externalFocusReflectionId?: string | null;
+  onConsumeExternalFocusReflectionId?: () => void;
 }
 
 const MOOD_OPTIONS: ReflectionMood[] = ['تأمل', 'فكرة', 'امتنان', 'هدف'];
@@ -92,6 +94,8 @@ export default function ReflectionsView({
   onDeleteReflection,
   onSaveCategories,
   onTogglePublicCategory,
+  externalFocusReflectionId,
+  onConsumeExternalFocusReflectionId,
 }: ReflectionsViewProps) {
   const categories = useMemo(() => {
     const base =
@@ -199,6 +203,13 @@ export default function ReflectionsView({
   const modalFileRef = useRef<HTMLInputElement | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<PersonalReflection | null>(null);
+
+  useEffect(() => {
+    if (!externalFocusReflectionId) return;
+    setActiveReflectionId(externalFocusReflectionId);
+    setModalEditing(false);
+    onConsumeExternalFocusReflectionId?.();
+  }, [externalFocusReflectionId, onConsumeExternalFocusReflectionId]);
 
   useEffect(() => {
     if (!galleryPickerTarget) return;

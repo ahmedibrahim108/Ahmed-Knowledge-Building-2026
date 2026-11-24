@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpenText,
   Check,
@@ -60,6 +60,8 @@ interface BlogsViewProps {
   }) => string | void;
   onUpdatePost: (id: string, updates: Partial<BlogPost>) => void;
   onDeletePost: (id: string) => void;
+  externalFocusPostId?: string | null;
+  onConsumeExternalFocusPostId?: () => void;
 }
 
 export default function BlogsView({
@@ -73,6 +75,8 @@ export default function BlogsView({
   onAddPost,
   onUpdatePost,
   onDeletePost,
+  externalFocusPostId,
+  onConsumeExternalFocusPostId,
 }: BlogsViewProps) {
   const categories = useMemo(() => {
     const extras = posts
@@ -138,6 +142,13 @@ export default function BlogsView({
   } | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<BlogPost | null>(null);
+
+  useEffect(() => {
+    if (!externalFocusPostId) return;
+    setActivePostId(externalFocusPostId);
+    setModalEditing(false);
+    onConsumeExternalFocusPostId?.();
+  }, [externalFocusPostId, onConsumeExternalFocusPostId]);
 
   const activePost = useMemo(
     () => posts.find((p) => p.id === activePostId) ?? null,

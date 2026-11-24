@@ -58,6 +58,8 @@ interface DailyJournalViewProps {
   onSaveDailyJournal: (rec: DailyJournalRecord) => void;
   onOpenEntity: (action: JournalNavAction) => void;
   hubs?: LearningHubMeta[];
+  externalOpenDayKey?: string | null;
+  onConsumeExternalOpenDayKey?: () => void;
 }
 
 function statusPillClass(tone: DailyJournalItem['statusTone']): string {
@@ -83,6 +85,8 @@ export default function DailyJournalView({
   onRequireAuth,
   onSaveDailyJournal,
   onOpenEntity,
+  externalOpenDayKey,
+  onConsumeExternalOpenDayKey,
 }: DailyJournalViewProps) {
   const todayKey = toLocalDateKey();
   const [surfaceTab, setSurfaceTab] = useState<JournalSurfaceTab>('dashboard');
@@ -94,6 +98,14 @@ export default function DailyJournalView({
 
   const [journalImages, setJournalImages] = useState<StoredImageRecord[]>([]);
   const [savedAudioClips, setSavedAudioClips] = useState<SavedAudioClipSummary[]>([]);
+
+  useEffect(() => {
+    if (!externalOpenDayKey) return;
+    setSelectedDateKey(externalOpenDayKey);
+    setModalInitialCustomize(false);
+    setModalDayKey(externalOpenDayKey);
+    onConsumeExternalOpenDayKey?.();
+  }, [externalOpenDayKey, onConsumeExternalOpenDayKey]);
 
   useEffect(() => {
     const unsubImages = subscribeJournalImagesSummary(uid, setJournalImages);
