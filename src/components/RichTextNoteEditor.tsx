@@ -1985,7 +1985,7 @@ export default function RichTextNoteEditor({
           role="textbox"
           aria-multiline="true"
           aria-label="محرر الملاحظات المنسّق ثنائي اللغة"
-          style={{ caretColor: 'var(--kb-primary-ink)' }}
+          style={{ caretColor: '#1E3A5F' }}
           onFocus={ensureParagraphSeparator}
           onInput={() => {
             emitChange(false);

@@ -1143,7 +1143,7 @@ export default function OverviewView({
                     onClick={() => setManagingTags((v) => !v)}
                     className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium rounded-lg border transition-colors cursor-pointer ${
                       managingTags
-                        ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                        ? 'bg-slate-800 text-white border-slate-800'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
                     }`}
                   >
@@ -1681,7 +1681,6 @@ export default function OverviewView({
         uid={user?.uid}
         canEdit={canEdit}
         onRequireAuth={onRequireAuth}
-        onOpenPdf={onOpenPdf}
       />
 
       {/* Hub Create / Edit Modal */}

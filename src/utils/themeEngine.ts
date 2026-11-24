@@ -628,7 +628,7 @@ export function ensureContrastAgainst(
   const bgLum = getRelativeLuminance(bgHex);
   const targetMix = bgLum < 0.35 ? '#FFFFFF' : '#0A0E17';
   let best = fgHex;
-  for (let step = 0.025; step <= 0.96; step += 0.025) {
+  for (let step = 0.06; step <= 0.92; step += 0.06) {
     const candidate = mixHex(fgHex, targetMix, step);
     best = candidate;
     if (getContrastRatio(candidate, bgHex) >= targetRatio) {
@@ -636,26 +636,6 @@ export function ensureContrastAgainst(
     }
   }
   return best;
-}
-
-/**
- * Ensures foreground text/icon meets target contrast against multiple candidate backgrounds
- * (e.g., card, surface, surface2, and selected-item backgrounds).
- */
-export function ensureContrastMulti(
-  fgHex: string,
-  backgrounds: string[],
-  targetRatio = 4.55
-): string {
-  let result = fgHex;
-  for (const bg of backgrounds) {
-    result = ensureContrastAgainst(result, bg, targetRatio);
-  }
-  // Re-verify all in case shifting for a later background reduced contrast on an earlier one
-  for (const bg of backgrounds) {
-    result = ensureContrastAgainst(result, bg, targetRatio);
-  }
-  return result;
 }
 
 /**
@@ -858,20 +838,7 @@ export function resolveThemeTokens(
   const borderSubtle = mixHex(card, border, 0.55);
   const borderStrong = mixHex(border, base.fg, effectiveMode === 'dark' ? 0.22 : 0.18);
 
-  // 5) Semantic interaction surfaces (computed early so text ink checks include them)
-  const rawHoverBg =
-    effectiveMode === 'dark'
-      ? mixHex(surface2, '#FFFFFF', 0.06)
-      : mixHex(surface2, primary, 0.04);
-  const selectedTintSource = config.primaryAccentOverride || base.accent || primary;
-  const selectedBg =
-    effectiveMode === 'dark'
-      ? mixHex(card, selectedTintSource, 0.18)
-      : mixHex(card, selectedTintSource, 0.075);
-
-  const inkSurfaces = [card, surface, surface2, selectedBg];
-
-  // 6) Text contrast level & WCAG AA multi-surface enforcement
+  // 5) Text contrast level
   let fg = base.fg;
   let fg800 = base.fg800;
   let fg700 = base.fg700;
@@ -894,41 +861,17 @@ export function resolveThemeTokens(
     fg500 = mixHex(base.fg500, card, 0.06);
   }
 
-  // Enforce >= 4.55:1 for all readable ink steps across card, surface, surface2, and selectedBg
-  fg = ensureContrastMulti(fg, [bg, ...inkSurfaces], 7.0);
-  fg800 = ensureContrastMulti(fg800, [bg, ...inkSurfaces], 5.5);
-  fg700 = ensureContrastMulti(fg700, [bg, ...inkSurfaces], 4.8);
-  fg600 = ensureContrastMulti(fg600, [bg, ...inkSurfaces], 4.6);
-  fg500 = ensureContrastMulti(fg500, inkSurfaces, 4.55);
-  // Muted/placeholder & small decorative icon ink >= 3.15:1 on card/surface2
-  fg400 = ensureContrastMulti(fg400, [card, surface, surface2], 3.15);
-
-  // Guarantee primary & secondary ink >= 4.6 on card, surface, surface2, and selectedBg
-  const primaryInk = ensureContrastMulti(
+  // Guarantee primary text & secondary text >= 4.5 on card & bg
+  const primaryInk = ensureContrastAgainst(
     config.primaryAccentOverride || base.accent || primary,
-    inkSurfaces,
-    4.65
+    card,
+    4.6
   );
-  const secondaryInk = ensureContrastMulti(
+  const secondaryInk = ensureContrastAgainst(
     config.secondaryAccentOverride || secondary,
-    inkSurfaces,
-    4.65
+    card,
+    4.6
   );
-
-  const selectedBorder = mixHex(
-    borderStrong,
-    primaryInk,
-    effectiveMode === 'dark' ? 0.65 : 0.72
-  );
-  const selectedFg = fg;
-  const hoverBg = rawHoverBg;
-  const highlightBg =
-    effectiveMode === 'dark' ? 'rgba(245, 158, 11, 0.24)' : 'rgba(254, 240, 138, 0.85)';
-  const highlightFg = effectiveMode === 'dark' ? '#FDE68A' : '#0F172A';
-  const mutedFg = fg500;
-  const disabledBg = mixHex(surface, bg, 0.5);
-  const disabledFg = fg400;
-  const focusRing = hexToRgba(primaryInk, effectiveMode === 'dark' ? 0.55 : 0.38);
 
   const primaryHover =
     !config.primaryAccentOverride && base.primaryHover
@@ -1012,16 +955,6 @@ export function resolveThemeTokens(
     '--kb-border-strong': borderStrong,
     '--kb-input': inputBg,
     '--kb-ring': primaryInk,
-    '--kb-hover-bg': hoverBg,
-    '--kb-selected-bg': selectedBg,
-    '--kb-selected-border': selectedBorder,
-    '--kb-selected-fg': selectedFg,
-    '--kb-highlight-bg': highlightBg,
-    '--kb-highlight-fg': highlightFg,
-    '--kb-muted-fg': mutedFg,
-    '--kb-disabled-bg': disabledBg,
-    '--kb-disabled-fg': disabledFg,
-    '--kb-focus-ring': focusRing,
     '--kb-success': base.success,
     '--kb-warning': base.warning,
     '--kb-destructive': base.destructive,

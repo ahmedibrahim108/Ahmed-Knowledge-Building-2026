@@ -1976,7 +1976,7 @@ export default function NotesJournalView({
                               openNoteStandalone(bn, false);
                             }
                           }}
-                          className="p-5 bg-[var(--kb-surface)] border border-slate-200 rounded-xl flex flex-col justify-between gap-3 hover:border-[#1E3A5F]/50 hover:bg-[var(--kb-hover-bg)] transition-colors cursor-pointer"
+                          className="p-5 bg-slate-50/60 border border-slate-200 rounded-xl flex flex-col justify-between gap-3 hover:border-[#1E3A5F]/50 hover:bg-white transition-colors cursor-pointer"
                         >
                           <div className="space-y-1.5">
                             <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">

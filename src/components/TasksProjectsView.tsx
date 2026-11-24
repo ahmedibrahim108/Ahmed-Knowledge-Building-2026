@@ -797,7 +797,7 @@ export default function TasksProjectsView({
                     ? 'bg-[#1E3A5F] text-white font-semibold'
                     : st === 'postponed'
                     ? 'bg-amber-700 text-white font-semibold'
-                    : 'bg-[var(--kb-selected-bg)] text-[var(--kb-selected-fg)] border border-[var(--kb-selected-border)] font-semibold';
+                    : 'bg-slate-800 text-white font-semibold';
                 return (
                   <button
                     key={st}
@@ -1080,7 +1080,7 @@ export default function TasksProjectsView({
                   onClick={() => setStatusFilter(st.id)}
                   className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border cursor-pointer ${
                     statusFilter === st.id
-                      ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                      ? 'bg-slate-900 text-white border-slate-900'
                       : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
                   }`}
                 >

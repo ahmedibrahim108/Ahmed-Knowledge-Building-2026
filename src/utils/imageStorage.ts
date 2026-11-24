@@ -146,7 +146,7 @@ function canvasCompressFromElement(
   });
 }
 
-export async function compressImageFileForCloud(
+async function compressImageFileForCloud(
   file: Blob,
   mimeHint?: string
 ): Promise<{

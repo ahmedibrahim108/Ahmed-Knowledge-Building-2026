@@ -990,7 +990,7 @@ export default function ReflectionsView({
             onClick={() => setMoodFilter('all')}
             className={`px-3 py-1 text-xs font-medium rounded-lg cursor-pointer transition-colors ${
               moodFilter === 'all'
-                ? 'bg-[#1E3A5F] text-white'
+                ? 'bg-slate-900 text-white'
                 : 'bg-slate-100 text-slate-600 hover:text-slate-900'
             }`}
           >
