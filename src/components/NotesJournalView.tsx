@@ -38,6 +38,8 @@ import {
   NoteCategoryType,
   NoteColorKey,
   PersonalCourse,
+  PinCollection,
+  PinEntityType,
   ReadAloudVoiceName,
   UserPreferences,
   VoiceDialectMode,
@@ -71,6 +73,11 @@ import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
 import NoteAttachmentsPanel from './NoteAttachmentsPanel';
 import type { ActivePdfTarget } from './PDFViewerModal';
+import {
+  PinCollectionsBar,
+  PinEntityButton,
+  isEntityInCollection,
+} from './PinCollectionsBar';
 import ReadAloudButton from './ReadAloudButton';
 import RichTextNoteEditor from './RichTextNoteEditor';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
@@ -110,6 +117,13 @@ interface NotesJournalViewProps {
   onUpdateMonthNotes: (id: number, notes: string) => void;
   onLogVoiceNote?: (noteTitle: string) => void;
   onExportExcel: () => void;
+  pinCollections?: PinCollection[];
+  activeFocusPinCollectionId?: string | null;
+  onSelectFocusPinCollection?: (id: string | null) => void;
+  onSavePinCollection?: (col: PinCollection) => void;
+  onDeletePinCollection?: (id: string) => void;
+  onTogglePinEntity?: (collectionId: string, entityType: PinEntityType, entityId: string) => void;
+  onQuickCreatePinCollection?: (title: string, entityType: PinEntityType, entityId: string) => void;
 }
 
 interface NoteDraft {
@@ -181,6 +195,13 @@ export default function NotesJournalView({
   onUpdateMonthNotes,
   onLogVoiceNote,
   onExportExcel,
+  pinCollections = [],
+  activeFocusPinCollectionId = null,
+  onSelectFocusPinCollection,
+  onSavePinCollection,
+  onDeletePinCollection,
+  onTogglePinEntity,
+  onQuickCreatePinCollection,
 }: NotesJournalViewProps) {
   const noteLayout = getNoteLayoutClasses(preferences);
   const [subTab, setSubTab] = useState<'cards' | 'all' | 'units'>('cards');
@@ -208,7 +229,7 @@ export default function NotesJournalView({
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [onlyRepeated, setOnlyRepeated] = useState(false);
   const [searchNotes, setSearchNotes] = useState('');
-  const [notesSortMode, setNotesSortMode] = useState<EntitySortMode>('manual');
+  const [notesSortMode, setNotesSortMode] = useState<EntitySortMode>('logical');
 
   // Composer form
   const [showComposer, setShowComposer] = useState(false);
@@ -312,12 +333,23 @@ export default function NotesJournalView({
     return items;
   }, [months]);
 
+  const activePinCollection = useMemo(
+    () =>
+      activeFocusPinCollectionId
+        ? pinCollections.find((c) => c.id === activeFocusPinCollectionId) || null
+        : null,
+    [pinCollections, activeFocusPinCollectionId]
+  );
+
   const hubFilteredNotes = useMemo(() => {
     return bookNotes.filter((bn) => {
       if (
         effectiveHubFilter !== 'all' &&
         (bn.hubId ?? 'knowledge') !== effectiveHubFilter
       ) {
+        return false;
+      }
+      if (activePinCollection && !isEntityInCollection(activePinCollection, 'note', bn.id)) {
         return false;
       }
       if (
@@ -329,7 +361,7 @@ export default function NotesJournalView({
       }
       return true;
     });
-  }, [bookNotes, effectiveHubFilter, onlyRepeated]);
+  }, [bookNotes, effectiveHubFilter, activePinCollection, onlyRepeated]);
 
   const hubFilteredCourses = useMemo(() => {
     if (effectiveHubFilter === 'all') return courses;
@@ -1554,6 +1586,22 @@ export default function NotesJournalView({
         </div>
       )}
 
+      {subTab !== 'units' &&
+        onSelectFocusPinCollection &&
+        onSavePinCollection &&
+        onDeletePinCollection && (
+          <PinCollectionsBar
+            collections={pinCollections}
+            activeCollectionId={activeFocusPinCollectionId}
+            onSelectCollection={onSelectFocusPinCollection}
+            canEdit={canEdit}
+            onSaveCollection={onSavePinCollection}
+            onDeleteCollection={onDeletePinCollection}
+            filterEntityType="note"
+            compact
+          />
+        )}
+
       {/* Collapsible Personalization Drawer */}
       {showPrefs && (
         <section className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
@@ -1917,7 +1965,16 @@ export default function NotesJournalView({
                       return (
                         <article
                           key={bn.id}
-                          className="p-5 bg-slate-50/60 border border-slate-200 rounded-xl flex flex-col justify-between gap-3 hover:border-[#1E3A5F]/40 transition-colors"
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openNoteStandalone(bn, false)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              openNoteStandalone(bn, false);
+                            }
+                          }}
+                          className="p-5 bg-slate-50/60 border border-slate-200 rounded-xl flex flex-col justify-between gap-3 hover:border-[#1E3A5F]/50 hover:bg-white transition-colors cursor-pointer"
                         >
                           <div className="space-y-1.5">
                             <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
@@ -1936,15 +1993,33 @@ export default function NotesJournalView({
                             </p>
                           </div>
 
-                          <div className="pt-3 border-t border-slate-200 flex items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openNoteStandalone(bn, false)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
-                            >
-                              <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
-                              <span>فتح المحاضرة</span>
-                            </button>
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="pt-3 border-t border-slate-200 flex items-center justify-between gap-2"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openNoteStandalone(bn, false);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                              >
+                                <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>فتح المحاضرة</span>
+                              </button>
+                              {onTogglePinEntity && (
+                                <PinEntityButton
+                                  entityType="note"
+                                  entityId={bn.id}
+                                  collections={pinCollections}
+                                  canEdit={canEdit}
+                                  onToggleItemInCollection={onTogglePinEntity}
+                                  onQuickCreateCollection={onQuickCreatePinCollection}
+                                />
+                              )}
+                            </div>
 
                             {canEdit && (
                               <div className="flex items-center gap-1">
@@ -1953,9 +2028,10 @@ export default function NotesJournalView({
                                     <button
                                       type="button"
                                       disabled={idx === 0}
-                                      onClick={() =>
-                                        handleMoveNoteOrder(selectedCourseNotes, idx, 'up')
-                                      }
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleMoveNoteOrder(selectedCourseNotes, idx, 'up');
+                                      }}
                                       title="تقديم للأعلى"
                                       aria-label="تقديم المحاضرة"
                                       className="p-1.5 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
@@ -1965,9 +2041,10 @@ export default function NotesJournalView({
                                     <button
                                       type="button"
                                       disabled={idx === selectedCourseNotes.length - 1}
-                                      onClick={() =>
-                                        handleMoveNoteOrder(selectedCourseNotes, idx, 'down')
-                                      }
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleMoveNoteOrder(selectedCourseNotes, idx, 'down');
+                                      }}
                                       title="تأخير للأسفل"
                                       aria-label="تأخير المحاضرة"
                                       className="p-1.5 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
@@ -1978,14 +2055,20 @@ export default function NotesJournalView({
                                 )}
                                 <button
                                   type="button"
-                                  onClick={() => openNoteStandalone(bn, true)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openNoteStandalone(bn, true);
+                                  }}
                                   className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer"
                                 >
                                   تعديل
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => setConfirmDeleteNote(bn)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setConfirmDeleteNote(bn);
+                                  }}
                                   aria-label="حذف المحاضرة"
                                   className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer"
                                 >
@@ -2302,7 +2385,16 @@ export default function NotesJournalView({
                     return (
                       <article
                         key={course.docId || course.id}
-                        className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-4 hover:border-slate-300 transition-colors"
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => handleOpenCourseNotebook(course)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            handleOpenCourseNotebook(course);
+                          }
+                        }}
+                        className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-4 hover:border-[#1E3A5F]/45 transition-colors cursor-pointer"
                       >
                         <div className="space-y-2.5">
                           <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
@@ -2332,11 +2424,17 @@ export default function NotesJournalView({
                           </p>
                         </div>
 
-                        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2"
+                        >
                           <div className="flex items-center gap-1.5">
                             <button
                               type="button"
-                              onClick={() => handleOpenCourseNotebook(course)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenCourseNotebook(course);
+                              }}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                             >
                               <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
@@ -2347,9 +2445,10 @@ export default function NotesJournalView({
                               <button
                                 type="button"
                                 title="تصدير جميع ملاحظات هذا الكورس إلى Excel"
-                                onClick={() =>
-                                  exportNotebookBundleAsExcel(course.title, cNotes)
-                                }
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  exportNotebookBundleAsExcel(course.title, cNotes);
+                                }}
                                 className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                               >
                                 <Download className="w-3.5 h-3.5" aria-hidden="true" />
@@ -2361,7 +2460,10 @@ export default function NotesJournalView({
                           {canEdit && (
                             <button
                               type="button"
-                              onClick={() => handleQuickAddCourseLecture(course)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleQuickAddCourseLecture(course);
+                              }}
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                             >
                               <Plus className="w-3.5 h-3.5" aria-hidden="true" />
@@ -2408,7 +2510,16 @@ export default function NotesJournalView({
                       return (
                         <article
                           key={bn.id}
-                          className={`border rounded-xl overflow-hidden flex flex-col justify-between transition-colors ${colorTheme.cardClass}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openNoteStandalone(bn, false)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              openNoteStandalone(bn, false);
+                            }
+                          }}
+                          className={`border rounded-xl overflow-hidden flex flex-col justify-between transition-colors cursor-pointer hover:border-[#1E3A5F]/45 ${colorTheme.cardClass}`}
                         >
                           <div className={`h-1.5 w-full ${colorTheme.accentBarClass}`} />
                           <div className="p-5 flex-1 flex flex-col justify-between gap-4">
@@ -2424,10 +2535,7 @@ export default function NotesJournalView({
                               </span>
                             </div>
 
-                            <h4
-                              onClick={() => openNoteStandalone(bn, false)}
-                              className="text-base font-bold text-slate-900 leading-snug cursor-pointer hover:text-[#1E3A5F]"
-                            >
+                            <h4 className="text-base font-bold text-slate-900 leading-snug group-hover:text-[#1E3A5F]">
                               <BidiText text={bn.bookTitle} />
                             </h4>
 
@@ -2459,15 +2567,33 @@ export default function NotesJournalView({
                             </p>
                           </div>
 
-                          <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openNoteStandalone(bn, false)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                            >
-                              <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
-                              <span>فتح الدفتر</span>
-                            </button>
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openNoteStandalone(bn, false);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                              >
+                                <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>فتح الدفتر</span>
+                              </button>
+                              {onTogglePinEntity && (
+                                <PinEntityButton
+                                  entityType="note"
+                                  entityId={bn.id}
+                                  collections={pinCollections}
+                                  canEdit={canEdit}
+                                  onToggleItemInCollection={onTogglePinEntity}
+                                  onQuickCreateCollection={onQuickCreatePinCollection}
+                                />
+                              )}
+                            </div>
 
                             <div className="flex items-center gap-1">
                               {canEdit && (
@@ -2477,9 +2603,10 @@ export default function NotesJournalView({
                                       <button
                                         type="button"
                                         disabled={idx === 0}
-                                        onClick={() =>
-                                          handleMoveNoteOrder(bookOnlyNotes, idx, 'up')
-                                        }
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleMoveNoteOrder(bookOnlyNotes, idx, 'up');
+                                        }}
                                         title="تقديم للأعلى"
                                         aria-label="تقديم الدفتر"
                                         className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
@@ -2489,9 +2616,10 @@ export default function NotesJournalView({
                                       <button
                                         type="button"
                                         disabled={idx === bookOnlyNotes.length - 1}
-                                        onClick={() =>
-                                          handleMoveNoteOrder(bookOnlyNotes, idx, 'down')
-                                        }
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleMoveNoteOrder(bookOnlyNotes, idx, 'down');
+                                        }}
                                         title="تأخير للأسفل"
                                         aria-label="تأخير الدفتر"
                                         className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
@@ -2502,7 +2630,10 @@ export default function NotesJournalView({
                                   )}
                                   <button
                                     type="button"
-                                    onClick={() => openNoteStandalone(bn, true)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openNoteStandalone(bn, true);
+                                    }}
                                     title="تعديل"
                                     className="px-2 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                                   >
@@ -2510,7 +2641,10 @@ export default function NotesJournalView({
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => setConfirmDeleteNote(bn)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setConfirmDeleteNote(bn);
+                                    }}
                                     aria-label={`حذف ${bn.bookTitle}`}
                                     className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 cursor-pointer"
                                   >
@@ -2520,7 +2654,10 @@ export default function NotesJournalView({
                               )}
                               <button
                                 type="button"
-                                onClick={() => exportSingleBookNoteAsMarkdown(bn)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  exportSingleBookNoteAsMarkdown(bn);
+                                }}
                                 title="تصدير Markdown"
                                 className="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                               >
@@ -2558,7 +2695,16 @@ export default function NotesJournalView({
                       return (
                         <article
                           key={bn.id}
-                          className={`border rounded-xl overflow-hidden flex flex-col justify-between transition-colors ${colorTheme.cardClass}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => openNoteStandalone(bn, false)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              openNoteStandalone(bn, false);
+                            }
+                          }}
+                          className={`border rounded-xl overflow-hidden flex flex-col justify-between transition-colors cursor-pointer hover:border-[#1E3A5F]/45 ${colorTheme.cardClass}`}
                         >
                           <div className={`h-1.5 w-full ${colorTheme.accentBarClass}`} />
                           <div className="p-5 flex-1 flex flex-col justify-between gap-4">
@@ -2571,10 +2717,7 @@ export default function NotesJournalView({
                               </span>
                               <span>{bn.updatedAt}</span>
                             </div>
-                            <h4
-                              onClick={() => openNoteStandalone(bn, false)}
-                              className="text-base font-bold text-slate-900 leading-snug cursor-pointer hover:text-[#1E3A5F]"
-                            >
+                            <h4 className="text-base font-bold text-slate-900 leading-snug">
                               <BidiText text={bn.bookTitle} />
                             </h4>
                             <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">
@@ -2584,28 +2727,52 @@ export default function NotesJournalView({
                             </p>
                           </div>
 
-                          <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openNoteStandalone(bn, false)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                            >
-                              <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
-                              <span>فتح الدفتر</span>
-                            </button>
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openNoteStandalone(bn, false);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                              >
+                                <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
+                                <span>فتح الدفتر</span>
+                              </button>
+                              {onTogglePinEntity && (
+                                <PinEntityButton
+                                  entityType="note"
+                                  entityId={bn.id}
+                                  collections={pinCollections}
+                                  canEdit={canEdit}
+                                  onToggleItemInCollection={onTogglePinEntity}
+                                  onQuickCreateCollection={onQuickCreatePinCollection}
+                                />
+                              )}
+                            </div>
 
                             {canEdit && (
                               <div className="flex items-center gap-1">
                                 <button
                                   type="button"
-                                  onClick={() => openNoteStandalone(bn, true)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openNoteStandalone(bn, true);
+                                  }}
                                   className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                                 >
                                   تعديل
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => setConfirmDeleteNote(bn)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setConfirmDeleteNote(bn);
+                                  }}
                                   aria-label={`حذف ${bn.bookTitle}`}
                                   className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 cursor-pointer"
                                 >
@@ -2808,7 +2975,16 @@ export default function NotesJournalView({
                   return (
                     <article
                       key={bn.id}
-                      className={`border rounded-xl overflow-hidden flex flex-col justify-between transition-colors ${colorTheme.cardClass}`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openNoteStandalone(bn, false)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          openNoteStandalone(bn, false);
+                        }
+                      }}
+                      className={`border rounded-xl overflow-hidden flex flex-col justify-between transition-colors cursor-pointer hover:border-[#1E3A5F]/45 ${colorTheme.cardClass}`}
                     >
                       <div className={`h-1.5 w-full ${colorTheme.accentBarClass}`} />
                       <div className="p-5 flex-1 flex flex-col justify-between gap-3">
@@ -2826,7 +3002,10 @@ export default function NotesJournalView({
                           </div>
                           <button
                             type="button"
-                            onClick={() => toggleExportSelection(bn.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleExportSelection(bn.id);
+                            }}
                             aria-label={`تحديد ${bn.bookTitle}`}
                             className="text-slate-400 hover:text-[#1E3A5F] cursor-pointer shrink-0"
                           >
@@ -2841,10 +3020,7 @@ export default function NotesJournalView({
                           </button>
                         </div>
 
-                        <h3
-                          onClick={() => openNoteStandalone(bn, false)}
-                          className="text-base font-bold text-slate-900 leading-snug cursor-pointer hover:text-[#1E3A5F]"
-                        >
+                        <h3 className="text-base font-bold text-slate-900 leading-snug">
                           <BidiText text={bn.bookTitle} />
                         </h3>
 
@@ -2863,15 +3039,33 @@ export default function NotesJournalView({
                         </p>
                       </div>
 
-                      <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                        <button
-                          type="button"
-                          onClick={() => openNoteStandalone(bn, false)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
-                        >
-                          <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span>فتح الصفحة</span>
-                        </button>
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openNoteStandalone(bn, false);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                          >
+                            <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>فتح الصفحة</span>
+                          </button>
+                          {onTogglePinEntity && (
+                            <PinEntityButton
+                              entityType="note"
+                              entityId={bn.id}
+                              collections={pinCollections}
+                              canEdit={canEdit}
+                              onToggleItemInCollection={onTogglePinEntity}
+                              onQuickCreateCollection={onQuickCreatePinCollection}
+                            />
+                          )}
+                        </div>
 
                         {canEdit && (
                           <div className="flex items-center gap-1">
@@ -2880,9 +3074,10 @@ export default function NotesJournalView({
                                 <button
                                   type="button"
                                   disabled={idx === 0}
-                                  onClick={() =>
-                                    handleMoveNoteOrder(filteredNotes, idx, 'up')
-                                  }
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleMoveNoteOrder(filteredNotes, idx, 'up');
+                                  }}
                                   title="تقديم للأعلى"
                                   aria-label="تقديم الملاحظة"
                                   className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
@@ -2892,9 +3087,10 @@ export default function NotesJournalView({
                                 <button
                                   type="button"
                                   disabled={idx === filteredNotes.length - 1}
-                                  onClick={() =>
-                                    handleMoveNoteOrder(filteredNotes, idx, 'down')
-                                  }
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleMoveNoteOrder(filteredNotes, idx, 'down');
+                                  }}
                                   title="تأخير للأسفل"
                                   aria-label="تأخير الملاحظة"
                                   className="p-1 text-slate-500 hover:text-slate-900 disabled:opacity-30 rounded cursor-pointer"
@@ -2905,14 +3101,20 @@ export default function NotesJournalView({
                             )}
                             <button
                               type="button"
-                              onClick={() => openNoteStandalone(bn, true)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openNoteStandalone(bn, true);
+                              }}
                               className="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
                             >
                               تعديل
                             </button>
                             <button
                               type="button"
-                              onClick={() => setConfirmDeleteNote(bn)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteNote(bn);
+                              }}
                               aria-label={`حذف ${bn.bookTitle}`}
                               className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 cursor-pointer"
                             >

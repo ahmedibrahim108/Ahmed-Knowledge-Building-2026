@@ -1,11 +1,15 @@
 import { User } from 'firebase/auth';
 import {
+  ActivityActionKind,
+  ActivityEntityType,
+  ActivityLogEntry,
   BlogPost,
   BookNote,
   CalendarCategory,
   CalendarColor,
   CalendarEvent,
   CalendarPreferences,
+  ContactMessageRecord,
   ContentAccessGrant,
   CourseStudyStage,
   CustomCategory,
@@ -20,6 +24,7 @@ import {
   DEFAULT_REFLECTION_IMAGE_FRAME,
   DEFAULT_USER_PREFERENCES,
   DEFAULT_WEEKLY_RHYTHM,
+  DailyJournalRecord,
   DentalCase,
   DentalCaseStatus,
   DomainInfo,
@@ -37,8 +42,13 @@ import {
   MonthPlan,
   NoteCategoryType,
   NoteColorKey,
+  PeriodReviewRecord,
+  PeriodReviewType,
   PersonalCourse,
   PersonalReflection,
+  PinCollection,
+  PinCollectionItem,
+  PinEntityType,
   PracticalProject,
   ProjectStatus,
   PublicSiteConfig,
@@ -66,10 +76,14 @@ import {
   WeeklyMeeting,
   WeeklyMeetingException,
   WeeklyMeetingFollowUp,
+  WeeklyPlanGoal,
+  WeeklyPlanRecord,
   WeeklyRhythmItem,
   estimateReadingTimeMinutes,
+  getSatFriWeekRange,
   sanitizeImageFrameSpec,
   sanitizeTaskStatusOrder,
+  toLocalDateKey,
 } from '../data/curriculumData';
 import {
   ensureSupabaseRealtimeAuth,
@@ -390,11 +404,18 @@ function sanitizeWeeklyRhythm(raw: unknown): WeeklyRhythmItem[] {
   return cleaned.length > 0 ? cleaned : DEFAULT_WEEKLY_RHYTHM;
 }
 
+function sanitizeSafeHttpUrl(raw: unknown, maxLen = 500): string {
+  if (typeof raw !== 'string') return '';
+  const trimmed = raw.trim().slice(0, maxLen);
+  if (!trimmed) return '';
+  return /^https?:\/\//i.test(trimmed) ? trimmed : '';
+}
+
 function mapPublicSiteConfigRow(raw: Record<string, unknown> | null | undefined): PublicSiteConfig {
   if (!raw) return DEFAULT_PUBLIC_SITE_CONFIG;
   const rawFlags =
     raw.visibility_flags && typeof raw.visibility_flags === 'object'
-      ? (raw.visibility_flags as Partial<PublicSiteVisibilityFlags>)
+      ? (raw.visibility_flags as Record<string, unknown>)
       : {};
   const rawSections = Array.isArray(raw.sections) ? raw.sections : [];
   const sections: PublicSiteSection[] = rawSections
@@ -442,6 +463,16 @@ function mapPublicSiteConfigRow(raw: Record<string, unknown> | null | undefined)
       40,
       80
     ),
+    creatorName:
+      typeof rawFlags.creatorName === 'string' && rawFlags.creatorName.trim()
+        ? clip(rawFlags.creatorName.trim(), 120)
+        : DEFAULT_PUBLIC_SITE_CONFIG.creatorName,
+    linkedinUrl: sanitizeSafeHttpUrl(rawFlags.linkedinUrl),
+    contactEmail:
+      typeof rawFlags.contactEmail === 'string'
+        ? clip(rawFlags.contactEmail.trim(), 160)
+        : '',
+    showContactForm: rawFlags.showContactForm !== false,
     updatedAtMs: Number(raw.updated_at_ms ?? 0),
   };
 }
@@ -736,6 +767,9 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
       customHubsMirror: sanitizedHubs,
       dashboardHeroMirror: dashboardHeroObj,
       taskStatusOrderMirror: sanitizeTaskStatusOrder(prefs.taskStatusOrder),
+      activeFocusPinCollectionIdMirror: prefs.activeFocusPinCollectionId
+        ? clip(String(prefs.activeFocusPinCollectionId), 128)
+        : null,
     },
     weekly_rhythm: sanitizeWeeklyRhythm(prefs.weeklyRhythm),
     reflection_categories: sanitizeStringList(
@@ -921,7 +955,7 @@ export function buildUnifiedTaskRow(uid: string, task: UnifiedTask) {
     hub_id: sanitizeHubId(task.hubId),
     category_label: clip(task.categoryLabel, 140),
     priority: pickEnum(task.priority, ['low', 'medium', 'high'] as const, 'medium'),
-    status: pickEnum(task.status, ['todo', 'in_progress', 'done'] as const, 'todo'),
+    status: pickEnum(task.status, ['todo', 'in_progress', 'postponed', 'done'] as const, 'todo'),
     due_date: clip(task.dueDate, 40),
     scheduled_date: sanitizeDateKeyOrEmpty(task.scheduledDate ?? task.dueDate),
     start_time: sanitizeTimeSlotOrEmpty(task.startTime),
@@ -1341,6 +1375,13 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
           : undefined;
       return sanitizeTaskStatusOrder(mirror);
     })(),
+    activeFocusPinCollectionId: (() => {
+      const mirror =
+        raw.calendar_prefs && typeof raw.calendar_prefs === 'object'
+          ? (raw.calendar_prefs as Record<string, unknown>).activeFocusPinCollectionIdMirror
+          : undefined;
+      return typeof mirror === 'string' && mirror ? mirror : null;
+    })(),
   };
 }
 
@@ -1545,7 +1586,9 @@ function mapUnifiedTaskRow(raw: Record<string, unknown>): UnifiedTask {
         ? (raw.priority as TaskPriority)
         : 'medium',
     status:
-      raw.status === 'in_progress' || raw.status === 'done'
+      raw.status === 'in_progress' ||
+      raw.status === 'postponed' ||
+      raw.status === 'done'
         ? (raw.status as UnifiedTaskStatus)
         : 'todo',
     dueDate: String(raw.due_date ?? ''),
@@ -2032,6 +2075,11 @@ export interface WorkspaceCallbacks {
   onUnifiedTasks?: (items: UnifiedTask[]) => void;
   onDentalCases?: (items: DentalCase[]) => void;
   onWeeklyMeetings?: (items: WeeklyMeeting[]) => void;
+  onActivityLogs?: (items: ActivityLogEntry[]) => void;
+  onDailyJournals?: (items: DailyJournalRecord[]) => void;
+  onPeriodReviews?: (items: PeriodReviewRecord[]) => void;
+  onWeeklyPlans?: (items: WeeklyPlanRecord[]) => void;
+  onPinCollections?: (items: PinCollection[]) => void;
   onError?: (message: string) => void;
   onRefreshReady?: (refreshFn: () => Promise<void>) => void;
 }
@@ -2295,9 +2343,18 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onUnifiedTasks(
-        (data || []).map((r) => mapUnifiedTaskRow(r as Record<string, unknown>))
-      );
+      const postponedSet = readLocalPostponedTaskSet(uid);
+      const mapped = (data || []).map((r) => {
+        const task = mapUnifiedTaskRow(r as Record<string, unknown>);
+        if (task.status === 'postponed' && postponedSet.has(task.id)) {
+          postponedSet.delete(task.id);
+          writeLocalPostponedTaskSet(uid, postponedSet);
+        } else if (task.status === 'todo' && postponedSet.has(task.id)) {
+          return { ...task, status: 'postponed' as UnifiedTaskStatus };
+        }
+        return task;
+      });
+      callbacks.onUnifiedTasks(mapped);
     }
   };
 
@@ -2341,6 +2398,123 @@ export function subscribeUserWorkspace(
     }
   };
 
+  const fetchActivityLogs = async () => {
+    if (!callbacks.onActivityLogs || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('activity_logs')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('occurred_at_ms', { ascending: false })
+        .limit(600)
+    );
+    if (error) {
+      if (isMissingTableError(error)) {
+        hasPending012Migration = true;
+        if (!disposed) callbacks.onActivityLogs(readLocalFallbackList<ActivityLogEntry>(uid, 'activity_logs'));
+      }
+      return;
+    }
+    if (!disposed) {
+      const remote = (data || []).map((r) => mapActivityLogRow(r as Record<string, unknown>));
+      const local = readLocalFallbackList<ActivityLogEntry>(uid, 'activity_logs');
+      callbacks.onActivityLogs(mergeByKey(remote, local, (x) => x.id, (x) => x.occurredAtMs));
+    }
+  };
+
+  const fetchDailyJournals = async () => {
+    if (!callbacks.onDailyJournals || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('daily_journals')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('date_key', { ascending: false })
+        .limit(400)
+    );
+    if (error) {
+      if (isMissingTableError(error)) {
+        hasPending012Migration = true;
+        if (!disposed) callbacks.onDailyJournals(readLocalFallbackList<DailyJournalRecord>(uid, 'daily_journals'));
+      }
+      return;
+    }
+    if (!disposed) {
+      const remote = (data || []).map((r) => mapDailyJournalRow(r as Record<string, unknown>));
+      const local = readLocalFallbackList<DailyJournalRecord>(uid, 'daily_journals');
+      callbacks.onDailyJournals(mergeByKey(remote, local, (x) => x.dateKey, (x) => x.updatedAtMs));
+    }
+  };
+
+  const fetchPeriodReviews = async () => {
+    if (!callbacks.onPeriodReviews || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('period_reviews')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('period_start_key', { ascending: false })
+    );
+    if (error) {
+      if (isMissingTableError(error)) {
+        hasPending012Migration = true;
+        if (!disposed) callbacks.onPeriodReviews(readLocalFallbackList<PeriodReviewRecord>(uid, 'period_reviews'));
+      }
+      return;
+    }
+    if (!disposed) {
+      const remote = (data || []).map((r) => mapPeriodReviewRow(r as Record<string, unknown>));
+      const local = readLocalFallbackList<PeriodReviewRecord>(uid, 'period_reviews');
+      callbacks.onPeriodReviews(mergeByKey(remote, local, (x) => x.id, (x) => x.updatedAtMs));
+    }
+  };
+
+  const fetchWeeklyPlans = async () => {
+    if (!callbacks.onWeeklyPlans || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('weekly_plans')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('week_start_key', { ascending: false })
+    );
+    if (error) {
+      if (isMissingTableError(error)) {
+        hasPending012Migration = true;
+        if (!disposed) callbacks.onWeeklyPlans(readLocalFallbackList<WeeklyPlanRecord>(uid, 'weekly_plans'));
+      }
+      return;
+    }
+    if (!disposed) {
+      const remote = (data || []).map((r) => mapWeeklyPlanRow(r as Record<string, unknown>));
+      const local = readLocalFallbackList<WeeklyPlanRecord>(uid, 'weekly_plans');
+      callbacks.onWeeklyPlans(mergeByKey(remote, local, (x) => x.weekKey, (x) => x.updatedAtMs));
+    }
+  };
+
+  const fetchPinCollections = async () => {
+    if (!callbacks.onPinCollections || disposed) return;
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('pin_collections')
+        .select('*')
+        .eq('owner_id', uid)
+        .order('sort_order', { ascending: true })
+    );
+    if (error) {
+      if (isMissingTableError(error)) {
+        hasPending012Migration = true;
+        if (!disposed) callbacks.onPinCollections(readLocalFallbackList<PinCollection>(uid, 'pin_collections'));
+      }
+      return;
+    }
+    if (!disposed) {
+      const remote = (data || []).map((r) => mapPinCollectionRow(r as Record<string, unknown>));
+      const local = readLocalFallbackList<PinCollection>(uid, 'pin_collections');
+      callbacks.onPinCollections(mergeByKey(remote, local, (x) => x.id, (x) => x.updatedAtMs));
+    }
+  };
+
   const fetchAll = async () => {
     await Promise.allSettled([
       fetchQuarters(),
@@ -2360,6 +2534,11 @@ export function subscribeUserWorkspace(
       fetchUnifiedTasks(),
       fetchWeeklyMeetings(),
       fetchDentalCases(),
+      fetchActivityLogs(),
+      fetchDailyJournals(),
+      fetchPeriodReviews(),
+      fetchWeeklyPlans(),
+      fetchPinCollections(),
     ]);
   };
 
@@ -2384,6 +2563,11 @@ export function subscribeUserWorkspace(
     unified_tasks: fetchUnifiedTasks,
     weekly_meetings: fetchWeeklyMeetings,
     dental_cases: fetchDentalCases,
+    activity_logs: fetchActivityLogs,
+    daily_journals: fetchDailyJournals,
+    period_reviews: fetchPeriodReviews,
+    weekly_plans: fetchWeeklyPlans,
+    pin_collections: fetchPinCollections,
   };
 
   let activeChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
@@ -2514,6 +2698,11 @@ export function isPending010Migration(): boolean {
 let hasPending011Migration = false;
 export function isPending011Migration(): boolean {
   return hasPending011Migration;
+}
+
+let hasPending012Migration = false;
+export function isPending012Migration(): boolean {
+  return hasPending012Migration;
 }
 
 const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
@@ -2868,12 +3057,60 @@ export async function deletePracticalProjectDoc(
   );
 }
 
+function readLocalPostponedTaskSet(uid: string): Set<string> {
+  if (typeof window === 'undefined' || !uid) return new Set();
+  try {
+    const raw = window.localStorage.getItem(`kb_postponed_tasks_${uid}`);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeLocalPostponedTaskSet(uid: string, set: Set<string>): void {
+  if (typeof window === 'undefined' || !uid) return;
+  try {
+    window.localStorage.setItem(
+      `kb_postponed_tasks_${uid}`,
+      JSON.stringify(Array.from(set))
+    );
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
 export async function saveUnifiedTaskDoc(
   uid: string,
   task: UnifiedTask
 ): Promise<void> {
   const row = buildUnifiedTaskRow(uid, task);
-  await runUpsertWith007Fallback('unified_tasks', row, 'owner_id,id');
+  const postponedSet = readLocalPostponedTaskSet(uid);
+  if (task.status !== 'postponed' && postponedSet.has(row.id)) {
+    postponedSet.delete(row.id);
+    writeLocalPostponedTaskSet(uid, postponedSet);
+  }
+
+  try {
+    await runUpsertWith007Fallback('unified_tasks', row, 'owner_id,id');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isStatusCheckError =
+      task.status === 'postponed' &&
+      (msg.includes('23514') || msg.includes('unified_tasks_status_check') || msg.includes('check constraint'));
+    if (isStatusCheckError) {
+      hasPending012Migration = true;
+      postponedSet.add(row.id);
+      writeLocalPostponedTaskSet(uid, postponedSet);
+      await runUpsertWith007Fallback(
+        'unified_tasks',
+        { ...row, status: 'todo' },
+        'owner_id,id'
+      );
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function deleteUnifiedTaskDoc(
@@ -3153,6 +3390,10 @@ export async function savePublicSiteConfig(
       showBooks: cfg.visibilityFlags?.showBooks !== false,
       showReflections: cfg.visibilityFlags?.showReflections !== false,
       showBlogs: cfg.visibilityFlags?.showBlogs !== false,
+      creatorName: clip(cfg.creatorName || 'Ahmed Ibrahim', 120),
+      linkedinUrl: sanitizeSafeHttpUrl(cfg.linkedinUrl),
+      contactEmail: clip(cfg.contactEmail || '', 160),
+      showContactForm: cfg.showContactForm !== false,
     },
     public_reflection_categories: sanitizeStringList(
       cfg.publicReflectionCategories ?? [],
@@ -3774,3 +4015,496 @@ export async function fetchGrantedWorkspaceForUser(
   }
 }
 
+// ============================================================================
+// Migration 012 Entities: Activity Logs, Daily Journals, Period Reviews,
+// Weekly Plans, Saved Pin Collections & Contact Messages
+// ============================================================================
+
+function readLocalFallbackList<T>(uid: string, storeKey: string): T[] {
+  if (typeof window === 'undefined' || !uid) return [];
+  try {
+    const raw = window.localStorage.getItem(`kb_${storeKey}_${uid}`);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalFallbackList<T>(uid: string, storeKey: string, list: T[]): void {
+  if (typeof window === 'undefined' || !uid) return;
+  try {
+    window.localStorage.setItem(`kb_${storeKey}_${uid}`, JSON.stringify(list));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function upsertLocalFallbackItem<T>(
+  uid: string,
+  storeKey: string,
+  item: T,
+  getKey: (x: T) => string,
+  maxItems = 500
+): void {
+  const existing = readLocalFallbackList<T>(uid, storeKey);
+  const k = getKey(item);
+  const next = [item, ...existing.filter((x) => getKey(x) !== k)].slice(0, maxItems);
+  writeLocalFallbackList(uid, storeKey, next);
+}
+
+function removeLocalFallbackItem<T>(
+  uid: string,
+  storeKey: string,
+  targetKey: string,
+  getKey: (x: T) => string
+): void {
+  const existing = readLocalFallbackList<T>(uid, storeKey);
+  writeLocalFallbackList(
+    uid,
+    storeKey,
+    existing.filter((x) => getKey(x) !== targetKey)
+  );
+}
+
+function mergeByKey<T>(
+  remote: T[],
+  local: T[],
+  getKey: (x: T) => string,
+  getTs: (x: T) => number
+): T[] {
+  const map = new Map<string, T>();
+  for (const item of remote) {
+    map.set(getKey(item), item);
+  }
+  for (const item of local) {
+    const k = getKey(item);
+    const prev = map.get(k);
+    if (!prev || getTs(item) > getTs(prev)) {
+      map.set(k, item);
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => getTs(b) - getTs(a));
+}
+
+export function buildActivityLogRow(uid: string, log: ActivityLogEntry) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(log.id),
+    date_key: sanitizeDateKeyOrEmpty(log.dateKey) || toLocalDateKey(),
+    entity_type: clip(log.entityType, 40),
+    entity_id: clip(log.entityId, 160),
+    action: clip(log.action, 40),
+    title: clip(log.title, 260),
+    subtitle: clip(log.subtitle || '', 260),
+    hub_id: log.hubId ? sanitizeHubId(log.hubId) : 'knowledge',
+    status_snapshot: clip(log.statusSnapshot || '', 60),
+    occurred_at_ms: Math.round(Number(log.occurredAtMs) || Date.now()),
+  };
+}
+
+function mapActivityLogRow(raw: Record<string, unknown>): ActivityLogEntry {
+  return {
+    id: String(raw.id || ''),
+    dateKey: String(raw.date_key || toLocalDateKey()),
+    entityType: String(raw.entity_type || 'task') as ActivityEntityType,
+    entityId: String(raw.entity_id || ''),
+    action: String(raw.action || 'updated') as ActivityActionKind,
+    title: String(raw.title || ''),
+    subtitle: raw.subtitle ? String(raw.subtitle) : undefined,
+    hubId: raw.hub_id ? sanitizeHubId(raw.hub_id) : undefined,
+    statusSnapshot: raw.status_snapshot ? String(raw.status_snapshot) : undefined,
+    occurredAtMs: Number(raw.occurred_at_ms ?? 0),
+  };
+}
+
+export async function saveActivityLogDoc(
+  uid: string,
+  entry: ActivityLogEntry
+): Promise<void> {
+  upsertLocalFallbackItem(uid, 'activity_logs', entry, (x) => x.id, 600);
+  if (!isSupabaseConfigured || !supabase) return;
+  const row = buildActivityLogRow(uid, entry);
+  try {
+    await runWrite((c) =>
+      c.from('activity_logs').upsert(row, { onConflict: 'owner_id,id' })
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      hasPending012Migration = true;
+      return;
+    }
+    console.warn('saveActivityLogDoc fallback kept locally:', err);
+  }
+}
+
+export function buildDailyJournalRow(uid: string, rec: DailyJournalRecord) {
+  return {
+    owner_id: uid,
+    date_key: sanitizeDateKeyOrEmpty(rec.dateKey) || toLocalDateKey(),
+    reflection_text: clip(rec.reflectionText, 20000),
+    highlights_text: clip(rec.highlightsText, 6000),
+    mood_label: clip(rec.moodLabel || '', 60),
+    energy_score:
+      typeof rec.energyScore === 'number' && rec.energyScore >= 1 && rec.energyScore <= 5
+        ? Math.round(rec.energyScore)
+        : null,
+    updated_at_ms: Math.round(Number(rec.updatedAtMs) || Date.now()),
+  };
+}
+
+function mapDailyJournalRow(raw: Record<string, unknown>): DailyJournalRecord {
+  return {
+    dateKey: String(raw.date_key || toLocalDateKey()),
+    reflectionText: String(raw.reflection_text || ''),
+    highlightsText: String(raw.highlights_text || ''),
+    moodLabel: raw.mood_label ? String(raw.mood_label) : undefined,
+    energyScore:
+      typeof raw.energy_score === 'number' ? raw.energy_score : undefined,
+    updatedAtMs: Number(raw.updated_at_ms ?? 0),
+  };
+}
+
+export async function saveDailyJournalDoc(
+  uid: string,
+  rec: DailyJournalRecord
+): Promise<void> {
+  upsertLocalFallbackItem(uid, 'daily_journals', rec, (x) => x.dateKey, 400);
+  if (!isSupabaseConfigured || !supabase) return;
+  const row = buildDailyJournalRow(uid, rec);
+  try {
+    await runWrite((c) =>
+      c.from('daily_journals').upsert(row, { onConflict: 'owner_id,date_key' })
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      hasPending012Migration = true;
+      return;
+    }
+    throw err;
+  }
+}
+
+export function buildPeriodReviewRow(uid: string, rev: PeriodReviewRecord) {
+  return {
+    owner_id: uid,
+    id: sanitizeId(rev.id || `${rev.periodType}_${rev.periodKey}`),
+    period_type: pickEnum(
+      rev.periodType,
+      ['weekly', 'monthly', 'quarterly', 'yearly'] as const,
+      'weekly'
+    ),
+    period_key: clip(rev.periodKey, 40),
+    period_start_key: sanitizeDateKeyOrEmpty(rev.periodStartKey),
+    period_end_key: sanitizeDateKeyOrEmpty(rev.periodEndKey),
+    reflection_text: clip(rev.reflectionText, 25000),
+    adjustments_text: clip(rev.adjustmentsText, 12000),
+    next_period_focus_text: clip(rev.nextPeriodFocusText, 12000),
+    rating:
+      typeof rev.rating === 'number' && rev.rating >= 1 && rev.rating <= 5
+        ? Math.round(rev.rating)
+        : null,
+    updated_at_ms: Math.round(Number(rev.updatedAtMs) || Date.now()),
+  };
+}
+
+function mapPeriodReviewRow(raw: Record<string, unknown>): PeriodReviewRecord {
+  const pt = String(raw.period_type || 'weekly');
+  const periodType: PeriodReviewType =
+    pt === 'monthly' || pt === 'quarterly' || pt === 'yearly' ? pt : 'weekly';
+  return {
+    id: String(raw.id || `${periodType}_${String(raw.period_key || '')}`),
+    periodType,
+    periodKey: String(raw.period_key || ''),
+    periodStartKey: String(raw.period_start_key || ''),
+    periodEndKey: String(raw.period_end_key || ''),
+    reflectionText: String(raw.reflection_text || ''),
+    adjustmentsText: String(raw.adjustments_text || ''),
+    nextPeriodFocusText: String(raw.next_period_focus_text || ''),
+    rating: typeof raw.rating === 'number' ? raw.rating : undefined,
+    updatedAtMs: Number(raw.updated_at_ms ?? 0),
+  };
+}
+
+export async function savePeriodReviewDoc(
+  uid: string,
+  rev: PeriodReviewRecord
+): Promise<void> {
+  upsertLocalFallbackItem(uid, 'period_reviews', rev, (x) => x.id, 300);
+  if (!isSupabaseConfigured || !supabase) return;
+  const row = buildPeriodReviewRow(uid, rev);
+  try {
+    await runWrite((c) =>
+      c.from('period_reviews').upsert(row, { onConflict: 'owner_id,id' })
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      hasPending012Migration = true;
+      return;
+    }
+    throw err;
+  }
+}
+
+export function buildWeeklyPlanRow(uid: string, plan: WeeklyPlanRecord) {
+  const range = getSatFriWeekRange(plan.weekStartKey || plan.weekKey);
+  return {
+    owner_id: uid,
+    week_key: range.weekKey,
+    week_start_key: range.startKey,
+    week_end_key: range.endKey,
+    focus_hub_ids: (Array.isArray(plan.focusHubIds) ? plan.focusHubIds : [])
+      .map((h) => sanitizeHubId(h))
+      .slice(0, 12),
+    focus_course_ids: (Array.isArray(plan.focusCourseIds) ? plan.focusCourseIds : [])
+      .map((n) => Math.round(Number(n)))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .slice(0, 20),
+    linked_task_ids: sanitizeStringList(plan.linkedTaskIds || [], 120, 128),
+    goals: (Array.isArray(plan.goals) ? plan.goals : []).slice(0, 30).map((g: WeeklyPlanGoal) => ({
+      id: clip(g.id, 128),
+      text: clip(g.text, 400),
+      ...(g.hubId ? { hubId: sanitizeHubId(g.hubId) } : {}),
+      done: Boolean(g.done),
+    })),
+    notes: clip(plan.notes || '', 12000),
+    planned_at_ms: Math.round(Number(plan.plannedAtMs) || Date.now()),
+    updated_at_ms: Math.round(Number(plan.updatedAtMs) || Date.now()),
+  };
+}
+
+function mapWeeklyPlanRow(raw: Record<string, unknown>): WeeklyPlanRecord {
+  const range = getSatFriWeekRange(String(raw.week_start_key || raw.week_key || ''));
+  return {
+    weekKey: String(raw.week_key || range.weekKey),
+    weekStartKey: String(raw.week_start_key || range.startKey),
+    weekEndKey: String(raw.week_end_key || range.endKey),
+    focusHubIds: Array.isArray(raw.focus_hub_ids)
+      ? raw.focus_hub_ids.map((h) => sanitizeHubId(h))
+      : [],
+    focusCourseIds: Array.isArray(raw.focus_course_ids)
+      ? raw.focus_course_ids.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)
+      : [],
+    linkedTaskIds: Array.isArray(raw.linked_task_ids)
+      ? raw.linked_task_ids.map((s) => String(s))
+      : [],
+    goals: Array.isArray(raw.goals) ? (raw.goals as WeeklyPlanGoal[]) : [],
+    notes: String(raw.notes || ''),
+    plannedAtMs: Number(raw.planned_at_ms ?? 0),
+    updatedAtMs: Number(raw.updated_at_ms ?? 0),
+  };
+}
+
+export async function saveWeeklyPlanDoc(
+  uid: string,
+  plan: WeeklyPlanRecord
+): Promise<void> {
+  upsertLocalFallbackItem(uid, 'weekly_plans', plan, (x) => x.weekKey, 150);
+  if (!isSupabaseConfigured || !supabase) return;
+  const row = buildWeeklyPlanRow(uid, plan);
+  try {
+    await runWrite((c) =>
+      c.from('weekly_plans').upsert(row, { onConflict: 'owner_id,week_key' })
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      hasPending012Migration = true;
+      return;
+    }
+    throw err;
+  }
+}
+
+export function buildPinCollectionRow(uid: string, col: PinCollection) {
+  const validTypes: PinEntityType[] = ['course', 'note', 'path', 'task', 'project'];
+  const items = (Array.isArray(col.items) ? col.items : [])
+    .filter((it): it is PinCollectionItem => Boolean(it && it.entityId))
+    .slice(0, 200)
+    .map((it) => ({
+      entityType: validTypes.includes(it.entityType) ? it.entityType : 'course',
+      entityId: clip(String(it.entityId), 160),
+      addedAtMs: Math.round(Number(it.addedAtMs) || Date.now()),
+    }));
+
+  return {
+    owner_id: uid,
+    id: sanitizeId(col.id),
+    title: clip(col.title, 120),
+    description: clip(col.description || '', 400),
+    color_key: sanitizeNoteColor(col.colorKey),
+    sort_order: Math.max(0, Math.round(Number(col.sortOrder) || 0)),
+    items,
+    created_at_ms: Math.round(Number(col.createdAtMs) || Date.now()),
+    updated_at_ms: Math.round(Number(col.updatedAtMs) || Date.now()),
+  };
+}
+
+function mapPinCollectionRow(raw: Record<string, unknown>): PinCollection {
+  return {
+    id: String(raw.id || ''),
+    title: String(raw.title || ''),
+    description: raw.description ? String(raw.description) : undefined,
+    colorKey: sanitizeNoteColor(raw.color_key),
+    sortOrder: Number(raw.sort_order ?? 0),
+    items: Array.isArray(raw.items) ? (raw.items as PinCollectionItem[]) : [],
+    createdAtMs: Number(raw.created_at_ms ?? 0),
+    updatedAtMs: Number(raw.updated_at_ms ?? 0),
+  };
+}
+
+export async function savePinCollectionDoc(
+  uid: string,
+  col: PinCollection
+): Promise<void> {
+  upsertLocalFallbackItem(uid, 'pin_collections', col, (x) => x.id, 100);
+  if (!isSupabaseConfigured || !supabase) return;
+  const row = buildPinCollectionRow(uid, col);
+  try {
+    await runWrite((c) =>
+      c.from('pin_collections').upsert(row, { onConflict: 'owner_id,id' })
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      hasPending012Migration = true;
+      return;
+    }
+    throw err;
+  }
+}
+
+export async function deletePinCollectionDoc(
+  uid: string,
+  colId: string
+): Promise<void> {
+  removeLocalFallbackItem<PinCollection>(uid, 'pin_collections', colId, (x) => x.id);
+  if (!isSupabaseConfigured || !supabase) return;
+  const id = sanitizeId(colId);
+  try {
+    await runWrite((c) =>
+      c.from('pin_collections').delete().eq('owner_id', uid).eq('id', id)
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      hasPending012Migration = true;
+      return;
+    }
+    throw err;
+  }
+}
+
+const CONTACT_LOCAL_STORE_KEY = 'kb_contact_messages_local';
+
+function mapContactMessageRow(raw: Record<string, unknown>): ContactMessageRecord {
+  const st = String(raw.status || 'unread');
+  return {
+    id: String(raw.id || ''),
+    senderName: String(raw.sender_name || ''),
+    senderEmail: String(raw.sender_email || ''),
+    subject: String(raw.subject || ''),
+    message: String(raw.message || ''),
+    status: st === 'read' || st === 'archived' ? st : 'unread',
+    createdAtMs: Number(raw.created_at_ms ?? 0),
+  };
+}
+
+export function saveContactMessageLocalFallback(msg: ContactMessageRecord): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(CONTACT_LOCAL_STORE_KEY);
+    const list: ContactMessageRecord[] = raw ? JSON.parse(raw) : [];
+    const next = [msg, ...list.filter((x) => x.id !== msg.id)].slice(0, 100);
+    window.localStorage.setItem(CONTACT_LOCAL_STORE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore
+  }
+}
+
+export async function fetchContactMessages(): Promise<ContactMessageRecord[]> {
+  let local: ContactMessageRecord[] = [];
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = window.localStorage.getItem(CONTACT_LOCAL_STORE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) local = parsed as ContactMessageRecord[];
+    } catch {
+      local = [];
+    }
+  }
+  if (!isSupabaseConfigured || !supabase) return local;
+  try {
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('contact_messages')
+        .select('*')
+        .order('created_at_ms', { ascending: false })
+        .limit(200)
+    );
+    if (error) {
+      if (isMissingTableError(error)) {
+        hasPending012Migration = true;
+      }
+      return local;
+    }
+    const remote = (data || []).map((r) =>
+      mapContactMessageRow(r as Record<string, unknown>)
+    );
+    return mergeByKey(remote, local, (x) => x.id, (x) => x.createdAtMs);
+  } catch {
+    return local;
+  }
+}
+
+export async function updateContactMessageStatus(
+  id: string,
+  status: ContactMessageRecord['status']
+): Promise<void> {
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = window.localStorage.getItem(CONTACT_LOCAL_STORE_KEY);
+      const list: ContactMessageRecord[] = raw ? JSON.parse(raw) : [];
+      const next = list.map((m) => (m.id === id ? { ...m, status } : m));
+      window.localStorage.setItem(CONTACT_LOCAL_STORE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  }
+  if (!isSupabaseConfigured || !supabase) return;
+  try {
+    await runWrite((c) =>
+      c.from('contact_messages').update({ status }).eq('id', sanitizeId(id))
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      hasPending012Migration = true;
+      return;
+    }
+    throw err;
+  }
+}
+
+export async function deleteContactMessage(id: string): Promise<void> {
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = window.localStorage.getItem(CONTACT_LOCAL_STORE_KEY);
+      const list: ContactMessageRecord[] = raw ? JSON.parse(raw) : [];
+      window.localStorage.setItem(
+        CONTACT_LOCAL_STORE_KEY,
+        JSON.stringify(list.filter((m) => m.id !== id))
+      );
+    } catch {
+      // ignore
+    }
+  }
+  if (!isSupabaseConfigured || !supabase) return;
+  try {
+    await runWrite((c) =>
+      c.from('contact_messages').delete().eq('id', sanitizeId(id))
+    );
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      hasPending012Migration = true;
+      return;
+    }
+    throw err;
+  }
+}

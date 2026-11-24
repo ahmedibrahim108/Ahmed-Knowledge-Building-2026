@@ -248,6 +248,161 @@ app.post('/api/tts', async (req, res) => {
   }
 });
 
+const contactRateLimiter = new Map<string, { count: number; resetAt: number }>();
+
+function sanitizeContactString(raw: unknown, maxLen: number): string {
+  if (typeof raw !== 'string') return '';
+  return raw
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .trim()
+    .slice(0, maxLen);
+}
+
+app.post('/api/contact', async (req, res) => {
+  try {
+    const clientIp =
+      (typeof req.headers['x-forwarded-for'] === 'string'
+        ? req.headers['x-forwarded-for'].split(',')[0].trim()
+        : '') ||
+      req.socket.remoteAddress ||
+      'unknown';
+
+    const now = Date.now();
+    const bucket = contactRateLimiter.get(clientIp);
+    if (bucket && now < bucket.resetAt) {
+      if (bucket.count >= 5) {
+        res.status(429).json({
+          error: 'تم إرسال عدة رسائل خلال وقت قصير. يرجى المحاولة بعد دقائق.',
+        });
+        return;
+      }
+      bucket.count += 1;
+    } else {
+      contactRateLimiter.set(clientIp, { count: 1, resetAt: now + 10 * 60 * 1000 });
+    }
+
+    const body = (req.body || {}) as Record<string, unknown>;
+    const senderName = sanitizeContactString(body.name, 100);
+    const senderEmail = sanitizeContactString(body.email, 160);
+    const subject = sanitizeContactString(body.subject, 200);
+    const message = sanitizeContactString(body.message, 3200);
+
+    if (senderName.length < 2) {
+      res.status(400).json({ error: 'يرجى كتابة الاسم (حرفان على الأقل).' });
+      return;
+    }
+    const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+    if (!emailRx.test(senderEmail)) {
+      res.status(400).json({ error: 'يرجى إدخال بريد إلكتروني صحيح.' });
+      return;
+    }
+    if (message.length < 5) {
+      res.status(400).json({ error: 'يرجى كتابة رسالة واضحة (5 أحرف على الأقل).' });
+      return;
+    }
+
+    const id = `msg_${now}_${Math.floor(Math.random() * 10000)}`;
+    const payload = {
+      id,
+      sender_name: senderName,
+      sender_email: senderEmail,
+      subject,
+      message,
+      status: 'unread',
+      created_at_ms: now,
+    };
+
+    let persisted = false;
+    let needsMigration012 = false;
+    const supabaseUrl = (process.env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
+    const supabaseKey = (
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.VITE_SUPABASE_ANON_KEY ||
+      ''
+    ).trim();
+
+    if (supabaseUrl && supabaseKey) {
+      try {
+        const sbRes = await fetch(`${supabaseUrl}/rest/v1/contact_messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+            Prefer: 'return=minimal',
+          },
+          body: JSON.stringify(payload),
+        });
+        if (sbRes.ok) {
+          persisted = true;
+        } else {
+          const errText = await sbRes.text().catch(() => '');
+          if (errText.includes('contact_messages') || sbRes.status === 404) {
+            needsMigration012 = true;
+          }
+          console.warn('Supabase contact_messages insert non-OK:', sbRes.status, errText);
+        }
+      } catch (err) {
+        console.warn('Supabase contact_messages fetch error:', err);
+      }
+    }
+
+    let webhookSent = false;
+    const webhookUrl = (process.env.CONTACT_WEBHOOK_URL || '').trim();
+    if (webhookUrl && /^https?:\/\//i.test(webhookUrl)) {
+      try {
+        const whRes = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id,
+            name: senderName,
+            email: senderEmail,
+            subject,
+            message,
+            createdAt: new Date(now).toISOString(),
+          }),
+        });
+        webhookSent = whRes.ok;
+      } catch (err) {
+        console.warn('CONTACT_WEBHOOK_URL error:', err);
+      }
+    }
+
+    if (!persisted && !webhookSent && needsMigration012) {
+      res.status(202).json({
+        ok: true,
+        id,
+        persisted: false,
+        webhookSent: false,
+        needsMigration012: true,
+        message: 'تم التحقق من الرسالة وحفظها محليًا لحين تشغيل التحديث SQL 012 في قاعدة البيانات.',
+      });
+      return;
+    }
+
+    if (!persisted && !webhookSent) {
+      res.status(503).json({
+        error: 'تعذر حفظ الرسالة حاليًا على الخادم. يرجى المحاولة لاحقًا أو التواصل عبر وسائل الاتصال المعروضة.',
+      });
+      return;
+    }
+
+    res.status(201).json({
+      ok: true,
+      id,
+      persisted,
+      webhookSent,
+      message: webhookSent
+        ? 'تم استلام رسالتك وحفظها وإرسال إشعار بها بنجاح.'
+        : 'تم استلام رسالتك وحفظها في صندوق رسائل المنصة بنجاح.',
+    });
+  } catch (err) {
+    console.error('Contact route error:', err);
+    res.status(500).json({ error: 'حدث خطأ غير متوقع أثناء إرسال الرسالة.' });
+  }
+});
+
 async function startServer() {
   const httpServer = http.createServer(app);
 

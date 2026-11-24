@@ -16,6 +16,7 @@ import {
   KeyRound,
   LayoutGrid,
   Loader2,
+  Mail,
   MessageSquarePlus,
   PenLine,
   Pin,
@@ -33,6 +34,7 @@ import {
 import {
   BlogPost,
   BookNote,
+  ContactMessageRecord,
   ContentAccessGrant,
   CustomCategory,
   DEFAULT_HUB_CATEGORIES,
@@ -73,13 +75,17 @@ import {
 } from '../services/supabaseClient';
 import {
   addGrantedItemNote,
+  deleteContactMessage,
   deleteContentAccessGrant,
   deleteGrantedItemNote,
   fetchAllContentGrants,
   fetchAllUserProfiles,
+  fetchContactMessages,
   fetchGrantedItemNotesForOwner,
   isPending007Migration,
   isPending011Migration,
+  isPending012Migration,
+  updateContactMessageStatus,
   updateUserProfileAccess,
   upsertContentAccessGrant,
 } from '../services/supabaseSync';
@@ -310,6 +316,10 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
   const [activeReplyNoteId, setActiveReplyNoteId] = useState<string | null>(null);
   const [savingReply, setSavingReply] = useState(false);
 
+  // Contact Messages Inbox state
+  const [contactMessages, setContactMessages] = useState<ContactMessageRecord[]>([]);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+
   const pinnedSet = new Set(
     props.preferences.pinnedNavTabs && props.preferences.pinnedNavTabs.length > 0
       ? props.preferences.pinnedNavTabs
@@ -431,12 +441,14 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
 
   const loadProfiles = async () => {
     setLoadingProfiles(true);
+    setLoadingMessages(true);
     setProfilesError(null);
     try {
-      const [list, grantsList, itemNotesList] = await Promise.all([
+      const [list, grantsList, itemNotesList, messagesList] = await Promise.all([
         fetchAllUserProfiles(),
         props.uid ? fetchAllContentGrants(props.uid) : Promise.resolve([]),
         props.uid ? fetchGrantedItemNotesForOwner(props.uid) : Promise.resolve([]),
+        fetchContactMessages(),
       ]);
       setProfiles(list);
       const map: Record<string, ContentAccessGrant> = {};
@@ -445,12 +457,14 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
       }
       setGrantsByUid(map);
       setGrantedItemNotes(itemNotesList);
+      setContactMessages(messagesList);
     } catch (err) {
       setProfilesError(
         err instanceof Error ? err.message : 'تعذر تحميل قائمة المستخدمين.'
       );
     } finally {
       setLoadingProfiles(false);
+      setLoadingMessages(false);
     }
   };
 
@@ -1136,6 +1150,85 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                     }
                     className="w-full px-3 py-2.5 text-sm bg-[#F7F8FA] border border-slate-300 rounded-xl"
                   />
+                </div>
+
+                {/* Creator Profile, Copyright & Contact Settings */}
+                <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-bold text-slate-800">
+                      ملف صاحب المنصة وحقوق النشر والتواصل (تظهر في التذييل وقسم تواصل معنا)
+                    </p>
+                    <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={siteDraft.showContactForm !== false}
+                        onChange={(e) =>
+                          setSiteDraft((p) => ({
+                            ...p,
+                            showContactForm: e.target.checked,
+                          }))
+                        }
+                      />
+                      <span>إظهار نموذج «تواصل معنا»</span>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        الاسم المعتمد في حقوق النشر
+                      </label>
+                      <input
+                        type="text"
+                        value={siteDraft.creatorName ?? 'Ahmed Ibrahim'}
+                        onChange={(e) =>
+                          setSiteDraft((p) => ({
+                            ...p,
+                            creatorName: e.target.value,
+                          }))
+                        }
+                        placeholder="Ahmed Ibrahim"
+                        dir="ltr"
+                        className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        رابط LinkedIn الرسمي (اختياري)
+                      </label>
+                      <input
+                        type="url"
+                        value={siteDraft.linkedinUrl ?? ''}
+                        onChange={(e) =>
+                          setSiteDraft((p) => ({
+                            ...p,
+                            linkedinUrl: e.target.value,
+                          }))
+                        }
+                        placeholder="https://www.linkedin.com/in/..."
+                        dir="ltr"
+                        className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        البريد الرسمي للتواصل (اختياري)
+                      </label>
+                      <input
+                        type="email"
+                        value={siteDraft.contactEmail ?? ''}
+                        onChange={(e) =>
+                          setSiteDraft((p) => ({
+                            ...p,
+                            contactEmail: e.target.value,
+                          }))
+                        }
+                        placeholder="name@example.com"
+                        dir="ltr"
+                        className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2937,6 +3030,99 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                   </div>
                 )}
               </section>
+
+              {/* Contact Us Inbox */}
+              <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Mail className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                    <h3 className="font-editorial text-lg font-bold text-slate-900">
+                      صندوق رسائل «تواصل معنا» ({contactMessages.length})
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void loadProfiles()}
+                    disabled={loadingMessages}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    <RefreshCw
+                      className={`w-3.5 h-3.5 ${loadingMessages ? 'animate-spin' : ''}`}
+                    />
+                    <span>تحديث الرسائل</span>
+                  </button>
+                </div>
+
+                {contactMessages.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-3">
+                    لا توجد رسائل تواصل مستلمة حتى الآن.
+                  </p>
+                ) : (
+                  <div className="max-h-[380px] overflow-y-auto thin-scrollbar space-y-2.5">
+                    {contactMessages.map((msg) => (
+                      <div
+                        key={msg.id}
+                        className={`p-3.5 rounded-xl border text-xs space-y-2 ${
+                          msg.status === 'unread'
+                            ? 'bg-amber-50/40 border-amber-200'
+                            : 'bg-[#F7F8FA] border-slate-200'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-bold text-slate-900">
+                              {msg.senderName}
+                            </span>
+                            <span className="text-[11px] text-slate-500" dir="ltr">
+                              {msg.senderEmail}
+                            </span>
+                            {msg.subject && (
+                              <span className="px-2 py-0.5 text-[10px] font-semibold bg-white border border-slate-200 rounded-md text-[#1E3A5F]">
+                                {msg.subject}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              value={msg.status}
+                              onChange={async (e) => {
+                                const nextStatus = e.target.value as ContactMessageRecord['status'];
+                                await updateContactMessageStatus(msg.id, nextStatus);
+                                setContactMessages((prev) =>
+                                  prev.map((x) =>
+                                    x.id === msg.id ? { ...x, status: nextStatus } : x
+                                  )
+                                );
+                              }}
+                              className="px-2 py-1 text-[11px] bg-white border border-slate-300 rounded-md"
+                            >
+                              <option value="unread">غير مقروءة</option>
+                              <option value="read">مقروءة</option>
+                              <option value="archived">مؤرشفة</option>
+                            </select>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await deleteContactMessage(msg.id);
+                                setContactMessages((prev) =>
+                                  prev.filter((x) => x.id !== msg.id)
+                                );
+                              }}
+                              aria-label="حذف الرسالة"
+                              className="p-1.5 text-slate-400 hover:text-red-700 rounded-lg cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">
+                          {msg.message}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
             </div>
           )}
 
@@ -2950,6 +3136,16 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                     010_blogs_nav_pins_and_deadlock_free_fix.sql
                   </code>{' '}
                   في محرر SQL بلوحة Supabase لتفعيل جداول المدونة وتثبيت الشريط العلوي والمجالات المخصّصة سحابيًا بالكامل.
+                </div>
+              )}
+
+              {isPending012Migration() && (
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                  يرجى تشغيل ملف التحديث{' '}
+                  <code className="font-mono font-bold">
+                    012_journals_reviews_planner_pins_contact.sql
+                  </code>{' '}
+                  خطوة بخطوة في محرر SQL بلوحة Supabase لتفعيل جداول اليوميات التلقائية، المراجعات الدورية، التخطيط الأسبوعي، قوائم التثبيت، وصندوق رسائل التواصل سحابيًا.
                 </div>
               )}
 

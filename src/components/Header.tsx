@@ -3,7 +3,10 @@ import { User } from 'firebase/auth';
 import {
   ArrowLeft,
   ArrowRight,
+  BarChart3,
   BookOpenText,
+  CalendarClock,
+  CalendarHeart,
   ChevronDown,
   Cloud,
   Eye,
@@ -33,6 +36,9 @@ export type ActiveTab =
   | 'paths'
   | 'library'
   | 'journal'
+  | 'daily_journal'
+  | 'weekly_plan'
+  | 'reviews'
   | 'reflections'
   | 'blogs'
   | 'gallery'
@@ -111,19 +117,6 @@ export default function Header({
   const showAdminNav = isAdmin && !isPreviewingPublic;
   const [reloading, setReloading] = useState(false);
 
-  const countByTab: Record<string, number | undefined> = {
-    focus: focusCoursesCount,
-    courses: coursesCount,
-    paths: pathsCount,
-    library: libraryCount,
-    journal: notesCount,
-    reflections: reflectionsCount,
-    blogs: blogsCount,
-    tasks: tasksCount,
-    plan: monthsCount,
-    domains: domainsCount,
-  };
-
   const navItems: Array<{ id: ActiveTab; label: string }> = useMemo(() => {
     if (!showAdminNav) {
       return [];
@@ -140,30 +133,12 @@ export default function Header({
 
     for (const meta of NAV_PINNABLE_TABS_META) {
       if (!pinnedSet.has(meta.id)) continue;
-      const cnt = countByTab[meta.id];
-      const displayLabel =
-        typeof cnt === 'number' && meta.id !== 'plan' && meta.id !== 'domains'
-          ? `${meta.label} (${cnt})`
-          : meta.label;
-      dynamicItems.push({ id: meta.id, label: displayLabel });
+      dynamicItems.push({ id: meta.id, label: meta.label });
     }
 
     dynamicItems.push({ id: 'account', label: 'الإدارة والحساب' });
     return dynamicItems;
-  }, [
-    showAdminNav,
-    pinnedNavTabs,
-    focusCoursesCount,
-    coursesCount,
-    pathsCount,
-    libraryCount,
-    notesCount,
-    reflectionsCount,
-    blogsCount,
-    tasksCount,
-    monthsCount,
-    domainsCount,
-  ]);
+  }, [showAdminNav, pinnedNavTabs]);
 
   const publicNavItems: Array<{ id: PublicPageId; label: string }> = useMemo(() => {
     const list: Array<{ id: PublicPageId; label: string }> = [
@@ -445,6 +420,48 @@ export default function Header({
                       <button
                         type="button"
                         onClick={() => {
+                          onSelectTab('daily_journal');
+                          setMenuOpen(false);
+                        }}
+                        className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <CalendarHeart
+                          className="w-3.5 h-3.5 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
+                        <span>اليوميات التلقائية</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectTab('weekly_plan');
+                          setMenuOpen(false);
+                        }}
+                        className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <CalendarClock
+                          className="w-3.5 h-3.5 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
+                        <span>تخطيط الأسبوع</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectTab('reviews');
+                          setMenuOpen(false);
+                        }}
+                        className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <BarChart3
+                          className="w-3.5 h-3.5 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
+                        <span>المراجعات الدورية</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
                           onSelectTab('blogs');
                           setMenuOpen(false);
                         }}
@@ -454,7 +471,7 @@ export default function Header({
                           className="w-3.5 h-3.5 text-[#1E3A5F]"
                           aria-hidden="true"
                         />
-                        <span>المدونة والمقالات ({blogsCount})</span>
+                        <span>المدونة والمقالات</span>
                       </button>
                       <button
                         type="button"
@@ -468,7 +485,7 @@ export default function Header({
                           className="w-3.5 h-3.5 text-[#1E3A5F]"
                           aria-hidden="true"
                         />
-                        <span>خواطري وتأملاتي ({reflectionsCount})</span>
+                        <span>خواطري وتأملاتي</span>
                       </button>
                       <button
                         type="button"

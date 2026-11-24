@@ -25,6 +25,8 @@ import {
   LearningHubId,
   LearningPath,
   PersonalCourse,
+  PinCollection,
+  PinEntityType,
   PracticalProject,
   ReadingLibraryItem,
   UnifiedTask,
@@ -41,6 +43,11 @@ import {
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import DentalCasesView from './DentalCasesView';
+import {
+  PinCollectionsBar,
+  PinEntityButton,
+  isEntityInCollection,
+} from './PinCollectionsBar';
 import TaskFormModal from './TaskFormModal';
 
 interface CoursesViewProps {
@@ -89,6 +96,13 @@ interface CoursesViewProps {
   ) => string | undefined;
   onUpdateDentalCase?: (id: string, updates: Partial<DentalCase>) => void;
   onDeleteDentalCase?: (id: string) => void;
+  pinCollections?: PinCollection[];
+  activeFocusPinCollectionId?: string | null;
+  onSelectFocusPinCollection?: (id: string | null) => void;
+  onSavePinCollection?: (col: PinCollection) => void;
+  onDeletePinCollection?: (id: string) => void;
+  onTogglePinEntity?: (collectionId: string, entityType: PinEntityType, entityId: string) => void;
+  onQuickCreatePinCollection?: (title: string, entityType: PinEntityType, entityId: string) => void;
 }
 
 export default function CoursesView({
@@ -115,6 +129,13 @@ export default function CoursesView({
   onAddDentalCase,
   onUpdateDentalCase,
   onDeleteDentalCase,
+  pinCollections = [],
+  activeFocusPinCollectionId = null,
+  onSelectFocusPinCollection,
+  onSavePinCollection,
+  onDeletePinCollection,
+  onTogglePinEntity,
+  onQuickCreatePinCollection,
 }: CoursesViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [stageFilter, setStageFilter] = useState<CourseStudyStage | 'all'>(
@@ -193,9 +214,23 @@ export default function CoursesView({
     return map;
   }, [hubMatchedCourses]);
 
+  const activePinCollection = useMemo(
+    () =>
+      activeFocusPinCollectionId
+        ? pinCollections.find((c) => c.id === activeFocusPinCollectionId) || null
+        : null,
+    [pinCollections, activeFocusPinCollectionId]
+  );
+
   const filteredCourses = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const list = hubMatchedCourses.filter((c) => {
+      if (
+        activePinCollection &&
+        !isEntityInCollection(activePinCollection, 'course', String(c.id))
+      ) {
+        return false;
+      }
       const stage = resolveCourseStudyStage(c);
       if (stageFilter !== 'all' && stage !== stageFilter) return false;
       if (onlyRepeated && (c.listenCount ?? 0) < 2 && (c.reviewCount ?? 0) < 2) {
@@ -227,6 +262,7 @@ export default function CoursesView({
     return sortCoursesList(list, sortMode);
   }, [
     hubMatchedCourses,
+    activePinCollection,
     stageFilter,
     onlyRepeated,
     onlyDueToday,
@@ -572,6 +608,22 @@ export default function CoursesView({
         )}
       </div>
 
+      {effectiveSection === 'courses' &&
+        onSelectFocusPinCollection &&
+        onSavePinCollection &&
+        onDeletePinCollection && (
+          <PinCollectionsBar
+            collections={pinCollections}
+            activeCollectionId={activeFocusPinCollectionId}
+            onSelectCollection={onSelectFocusPinCollection}
+            canEdit={canEdit}
+            onSaveCollection={onSavePinCollection}
+            onDeleteCollection={onDeletePinCollection}
+            filterEntityType="course"
+            compact
+          />
+        )}
+
       {/* Dental Cases Sub-Section */}
       {effectiveSection === 'dental_cases' &&
       onAddDentalCase &&
@@ -859,12 +911,22 @@ export default function CoursesView({
                           )}
                         </div>
 
-                        {canEdit && (
+                        {(canEdit || onTogglePinEntity) && (
                           <div
                             className="flex items-center gap-0.5 shrink-0"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            {sortMode === 'manual' && onUpdateCourse && (
+                            {onTogglePinEntity && (
+                              <PinEntityButton
+                                entityType="course"
+                                entityId={String(course.id)}
+                                collections={pinCollections}
+                                canEdit={canEdit}
+                                onToggleItemInCollection={onTogglePinEntity}
+                                onQuickCreateCollection={onQuickCreatePinCollection}
+                              />
+                            )}
+                            {canEdit && sortMode === 'manual' && onUpdateCourse && (
                               <>
                                 <button
                                   type="button"
@@ -886,14 +948,16 @@ export default function CoursesView({
                                 </button>
                               </>
                             )}
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteCourse(course)}
-                              aria-label={`حذف ${course.title}`}
-                              className="p-1 text-slate-400 hover:text-red-600 rounded hover:bg-red-50 cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                            </button>
+                            {canEdit && (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteCourse(course)}
+                                aria-label={`حذف ${course.title}`}
+                                className="p-1 text-slate-400 hover:text-red-600 rounded hover:bg-red-50 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>

@@ -31,6 +31,8 @@ import {
   LearningPath,
   MonthPlan,
   PersonalCourse,
+  PinCollection,
+  PinEntityType,
   PracticalProject,
   ProjectStatus,
   ReadingLibraryItem,
@@ -44,6 +46,11 @@ import {
 } from '../data/curriculumData';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
+import {
+  PinCollectionsBar,
+  PinEntityButton,
+  isEntityInCollection,
+} from './PinCollectionsBar';
 import TaskFormModal from './TaskFormModal';
 
 interface TasksProjectsViewProps {
@@ -73,6 +80,13 @@ interface TasksProjectsViewProps {
   onOpenCalendar?: () => void;
   statusOrder?: UnifiedTaskStatus[];
   onChangeStatusOrder?: (order: UnifiedTaskStatus[]) => void;
+  pinCollections?: PinCollection[];
+  activeFocusPinCollectionId?: string | null;
+  onSelectFocusPinCollection?: (id: string | null) => void;
+  onSavePinCollection?: (col: PinCollection) => void;
+  onDeletePinCollection?: (id: string) => void;
+  onTogglePinEntity?: (collectionId: string, entityType: PinEntityType, entityId: string) => void;
+  onQuickCreatePinCollection?: (title: string, entityType: PinEntityType, entityId: string) => void;
 }
 
 const PRIORITY_AR: Record<TaskPriority, string> = {
@@ -90,12 +104,14 @@ const PRIORITY_SORT_WEIGHT: Record<TaskPriority, number> = {
 const TASK_STATUS_AR: Record<UnifiedTaskStatus, string> = {
   in_progress: 'قيد التنفيذ',
   todo: 'قيد الانتظار',
+  postponed: 'مؤجّلة',
   done: 'مكتمل',
 };
 
 const TASK_STATUS_ACCENT: Record<UnifiedTaskStatus, string> = {
   in_progress: 'text-[#1E3A5F]',
   todo: 'text-slate-800',
+  postponed: 'text-amber-800',
   done: 'text-emerald-800',
 };
 
@@ -108,6 +124,7 @@ const PROJECT_STATUS_AR: Record<ProjectStatus, string> = {
 const STATUS_TO_PROJECT_STATUS: Record<UnifiedTaskStatus, ProjectStatus> = {
   in_progress: 'in_progress',
   todo: 'planned',
+  postponed: 'planned',
   done: 'completed',
 };
 
@@ -146,6 +163,13 @@ export default function TasksProjectsView({
   onOpenCalendar,
   statusOrder: propStatusOrder,
   onChangeStatusOrder,
+  pinCollections = [],
+  activeFocusPinCollectionId = null,
+  onSelectFocusPinCollection,
+  onSavePinCollection,
+  onDeletePinCollection,
+  onTogglePinEntity,
+  onQuickCreatePinCollection,
 }: TasksProjectsViewProps) {
   const todayKey = useMemo(() => getTodayDateKey(), []);
   const [subTab, setSubTab] = useState<'tasks' | 'projects'>('tasks');
@@ -157,7 +181,7 @@ export default function TasksProjectsView({
   >('all');
 
   const [statusOrder, setStatusOrder] = useState<UnifiedTaskStatus[]>(() => {
-    if (propStatusOrder && propStatusOrder.length === 3) {
+    if (propStatusOrder && propStatusOrder.length >= 3) {
       return sanitizeTaskStatusOrder(propStatusOrder);
     }
     try {
@@ -173,7 +197,7 @@ export default function TasksProjectsView({
   });
 
   useEffect(() => {
-    if (propStatusOrder && propStatusOrder.length === 3) {
+    if (propStatusOrder && propStatusOrder.length >= 3) {
       setStatusOrder(sanitizeTaskStatusOrder(propStatusOrder));
     }
   }, [propStatusOrder]);
@@ -277,7 +301,12 @@ export default function TasksProjectsView({
         const dropEl = (el as HTMLElement).closest?.(`[${attr}]`);
         if (dropEl) {
           const val = dropEl.getAttribute(attr);
-          if (val === 'todo' || val === 'in_progress' || val === 'done') {
+          if (
+            val === 'todo' ||
+            val === 'in_progress' ||
+            val === 'postponed' ||
+            val === 'done'
+          ) {
             found = val;
             break;
           }
@@ -428,9 +457,20 @@ export default function TasksProjectsView({
     return '';
   };
 
+  const activePinCollection = useMemo(
+    () =>
+      activeFocusPinCollectionId
+        ? pinCollections.find((c) => c.id === activeFocusPinCollectionId) || null
+        : null,
+    [pinCollections, activeFocusPinCollectionId]
+  );
+
   const filteredTasks = useMemo(() => {
     const list = unifiedTasks.filter((t) => {
       if (activeHubFilter !== 'all' && t.hubId !== activeHubFilter) return false;
+      if (activePinCollection && !isEntityInCollection(activePinCollection, 'task', t.id)) {
+        return false;
+      }
       if (statusFilter === 'unscheduled') return !t.scheduledDate && t.status !== 'done';
       if (statusFilter === 'scheduled') return Boolean(t.scheduledDate) && t.status !== 'done';
       if (statusFilter === 'overdue') return isTaskOverdue(t);
@@ -449,7 +489,7 @@ export default function TasksProjectsView({
       );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unifiedTasks, activeHubFilter, statusFilter, todayKey, statusOrder]);
+  }, [unifiedTasks, activeHubFilter, activePinCollection, statusFilter, todayKey, statusOrder]);
 
   const unscheduledCount = useMemo(
     () => unifiedTasks.filter((t) => !t.scheduledDate && t.status !== 'done').length,
@@ -457,16 +497,19 @@ export default function TasksProjectsView({
   );
 
   const filteredProjects = useMemo(() => {
-    const list =
-      activeHubFilter === 'all'
-        ? projects
-        : projects.filter((p) => p.hubId === activeHubFilter);
+    const list = projects.filter((p) => {
+      if (activeHubFilter !== 'all' && p.hubId !== activeHubFilter) return false;
+      if (activePinCollection && !isEntityInCollection(activePinCollection, 'project', p.id)) {
+        return false;
+      }
+      return true;
+    });
     return list.slice().sort((a, b) => {
       const sa = statusOrder.indexOf(PROJECT_STATUS_TO_UNIFIED[a.status]);
       const sb = statusOrder.indexOf(PROJECT_STATUS_TO_UNIFIED[b.status]);
       return sa - sb;
     });
-  }, [projects, activeHubFilter, statusOrder]);
+  }, [projects, activeHubFilter, activePinCollection, statusOrder]);
 
   const aggregatedCourseTasks = useMemo(() => {
     const out: Array<{ course: PersonalCourse; id: string; text: string; done: boolean }> = [];
@@ -752,6 +795,8 @@ export default function TasksProjectsView({
                     ? 'bg-emerald-700 text-white font-semibold'
                     : st === 'in_progress'
                     ? 'bg-[#1E3A5F] text-white font-semibold'
+                    : st === 'postponed'
+                    ? 'bg-amber-700 text-white font-semibold'
                     : 'bg-slate-800 text-white font-semibold';
                 return (
                   <button
@@ -763,6 +808,8 @@ export default function TasksProjectsView({
                         ? activeClass
                         : st === 'done'
                         ? 'text-emerald-800 hover:bg-emerald-50'
+                        : st === 'postponed'
+                        ? 'text-amber-800 hover:bg-amber-50'
                         : 'text-slate-600 hover:bg-slate-200/70'
                     }`}
                   >
@@ -773,6 +820,16 @@ export default function TasksProjectsView({
             </div>
 
             <div className="flex items-center gap-1 shrink-0 mr-auto">
+              {onTogglePinEntity && (
+                <PinEntityButton
+                  entityType="task"
+                  entityId={t.id}
+                  collections={pinCollections}
+                  canEdit={canEdit}
+                  onToggleItemInCollection={onTogglePinEntity}
+                  onQuickCreateCollection={onQuickCreatePinCollection}
+                />
+              )}
               <button
                 type="button"
                 onClick={() =>
@@ -900,6 +957,20 @@ export default function TasksProjectsView({
           </button>
         ))}
       </div>
+
+      {/* Saved Pin Collections Focus Filter */}
+      {onSelectFocusPinCollection && onSavePinCollection && onDeletePinCollection && (
+        <PinCollectionsBar
+          collections={pinCollections}
+          activeCollectionId={activeFocusPinCollectionId}
+          onSelectCollection={onSelectFocusPinCollection}
+          canEdit={canEdit}
+          onSaveCollection={onSavePinCollection}
+          onDeleteCollection={onDeletePinCollection}
+          filterEntityType={subTab === 'tasks' ? 'task' : 'project'}
+          compact
+        />
+      )}
 
       {/* Status Priority Order Controls (Shared for Tasks & Projects) */}
       <div className="bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
@@ -1091,7 +1162,7 @@ export default function TasksProjectsView({
               <p className="text-[11px] font-bold text-[#1E3A5F]">
                 أفلت المهمة «{draggedItem.title}» على الحالة المطلوبة:
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
                 {statusOrder.map((st, idx) => {
                   const isHover = hoverDropStatus === st;
                   return (
@@ -1123,13 +1194,13 @@ export default function TasksProjectsView({
             </div>
           )}
 
-          {/* Tasks Display Area: Compact Kanban Board OR 3-Col Card Grid OR Compact Table Rows */}
+          {/* Tasks Display Area: Bounded Compact Kanban Board OR Scrollable Card Grid OR Compact Table Rows */}
           {filteredTasks.length === 0 ? (
             <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-xs text-slate-500">
               لا توجد مهام مطابقة للتصفية الحالية — اضغط «إضافة مهمة».
             </div>
           ) : effectiveLayout === 'board' ? (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3.5 items-start">
               {boardColumns.map((col, colIdx) => {
                 const isDropTarget =
                   draggedItem?.kind === 'task' && hoverDropStatus === col.status;
@@ -1226,7 +1297,7 @@ export default function TasksProjectsView({
                       </div>
                     </div>
 
-                    <div className="space-y-2 max-h-[540px] overflow-y-auto pr-0.5 min-h-[76px]">
+                    <div className="space-y-2 max-h-[380px] overflow-y-auto thin-scrollbar pr-0.5 min-h-[76px]">
                       {col.items.length === 0 ? (
                         <p className="py-6 text-center text-[11px] text-slate-400">
                           {isDragActive
@@ -1242,11 +1313,13 @@ export default function TasksProjectsView({
               })}
             </div>
           ) : effectiveLayout === 'grid' ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {filteredTasks.map((t) => renderTaskCard(t, false))}
+            <div className="max-h-[520px] overflow-y-auto thin-scrollbar pr-0.5">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                {filteredTasks.map((t) => renderTaskCard(t, false))}
+              </div>
             </div>
           ) : (
-            <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100">
+            <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 max-h-[480px] overflow-y-auto thin-scrollbar">
               {filteredTasks.map((t) => {
                 const hubMeta = getHubMeta(t.hubId);
                 const overdue = isTaskOverdue(t);
@@ -1850,16 +1923,28 @@ export default function TasksProjectsView({
                         </h3>
                       </div>
                     </div>
-                    {canEdit && (
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDeleteProj(proj)}
-                        aria-label={`حذف ${proj.title}`}
-                        className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                      </button>
-                    )}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {onTogglePinEntity && (
+                        <PinEntityButton
+                          entityType="project"
+                          entityId={proj.id}
+                          collections={pinCollections}
+                          canEdit={canEdit}
+                          onToggleItemInCollection={onTogglePinEntity}
+                          onQuickCreateCollection={onQuickCreatePinCollection}
+                        />
+                      )}
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteProj(proj)}
+                          aria-label={`حذف ${proj.title}`}
+                          className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {proj.description && (
@@ -1913,7 +1998,9 @@ export default function TasksProjectsView({
 
                     {canEdit && (
                       <div className="inline-flex items-center gap-0.5 p-0.5 bg-[#F7F8FA] border border-slate-200 rounded-lg">
-                        {statusOrder.map((st) => {
+                        {statusOrder
+                          .filter((st) => st !== 'postponed')
+                          .map((st) => {
                           const targetProjSt = STATUS_TO_PROJECT_STATUS[st];
                           const active = proj.status === targetProjSt;
                           return (
@@ -1959,9 +2046,10 @@ export default function TasksProjectsView({
             };
 
             if (projectsLayout === 'board') {
+              const projectBoardOrder = statusOrder.filter((st) => st !== 'postponed');
               return (
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
-                  {statusOrder.map((st, colIdx) => {
+                  {projectBoardOrder.map((st, colIdx) => {
                     const projSt = STATUS_TO_PROJECT_STATUS[st];
                     const colProjects = filteredProjects.filter(
                       (p) => p.status === projSt
@@ -2010,7 +2098,7 @@ export default function TasksProjectsView({
                             {colProjects.length}
                           </span>
                         </div>
-                        <div className="space-y-2.5 min-h-[76px]">
+                        <div className="space-y-2.5 max-h-[420px] overflow-y-auto thin-scrollbar pr-0.5 min-h-[76px]">
                           {colProjects.length === 0 ? (
                             <p className="py-6 text-center text-[11px] text-slate-400">
                               {isDragActive
@@ -2029,8 +2117,10 @@ export default function TasksProjectsView({
             }
 
             return (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredProjects.map(renderProjectCard)}
+              <div className="max-h-[520px] overflow-y-auto thin-scrollbar pr-0.5">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredProjects.map(renderProjectCard)}
+                </div>
               </div>
             );
           })()}

@@ -340,15 +340,6 @@ export function getTodayDateKey(): string {
   return `${y}-${m}-${day}`;
 }
 
-export function addDaysToDateKey(baseDateKey: string, days: number): string {
-  const [y, m, d] = baseDateKey.split('-').map(Number);
-  const dt = new Date(y || 2026, (m || 1) - 1, (d || 1) + days);
-  const yy = dt.getFullYear();
-  const mm = String(dt.getMonth() + 1).padStart(2, '0');
-  const dd = String(dt.getDate()).padStart(2, '0');
-  return `${yy}-${mm}-${dd}`;
-}
-
 export function resolveLearningHubs(
   customHubs?: LearningHubMeta[]
 ): LearningHubMeta[] {
@@ -654,21 +645,25 @@ export interface PracticalProject {
 }
 
 export type TaskPriority = 'low' | 'medium' | 'high';
-export type UnifiedTaskStatus = 'todo' | 'in_progress' | 'done';
+export type UnifiedTaskStatus = 'todo' | 'in_progress' | 'postponed' | 'done';
 
 export const DEFAULT_TASK_STATUS_ORDER: UnifiedTaskStatus[] = [
   'in_progress',
   'todo',
+  'postponed',
   'done',
 ];
 
 export function sanitizeTaskStatusOrder(raw: unknown): UnifiedTaskStatus[] {
-  const valid: UnifiedTaskStatus[] = ['in_progress', 'todo', 'done'];
+  const valid: UnifiedTaskStatus[] = ['in_progress', 'todo', 'postponed', 'done'];
   if (!Array.isArray(raw)) return [...DEFAULT_TASK_STATUS_ORDER];
   const seen: UnifiedTaskStatus[] = [];
   for (const item of raw) {
     if (
-      (item === 'todo' || item === 'in_progress' || item === 'done') &&
+      (item === 'todo' ||
+        item === 'in_progress' ||
+        item === 'postponed' ||
+        item === 'done') &&
       !seen.includes(item)
     ) {
       seen.push(item);
@@ -719,6 +714,9 @@ export interface StudyHistoryEntry {
     | 'tasks'
     | 'reflections'
     | 'blogs'
+    | 'daily_journal'
+    | 'weekly_plan'
+    | 'reviews'
     | 'account';
   targetNoteId?: string;
   targetMonthId?: number;
@@ -1314,6 +1312,10 @@ export interface PublicSiteConfig {
   sections: PublicSiteSection[];
   visibilityFlags: PublicSiteVisibilityFlags;
   publicReflectionCategories?: string[];
+  creatorName?: string;
+  linkedinUrl?: string;
+  contactEmail?: string;
+  showContactForm?: boolean;
   updatedAtMs: number;
 }
 
@@ -1361,6 +1363,10 @@ export const DEFAULT_PUBLIC_SITE_CONFIG: PublicSiteConfig = {
     showBlogs: true,
   },
   publicReflectionCategories: [],
+  creatorName: 'Ahmed Ibrahim',
+  linkedinUrl: '',
+  contactEmail: '',
+  showContactForm: true,
   updatedAtMs: 0,
 };
 
@@ -1454,11 +1460,15 @@ export interface UserPreferences {
   dashboardHeroImageStoragePath?: string;
   dashboardHeroImageFrame?: ImageFrameSpec;
   taskStatusOrder?: UnifiedTaskStatus[];
+  activeFocusPinCollectionId?: string | null;
 }
 
 export interface PinnableNavTabMeta {
   id:
     | 'focus'
+    | 'daily_journal'
+    | 'weekly_plan'
+    | 'reviews'
     | 'courses'
     | 'paths'
     | 'library'
@@ -1476,6 +1486,9 @@ export interface PinnableNavTabMeta {
 
 export const NAV_PINNABLE_TABS_META: PinnableNavTabMeta[] = [
   { id: 'focus', label: 'التركيز', description: 'كورساتك ومهامك النشطة حاليًا.' },
+  { id: 'daily_journal', label: 'اليوميات', description: 'سجل يومي تلقائي لكل ما أنجزته وتعلّمته يوميًا.' },
+  { id: 'weekly_plan', label: 'تخطيط الأسبوع', description: 'تخطيط الأسبوع القادم (السبت ← الجمعة) بدون تكرار المهام.' },
+  { id: 'reviews', label: 'المراجعات', description: 'مراجعات أسبوعية وشهرية وربع سنوية وسنوية.' },
   { id: 'courses', label: 'الكورسات', description: 'إدارة الدورات والدروس وحالات الأسنان.' },
   { id: 'paths', label: 'المسارات', description: 'خرائط التعلّم طويلة المدى ومراحلها.' },
   { id: 'library', label: 'المكتبة', description: 'الكتب والأبحاث وملفات PDF المقروءة.' },
@@ -1491,15 +1504,269 @@ export const NAV_PINNABLE_TABS_META: PinnableNavTabMeta[] = [
 
 export const DEFAULT_PINNED_NAV_TABS: string[] = [
   'focus',
+  'daily_journal',
+  'weekly_plan',
+  'reviews',
   'courses',
   'paths',
   'library',
   'journal',
   'reflections',
-  'blogs',
   'tasks',
   'calendar',
 ];
+
+// ============================================================================
+// Daily Journal, Activity Log, Period Reviews, Weekly Planner & Saved Pins
+// ============================================================================
+
+export type ActivityEntityType =
+  | 'course'
+  | 'course_task'
+  | 'book_note'
+  | 'reflection'
+  | 'task'
+  | 'project'
+  | 'learning_path'
+  | 'reading_item'
+  | 'blog_post'
+  | 'calendar_event'
+  | 'meeting'
+  | 'month';
+
+export type ActivityActionKind =
+  | 'created'
+  | 'updated'
+  | 'completed'
+  | 'postponed'
+  | 'studied'
+  | 'reviewed'
+  | 'scheduled';
+
+export interface ActivityLogEntry {
+  id: string;
+  dateKey: string; // Local YYYY-MM-DD
+  entityType: ActivityEntityType;
+  entityId: string;
+  action: ActivityActionKind;
+  title: string;
+  subtitle?: string;
+  hubId?: LearningHubId;
+  statusSnapshot?: string;
+  occurredAtMs: number;
+}
+
+export interface DailyJournalRecord {
+  dateKey: string; // YYYY-MM-DD (one per user + local date)
+  reflectionText: string;
+  highlightsText: string;
+  moodLabel?: string;
+  energyScore?: number; // 1..5 optional
+  updatedAtMs: number;
+}
+
+export type PeriodReviewType = 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+
+export interface PeriodReviewRecord {
+  id: string; // e.g. weekly_2026-11-21
+  periodType: PeriodReviewType;
+  periodKey: string; // Sat-Fri startKey for weekly, YYYY-MM, YYYY-Q1, YYYY
+  periodStartKey: string;
+  periodEndKey: string;
+  reflectionText: string;
+  adjustmentsText: string;
+  nextPeriodFocusText: string;
+  rating?: number; // 1..5 optional
+  updatedAtMs: number;
+}
+
+export interface WeeklyPlanGoal {
+  id: string;
+  text: string;
+  hubId?: LearningHubId;
+  done: boolean;
+}
+
+export interface WeeklyPlanRecord {
+  weekKey: string; // YYYY-MM-DD of Saturday
+  weekStartKey: string; // Saturday YYYY-MM-DD
+  weekEndKey: string; // Friday YYYY-MM-DD
+  focusHubIds: LearningHubId[];
+  focusCourseIds: number[];
+  linkedTaskIds: string[]; // References to UnifiedTask.id (never copies!)
+  goals: WeeklyPlanGoal[];
+  notes: string;
+  plannedAtMs: number;
+  updatedAtMs: number;
+}
+
+export type PinEntityType = 'course' | 'note' | 'path' | 'task' | 'project';
+
+export interface PinCollectionItem {
+  entityType: PinEntityType;
+  entityId: string; // docId or stringified numeric id or entity id
+  addedAtMs: number;
+}
+
+export interface PinCollection {
+  id: string;
+  title: string;
+  description?: string;
+  colorKey: NoteColorKey;
+  sortOrder: number;
+  items: PinCollectionItem[];
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+export interface ContactMessageRecord {
+  id: string;
+  senderName: string;
+  senderEmail: string;
+  subject: string;
+  message: string;
+  status: 'unread' | 'read' | 'archived';
+  createdAtMs: number;
+}
+
+// ============================================================================
+// Local Date & Saturday -> Friday Week Utilities
+// ============================================================================
+
+export function toLocalDateKey(date: Date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function parseLocalDateKey(dateKey: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec((dateKey || '').trim());
+  if (!match) return new Date();
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+export function addDaysToDateKey(dateKey: string, deltaDays: number): string {
+  const d = parseLocalDateKey(dateKey);
+  d.setDate(d.getDate() + deltaDays);
+  return toLocalDateKey(d);
+}
+
+/**
+ * Strict Saturday -> Friday week calculation (matches weekStartDay = 6).
+ * JS getDay(): Sun=0, Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6.
+ */
+export function getSatFriWeekRange(dateOrKey?: Date | string): {
+  weekKey: string;
+  startKey: string;
+  endKey: string;
+  days: string[];
+} {
+  const base =
+    typeof dateOrKey === 'string'
+      ? parseLocalDateKey(dateOrKey)
+      : dateOrKey
+      ? new Date(dateOrKey.getFullYear(), dateOrKey.getMonth(), dateOrKey.getDate())
+      : new Date();
+  const dayIdx = base.getDay(); // 0..6
+  const offsetSinceSaturday = (dayIdx + 1) % 7; // Sat(6)->0, Sun(0)->1 ... Fri(5)->6
+  const sat = new Date(base.getFullYear(), base.getMonth(), base.getDate() - offsetSinceSaturday);
+  const startKey = toLocalDateKey(sat);
+  const days: string[] = [];
+  for (let i = 0; i < 7; i += 1) {
+    days.push(addDaysToDateKey(startKey, i));
+  }
+  const endKey = days[6];
+  return { weekKey: startKey, startKey, endKey, days };
+}
+
+export function shiftWeekKey(startKey: string, deltaWeeks: number): string {
+  return addDaysToDateKey(getSatFriWeekRange(startKey).startKey, deltaWeeks * 7);
+}
+
+export function getSatFriWeekDays(startKey: string): string[] {
+  return getSatFriWeekRange(startKey).days;
+}
+
+export function getMonthRange(monthKey: string): {
+  monthKey: string;
+  startKey: string;
+  endKey: string;
+} {
+  const m = /^(\d{4})-(\d{2})$/.exec((monthKey || '').trim());
+  const now = new Date();
+  const year = m ? Number(m[1]) : now.getFullYear();
+  const monthIdx = m ? Number(m[2]) - 1 : now.getMonth();
+  const start = new Date(year, monthIdx, 1);
+  const end = new Date(year, monthIdx + 1, 0);
+  return {
+    monthKey: `${year}-${String(monthIdx + 1).padStart(2, '0')}`,
+    startKey: toLocalDateKey(start),
+    endKey: toLocalDateKey(end),
+  };
+}
+
+export function getQuarterRange(quarterKey: string): {
+  quarterKey: string;
+  startKey: string;
+  endKey: string;
+} {
+  const m = /^(\d{4})-Q([1-4])$/i.exec((quarterKey || '').trim());
+  const now = new Date();
+  const year = m ? Number(m[1]) : now.getFullYear();
+  const qNum = m ? Number(m[2]) : Math.floor(now.getMonth() / 3) + 1;
+  const startMonth = (qNum - 1) * 3;
+  const start = new Date(year, startMonth, 1);
+  const end = new Date(year, startMonth + 3, 0);
+  return {
+    quarterKey: `${year}-Q${qNum}`,
+    startKey: toLocalDateKey(start),
+    endKey: toLocalDateKey(end),
+  };
+}
+
+export function getYearRange(yearKey: string): {
+  yearKey: string;
+  startKey: string;
+  endKey: string;
+} {
+  const yearNum = /^\d{4}$/.test((yearKey || '').trim())
+    ? Number(yearKey.trim())
+    : new Date().getFullYear();
+  return {
+    yearKey: String(yearNum),
+    startKey: `${yearNum}-01-01`,
+    endKey: `${yearNum}-12-31`,
+  };
+}
+
+const ARABIC_DAYS_BY_JS_DAY = [
+  'الأحد',
+  'الإثنين',
+  'الثلاثاء',
+  'الأربعاء',
+  'الخميس',
+  'الجمعة',
+  'السبت',
+];
+
+export function getDayArabicName(dateKey: string): string {
+  const d = parseLocalDateKey(dateKey);
+  return ARABIC_DAYS_BY_JS_DAY[d.getDay()] || '';
+}
+
+export function formatShortArabicDate(dateKey: string): string {
+  const d = parseLocalDateKey(dateKey);
+  try {
+    return d.toLocaleDateString('ar-EG', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return dateKey;
+  }
+}
 
 export const DEFAULT_HUB_CATEGORIES: Record<LearningHubId, string[]> = {
   marketing: DEFAULT_LEARNING_HUBS[0].defaultCategories,
@@ -2659,17 +2926,26 @@ export const WEEKLY_RHYTHM: WeeklyRhythmSlot[] = [
 // ============================================================================
 
 export function normalizeArabicDigits(input: string): string {
-  return (input || '').replace(/[٠-٩]/g, (ch) =>
-    String('٠١٢٣٤٥٦٧٨٩'.indexOf(ch))
-  );
+  return (input || '')
+    .replace(/[٠-٩]/g, (ch) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(ch)))
+    .replace(/[۰-۹]/g, (ch) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(ch)));
 }
 
 export function extractNaturalSortNumber(title: string): number | null {
   const normalized = normalizeArabicDigits(title);
-  const m = normalized.match(/(\d+)/);
-  if (m) {
-    const n = Number(m[1]);
-    return Number.isFinite(n) ? n : null;
+  // Prefer number next to lecture/lesson/session/unit/module/chapter keywords first
+  const labeledMatch = normalized.match(
+    /(?:lecture|lesson|module|session|part|ch(?:apter)?|unit|week|sec(?:tion)?|video|ep(?:isode)?|محاضرة|الدرس|درس|الحلقة|حلقة|الوحدة|وحدة|فصل|الفصل|جزء|الجزء|باب|الباب|أسبوع|الأسبوع|رقم)\s*[-:#.]*\s*(\d+)/i
+  );
+  if (labeledMatch) {
+    const n = Number(labeledMatch[1]);
+    if (Number.isFinite(n)) return n;
+  }
+  // Prefer leading number like "10. Intro" or "02 - ..."
+  const leadingMatch = normalized.match(/^\s*#?(\d+)(?:\s*[-.:)/]|\s|$)/);
+  if (leadingMatch) {
+    const n = Number(leadingMatch[1]);
+    if (Number.isFinite(n)) return n;
   }
   const ordinals: Array<[RegExp, number]> = [
     [/الأول|الاول|أولى|اولى/, 1],
@@ -2686,13 +2962,38 @@ export function extractNaturalSortNumber(title: string): number | null {
   for (const [rx, num] of ordinals) {
     if (rx.test(normalized)) return num;
   }
+  const allMatches = normalized.match(/(\d+)/g);
+  if (allMatches && allMatches.length > 0) {
+    // Use the last number when multiple numbers appear (e.g., "Course 2 - 10")
+    const n = Number(allMatches[allMatches.length - 1]);
+    return Number.isFinite(n) ? n : null;
+  }
   return null;
 }
 
 export function compareNaturalArabic(a: string, b: string): number {
   const na = normalizeArabicDigits(a).trim();
   const nb = normalizeArabicDigits(b).trim();
-  return na.localeCompare(nb, 'ar', { numeric: true, sensitivity: 'base' });
+  // Tokenize into alternating numeric & non-numeric chunks so "Lecture 2" < "Lecture 10" < "Lecture 20"
+  const tokenize = (s: string) => s.match(/(\d+|[^\d]+)/g) || [];
+  const ta = tokenize(na);
+  const tb = tokenize(nb);
+  const len = Math.min(ta.length, tb.length);
+  for (let i = 0; i < len; i += 1) {
+    const ca = ta[i];
+    const cb = tb[i];
+    const isNumA = /^\d+$/.test(ca);
+    const isNumB = /^\d+$/.test(cb);
+    if (isNumA && isNumB) {
+      const diff = Number(ca) - Number(cb);
+      if (diff !== 0) return diff;
+      if (ca.length !== cb.length) return ca.length - cb.length;
+    } else {
+      const cmp = ca.localeCompare(cb, 'ar', { numeric: true, sensitivity: 'base' });
+      if (cmp !== 0) return cmp;
+    }
+  }
+  return ta.length - tb.length;
 }
 
 export function sortCoursesList(
@@ -2730,22 +3031,24 @@ export function sortCoursesList(
   });
 }
 
+function compareNotesLogical(a: BookNote, b: BookNote): number {
+  const ta = (a.lectureTitle || a.bookTitle || '').trim();
+  const tb = (b.lectureTitle || b.bookTitle || '').trim();
+  const na = extractNaturalSortNumber(ta);
+  const nb = extractNaturalSortNumber(tb);
+  if (na !== null && nb !== null && na !== nb) return na - nb;
+  const cmp = compareNaturalArabic(ta, tb);
+  if (cmp !== 0) return cmp;
+  return (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0);
+}
+
 export function sortBookNotesList(
   items: BookNote[],
   mode: EntitySortMode
 ): BookNote[] {
   const list = [...items];
   if (mode === 'logical') {
-    return list.sort((a, b) => {
-      const ta = a.lectureTitle || a.bookTitle;
-      const tb = b.lectureTitle || b.bookTitle;
-      const na = extractNaturalSortNumber(ta);
-      const nb = extractNaturalSortNumber(tb);
-      if (na !== null && nb !== null && na !== nb) return na - nb;
-      if (na !== null && nb === null) return -1;
-      if (na === null && nb !== null) return 1;
-      return compareNaturalArabic(ta, tb);
-    });
+    return list.sort(compareNotesLogical);
   }
   if (mode === 'title') {
     return list.sort((a, b) =>
@@ -2755,12 +3058,12 @@ export function sortBookNotesList(
   if (mode === 'updated') {
     return list.sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0));
   }
-  // manual default: explicit sortOrder ascending, then fallback logical/created
+  // manual default: explicit non-zero sortOrder ascending, then logical natural order
   return list.sort((a, b) => {
     const oa = a.sortOrder ?? 0;
     const ob = b.sortOrder ?? 0;
     if (oa !== ob) return oa - ob;
-    return (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0);
+    return compareNotesLogical(a, b);
   });
 }
 

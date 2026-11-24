@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
   ArrowLeft,
+  BarChart3,
   BookOpen,
+  CalendarCheck2,
   CalendarDays,
   Check,
   CheckSquare,
@@ -24,6 +26,7 @@ import {
   Sparkles,
   Square,
   Tag,
+  Target,
   Trash2,
   X,
 } from 'lucide-react';
@@ -46,6 +49,7 @@ import {
   MonthPlan,
   PersonalCourse,
   PersonalReflection,
+  PinCollection,
   PracticalProject,
   QuarterInfo,
   ReadingLibraryItem,
@@ -55,9 +59,11 @@ import {
   UserPreferences,
   VoiceDialectMode,
   WeeklyMeeting,
+  WeeklyPlanRecord,
   WeeklyRhythmItem,
   getHubMeta,
   getReflectionCardStyle,
+  getSatFriWeekRange,
   getTodayDateKey,
   resolveCourseStudyStage,
   resolveLearningHubs,
@@ -74,6 +80,7 @@ import BidiText from './BidiText';
 import { FramedImage } from './FramedImage';
 import { ActiveTab } from './Header';
 import type { ActivePdfTarget } from './PDFViewerModal';
+import { PinCollectionsBar, isEntityInCollection } from './PinCollectionsBar';
 import ProgressCharts from './ProgressCharts';
 import ReflectionAudioPlayer from './ReflectionAudioPlayer';
 import TaskFormModal from './TaskFormModal';
@@ -139,6 +146,12 @@ interface OverviewViewProps {
   onDeleteReflection: (id: string) => void;
   onPreviewPublicSite?: () => void;
   onOpenPermissions?: () => void;
+  pinCollections?: PinCollection[];
+  activeFocusPinCollectionId?: string | null;
+  onSelectFocusPinCollection?: (id: string | null) => void;
+  onSavePinCollection?: (col: PinCollection) => void;
+  onDeletePinCollection?: (id: string) => void;
+  weeklyPlans?: WeeklyPlanRecord[];
 }
 
 const HOME_MOOD_OPTIONS: ReflectionMood[] = ['تأمل', 'فكرة', 'امتنان', 'هدف'];
@@ -173,6 +186,12 @@ export default function OverviewView({
   onAddReflection,
   onPreviewPublicSite,
   onOpenPermissions,
+  pinCollections = [],
+  activeFocusPinCollectionId = null,
+  onSelectFocusPinCollection,
+  onSavePinCollection,
+  onDeletePinCollection,
+  weeklyPlans = [],
 }: OverviewViewProps) {
   const [agendaFilter, setAgendaFilter] = useState<'all' | 'today_overdue'>('all');
   const [taskModalOpen, setTaskModalOpen] = useState(false);
@@ -283,11 +302,59 @@ export default function OverviewView({
     return Math.round((parts.reduce((a, b) => a + b, 0) / parts.length) * 100);
   }, [learningPaths, courses, unifiedTasks]);
 
+  const activeFocusCollection = useMemo(
+    () =>
+      activeFocusPinCollectionId
+        ? pinCollections.find((c) => c.id === activeFocusPinCollectionId) ?? null
+        : null,
+    [pinCollections, activeFocusPinCollectionId]
+  );
+
+  const currentSatFriWeek = useMemo(() => getSatFriWeekRange(today), [today]);
+
+  const activeWeeklyPlan = useMemo(
+    () =>
+      weeklyPlans.find(
+        (wp) =>
+          wp.weekKey === currentSatFriWeek.weekKey ||
+          wp.weekStartKey === currentSatFriWeek.startKey
+      ) ?? null,
+    [weeklyPlans, currentSatFriWeek]
+  );
+
+  const todayProgressStats = useMemo(() => {
+    const todayTasks = unifiedTasks.filter((t) => {
+      const dt = t.scheduledDate || t.dueDate || '';
+      return dt === today;
+    });
+    const doneToday = todayTasks.filter((t) => t.status === 'done').length;
+    const activeWeekTasksCount = activeWeeklyPlan
+      ? activeWeeklyPlan.linkedTaskIds.length
+      : 0;
+    const weeklyGoalsDone = activeWeeklyPlan
+      ? activeWeeklyPlan.goals.filter((g) => g.done).length
+      : 0;
+    const weeklyGoalsTotal = activeWeeklyPlan ? activeWeeklyPlan.goals.length : 0;
+    return {
+      todayTasksTotal: todayTasks.length,
+      todayTasksDone: doneToday,
+      activeWeekTasksCount,
+      weeklyGoalsDone,
+      weeklyGoalsTotal,
+    };
+  }, [unifiedTasks, today, activeWeeklyPlan]);
+
   const activeTasksList = useMemo(() => {
     const priOrder = { high: 0, medium: 1, low: 2 };
     return unifiedTasks
       .filter((t) => {
         if (t.status === 'done') return false;
+        if (
+          activeFocusCollection &&
+          !isEntityInCollection(activeFocusCollection, 'task', t.id)
+        ) {
+          return false;
+        }
         if (agendaFilter === 'today_overdue') {
           const targetDate = t.scheduledDate || t.dueDate || '';
           return (
@@ -304,8 +371,8 @@ export default function OverviewView({
         if (da !== db) return da.localeCompare(db);
         return priOrder[a.priority] - priOrder[b.priority];
       })
-      .slice(0, 7);
-  }, [unifiedTasks, agendaFilter, today]);
+      .slice(0, 25);
+  }, [unifiedTasks, agendaFilter, today, activeFocusCollection]);
 
   const latestReflections = useMemo(() => {
     const filtered =
@@ -538,6 +605,42 @@ export default function OverviewView({
 
               <button
                 type="button"
+                onClick={() => onNavigateTab('daily_journal')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-semibold text-[#1E3A5F] bg-[#F7F8FA] border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <CalendarCheck2
+                  className="w-4 h-4 text-[#1E3A5F]"
+                  aria-hidden="true"
+                />
+                <span>اليوميات التلقائية</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigateTab('weekly_plan')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-medium text-slate-700 bg-[#F7F8FA] border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <Target
+                  className="w-4 h-4 text-[#1E3A5F]"
+                  aria-hidden="true"
+                />
+                <span>تخطيط الأسبوع</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigateTab('reviews')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-medium text-slate-700 bg-[#F7F8FA] border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <BarChart3
+                  className="w-4 h-4 text-[#1E3A5F]"
+                  aria-hidden="true"
+                />
+                <span>المراجعات الدورية</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => onNavigateTab('journal')}
                 className="inline-flex items-center gap-1.5 px-4 py-2.5 min-h-[40px] text-xs sm:text-sm font-medium text-slate-700 bg-[#F7F8FA] border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors cursor-pointer"
               >
@@ -607,6 +710,67 @@ export default function OverviewView({
               className="w-full"
             />
           </div>
+        </div>
+      </section>
+
+      {/* Daily Progress, Weekly Focus (Sat-Fri) & Saved Pin Collections */}
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+        <div className="lg:col-span-5 bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 flex flex-col justify-between gap-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <CalendarCheck2 className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+              <h2 className="text-sm font-bold text-slate-900">
+                تقدّم اليوم وتركيز الأسبوع
+              </h2>
+            </div>
+            <span className="text-[11px] text-slate-500 tabular-nums" dir="ltr">
+              {currentSatFriWeek.startKey} → {currentSatFriWeek.endKey}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5 text-xs">
+            <button
+              type="button"
+              onClick={() => onNavigateTab('daily_journal')}
+              className="text-right p-3 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200/80 transition-colors cursor-pointer space-y-1"
+            >
+              <p className="text-[11px] text-slate-500">إنجاز مهام اليوم</p>
+              <p className="text-base font-bold text-[#1E3A5F] tabular-nums">
+                {todayProgressStats.todayTasksDone} / {todayProgressStats.todayTasksTotal}
+              </p>
+              <p className="text-[11px] font-medium text-[#1E3A5F]">
+                فتح يومية اليوم ←
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onNavigateTab('weekly_plan')}
+              className="text-right p-3 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200/80 transition-colors cursor-pointer space-y-1"
+            >
+              <p className="text-[11px] text-slate-500">خطة الأسبوع (سبت ← جمعة)</p>
+              <p className="text-base font-bold text-slate-900 tabular-nums">
+                {activeWeeklyPlan
+                  ? `${todayProgressStats.activeWeekTasksCount} مهمة · ${todayProgressStats.weeklyGoalsDone}/${todayProgressStats.weeklyGoalsTotal} أهداف`
+                  : `${focusCoursesCount} كورسات تركيز`}
+              </p>
+              <p className="text-[11px] font-medium text-[#1E3A5F]">
+                {activeWeeklyPlan ? 'عرض التخطيط الأسبوعي ←' : 'تخطيط هذا الأسبوع ←'}
+              </p>
+            </button>
+          </div>
+        </div>
+
+        <div className="lg:col-span-7 bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 flex flex-col justify-center">
+          <PinCollectionsBar
+            collections={pinCollections}
+            activeCollectionId={activeFocusPinCollectionId ?? null}
+            onSelectCollection={(id) => onSelectFocusPinCollection?.(id)}
+            canEdit={canEdit}
+            onSaveCollection={(col) => onSavePinCollection?.(col)}
+            onDeleteCollection={(id) => onDeletePinCollection?.(id)}
+            compact
+          />
         </div>
       </section>
 
@@ -807,10 +971,12 @@ export default function OverviewView({
 
           {activeTasksList.length === 0 ? (
             <div className="p-6 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center text-xs text-slate-500">
-              لا توجد مهام نشطة في هذا العرض حاليًا.
+              {activeFocusCollection
+                ? `لا توجد مهام نشطة ضمن قائمة التركيز «${activeFocusCollection.title}».`
+                : 'لا توجد مهام نشطة في هذا العرض حاليًا.'}
             </div>
           ) : (
-            <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl bg-[#F7F8FA]/50 overflow-hidden">
+            <div className="max-h-[330px] overflow-y-auto thin-scrollbar divide-y divide-slate-100 border border-slate-200 rounded-xl bg-[#F7F8FA]/50">
               {activeTasksList.map((t) => {
                 const tDate = t.scheduledDate || t.dueDate || '';
                 const isOverdue = Boolean(tDate && tDate < today);

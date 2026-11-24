@@ -43,6 +43,8 @@ import {
   MonthPlan,
   NoteCategoryType,
   PersonalCourse,
+  PinCollection,
+  PinEntityType,
   PracticalProject,
   ReadingLibraryItem,
   StudyResource,
@@ -86,6 +88,7 @@ import ImageAttachmentGallery from './ImageAttachmentGallery';
 import LearningObjectivesPanel from './LearningObjectivesPanel';
 import NoteAttachmentsPanel from './NoteAttachmentsPanel';
 import type { ActivePdfTarget } from './PDFViewerModal';
+import { PinEntityButton } from './PinCollectionsBar';
 import ReadAloudButton from './ReadAloudButton';
 import RichTextNoteEditor from './RichTextNoteEditor';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
@@ -163,6 +166,9 @@ interface CourseDetailPageProps {
   onUpdateUnifiedTask: (id: string, updates: Partial<UnifiedTask>) => void;
   onAddUnifiedTask: (payload: Omit<UnifiedTask, 'id'>) => void;
   onDeleteUnifiedTask?: (taskId: string) => void;
+  pinCollections?: PinCollection[];
+  onTogglePinEntity?: (collectionId: string, entityType: PinEntityType, entityId: string) => void;
+  onQuickCreatePinCollection?: (title: string, entityType: PinEntityType, entityId: string) => void;
 }
 
 export default function CourseDetailPage({
@@ -204,6 +210,9 @@ export default function CourseDetailPage({
   onUpdateUnifiedTask,
   onAddUnifiedTask,
   onDeleteUnifiedTask,
+  pinCollections = [],
+  onTogglePinEntity,
+  onQuickCreatePinCollection,
 }: CourseDetailPageProps) {
   const noteLayout = getNoteLayoutClasses(preferences);
   const [sectionFocus, setSectionFocus] = useState<CourseSectionFocus>('all');
@@ -283,8 +292,8 @@ export default function CourseDetailPage({
     null
   );
 
-  // Course Notes (in-page structured notes management + sorting)
-  const [notesSortMode, setNotesSortMode] = useState<EntitySortMode>('manual');
+  // Course Notes (in-page structured notes management + natural logical sorting)
+  const [notesSortMode, setNotesSortMode] = useState<EntitySortMode>('logical');
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [isEditingNote, setIsEditingNote] = useState(false);
   const [noteDraft, setNoteDraft] = useState<{
@@ -758,6 +767,17 @@ export default function CourseDetailPage({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end shrink-0">
+          {onTogglePinEntity && (
+            <PinEntityButton
+              entityType="course"
+              entityId={String(course.id)}
+              collections={pinCollections}
+              canEdit={canEdit}
+              onToggleItemInCollection={onTogglePinEntity}
+              onQuickCreateCollection={onQuickCreatePinCollection}
+              size="sm"
+            />
+          )}
           {canEdit && (
             <>
               <button
@@ -1642,7 +1662,7 @@ export default function CourseDetailPage({
                 onChange={(e) => void handleReplaceCourseResourceFile(e)}
               />
 
-              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl bg-slate-50/40">
+              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl bg-slate-50/40 max-h-[380px] overflow-y-auto thin-scrollbar">
                 {course.resources.length === 0 ? (
                   <p className="p-4 text-xs text-slate-500">
                     لا توجد مصادر أو ملفات PDF أو Word مضافة لهذا الكورس بعد.
@@ -1968,7 +1988,7 @@ export default function CourseDetailPage({
                   </div>
                 )}
 
-                <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden">
+                <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl max-h-[340px] sm:max-h-[380px] overflow-y-auto thin-scrollbar">
                   {course.tasks.length === 0 ? (
                     <p className="p-4 text-xs text-slate-500">
                       لا توجد مهام مضافة بعد. أضف أول مهمة عملية للكورس.
@@ -2337,7 +2357,7 @@ export default function CourseDetailPage({
                 )}
 
                 {linkedUnifiedTasks.length > 0 ? (
-                  <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl max-h-[340px] sm:max-h-[380px] overflow-y-auto thin-scrollbar">
                     {linkedUnifiedTasks.map((ut) => {
                       const isDone = ut.status === 'done';
                       const utSchedDate = ut.scheduledDate || ut.dueDate || '';
@@ -2784,7 +2804,7 @@ export default function CourseDetailPage({
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
               {/* Course Notes List Sidebar */}
-              <div className="lg:col-span-4 space-y-2">
+              <div className="lg:col-span-4 space-y-2 max-h-[460px] overflow-y-auto thin-scrollbar pl-0.5">
                 {sortedCourseNotes.map((bn, idx) => {
                   const isSelected = activeNote?.id === bn.id;
                   const snippet = richHtmlToPlainText(bn.content).slice(0, 90);

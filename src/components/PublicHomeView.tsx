@@ -42,11 +42,13 @@ import {
   estimateReadingTimeMinutes,
   getHubMeta,
   getReflectionCardStyle,
+  sortBookNotesList,
 } from '../data/curriculumData';
 import type { UserProfileRecord } from '../services/supabaseSync';
 import { ensureRichHtml, renderSafeBidiHtml } from '../utils/richText';
 import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
+import ContactUsSection from './ContactUsSection';
 import { FramedImage } from './FramedImage';
 import LearningObjectivesPanel from './LearningObjectivesPanel';
 import type { ActivePdfTarget } from './PDFViewerModal';
@@ -134,12 +136,20 @@ export default function PublicHomeView({
   const [blogSearch, setBlogSearch] = useState('');
   const [blogCatFilter, setBlogCatFilter] = useState<string>('all');
 
+  // Granted workspace dedicated sub-tabs & filters (preserved across tab switches)
+  const [grantedTab, setGrantedTab] = useState<'overview' | 'courses' | 'notes'>('overview');
+  const [grantedNotesSearch, setGrantedNotesSearch] = useState('');
+  const [grantedNotesCourseFilter, setGrantedNotesCourseFilter] = useState<string>('all');
+
   const flags = siteConfig.visibilityFlags;
   const visibleSections = siteConfig.sections.filter((s) => s.visible);
   const effectiveOwnerUid = siteConfig.ownerId || user?.uid;
 
   const grantedCourses = grantedWorkspace?.courses ?? [];
-  const grantedNotes = grantedWorkspace?.bookNotes ?? [];
+  const grantedNotes = useMemo(
+    () => sortBookNotesList(grantedWorkspace?.bookNotes ?? [], 'logical'),
+    [grantedWorkspace?.bookNotes]
+  );
   const grantedPaths = grantedWorkspace?.learningPaths ?? [];
   const grantedBooks = grantedWorkspace?.readingItems ?? [];
   const grantedReflections = grantedWorkspace?.reflections ?? [];
@@ -159,17 +169,52 @@ export default function PublicHomeView({
     grantedBlogs.length +
     customAdditions.length;
 
+  const filteredGrantedNotes = useMemo(() => {
+    const q = grantedNotesSearch.trim().toLowerCase();
+    return grantedNotes.filter((bn) => {
+      if (
+        grantedNotesCourseFilter !== 'all' &&
+        String(bn.courseId || bn.courseTitle || 'general') !== grantedNotesCourseFilter
+      ) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        bn.bookTitle.toLowerCase().includes(q) ||
+        (bn.courseTitle || '').toLowerCase().includes(q) ||
+        (bn.author || '').toLowerCase().includes(q) ||
+        bn.content.toLowerCase().includes(q)
+      );
+    });
+  }, [grantedNotes, grantedNotesSearch, grantedNotesCourseFilter]);
+
+  const grantedNotesCourseOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const bn of grantedNotes) {
+      const key = String(bn.courseId || bn.courseTitle || 'general');
+      const label =
+        bn.courseTitle ||
+        grantedCourses.find((c) => c.id === bn.courseId)?.title ||
+        'ملخصات وملاحظات عامة';
+      if (!map.has(key)) map.set(key, label);
+    }
+    return Array.from(map.entries());
+  }, [grantedNotes, grantedCourses]);
+
   const adminNotesForUser = (grantedWorkspace?.grants ?? [])
     .map((g) => g.notesForUser.trim())
     .filter(Boolean)
     .join(' · ');
 
   const openCourseModal = (course: PersonalCourse) => {
-    const matchingNotes = grantedNotes.filter(
-      (n) =>
-        n.courseId === course.id ||
-        (Boolean(n.courseTitle) &&
-          n.courseTitle!.trim().toLowerCase() === course.title.trim().toLowerCase())
+    const matchingNotes = sortBookNotesList(
+      grantedNotes.filter(
+        (n) =>
+          n.courseId === course.id ||
+          (Boolean(n.courseTitle) &&
+            n.courseTitle!.trim().toLowerCase() === course.title.trim().toLowerCase())
+      ),
+      'logical'
     );
     setGrantedNoteDraft('');
     setGrantedNoteError(null);
@@ -458,8 +503,45 @@ export default function PublicHomeView({
                 )}
               </div>
 
+              {/* Dedicated Sub-Tabs for Granted Content (state & filters preserved) */}
+              <div className="flex flex-wrap items-center gap-1.5 p-1 bg-[#F7F8FA] border border-slate-200 rounded-xl w-fit max-w-full">
+                <button
+                  type="button"
+                  onClick={() => setGrantedTab('overview')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-colors ${
+                    grantedTab === 'overview'
+                      ? 'bg-[#1E3A5F] text-white'
+                      : 'text-slate-600 hover:bg-white'
+                  }`}
+                >
+                  نظرة عامة ({totalGrantedCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGrantedTab('courses')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-colors ${
+                    grantedTab === 'courses'
+                      ? 'bg-[#1E3A5F] text-white'
+                      : 'text-slate-600 hover:bg-white'
+                  }`}
+                >
+                  الكورسات المخصّصة ({grantedCourses.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGrantedTab('notes')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg cursor-pointer transition-colors ${
+                    grantedTab === 'notes'
+                      ? 'bg-[#1E3A5F] text-white'
+                      : 'text-slate-600 hover:bg-white'
+                  }`}
+                >
+                  التلخيصات والملاحظات ({grantedNotes.length})
+                </button>
+              </div>
+
               {/* Admin Custom Addition / Tailored Assignment for This Account */}
-              {customAdditions.length > 0 && (
+              {grantedTab === 'overview' && customAdditions.length > 0 && (
                 <div className="space-y-2.5">
                   {customAdditions.map((g) => (
                     <div
@@ -484,74 +566,167 @@ export default function PublicHomeView({
                 </div>
               )}
 
-              {grantedCourses.length > 0 && (
-                <div className="space-y-3">
-                  <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                    <GraduationCap
-                      className="w-4 h-4 text-[#1E3A5F]"
-                      aria-hidden="true"
-                    />
-                    <span>كورسات مخصّصة لك ({grantedCourses.length})</span>
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                    {grantedCourses.map((course) => {
-                      const hub = getHubMeta(course.hubId);
-                      return (
-                        <article
-                          key={course.docId || course.id}
-                          onClick={() => openCourseModal(course)}
-                          className="p-4 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 space-y-2 cursor-pointer transition-colors"
+              {(grantedTab === 'overview' || grantedTab === 'courses') && (
+                grantedCourses.length > 0 ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                        <GraduationCap
+                          className="w-4 h-4 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
+                        <span>كورسات مخصّصة لك ({grantedCourses.length})</span>
+                      </h3>
+                      {grantedTab === 'overview' && grantedCourses.length > 3 && (
+                        <button
+                          type="button"
+                          onClick={() => setGrantedTab('courses')}
+                          className="text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
                         >
-                          <p className="text-[11px] font-semibold text-[#1E3A5F]">
-                            {hub.title} · {course.category}
-                          </p>
-                          <h4 className="font-editorial text-base font-bold text-slate-900">
-                            {course.title}
-                          </h4>
-                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#1E3A5F]">
-                            <span>عرض الكورس وتلخيصاته</span>
-                            <ArrowLeft className="w-3 h-3" aria-hidden="true" />
-                          </span>
-                        </article>
-                      );
-                    })}
+                          عرض الكل في تبويب الكورسات ←
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                      {(grantedTab === 'overview'
+                        ? grantedCourses.slice(0, 6)
+                        : grantedCourses
+                      ).map((course) => {
+                        const hub = getHubMeta(course.hubId);
+                        const linkedCount = grantedNotes.filter(
+                          (n) =>
+                            n.courseId === course.id ||
+                            (Boolean(n.courseTitle) &&
+                              n.courseTitle!.trim().toLowerCase() ===
+                                course.title.trim().toLowerCase())
+                        ).length;
+                        return (
+                          <article
+                            key={course.docId || course.id}
+                            onClick={() => openCourseModal(course)}
+                            className="p-4 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 space-y-2 cursor-pointer transition-colors"
+                          >
+                            <div className="flex items-center justify-between gap-2 text-[11px]">
+                              <span className="font-semibold text-[#1E3A5F]">
+                                {hub.title} · {course.category}
+                              </span>
+                              {linkedCount > 0 && (
+                                <span className="text-slate-500 tabular-nums">
+                                  {linkedCount} ملخص
+                                </span>
+                              )}
+                            </div>
+                            <h4 className="font-editorial text-base font-bold text-slate-900">
+                              {course.title}
+                            </h4>
+                            <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#1E3A5F]">
+                              <span>عرض الكورس وتلخيصاته</span>
+                              <ArrowLeft className="w-3 h-3" aria-hidden="true" />
+                            </span>
+                          </article>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                ) : grantedTab === 'courses' ? (
+                  <p className="text-xs text-slate-500 py-4 text-center">
+                    لا توجد كورسات مخصّصة لحسابك حاليًا.
+                  </p>
+                ) : null
               )}
 
-              {grantedNotes.length > 0 && (
-                <div className="space-y-3">
-                  <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                    <NotebookPen
-                      className="w-4 h-4 text-[#1E3A5F]"
-                      aria-hidden="true"
-                    />
-                    <span>تلخيصات وملاحظات مخصّصة لك ({grantedNotes.length})</span>
-                  </h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-                    {grantedNotes.map((bn) => (
-                      <article
-                        key={bn.id}
-                        onClick={() => setDetailModal({ type: 'note', item: bn })}
-                        className="p-4 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 space-y-1.5 cursor-pointer transition-colors"
-                      >
-                        <p className="text-[11px] text-slate-500 truncate">
-                          {bn.courseTitle || bn.author || 'تلخيص وملاحظة'}
-                        </p>
-                        <h4 className="font-editorial text-base font-bold text-slate-900 line-clamp-1">
-                          <BidiText text={bn.bookTitle} />
-                        </h4>
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#1E3A5F]">
-                          <span>قراءة الملخص والمرفقات</span>
-                          <ArrowLeft className="w-3 h-3" aria-hidden="true" />
-                        </span>
-                      </article>
-                    ))}
+              {(grantedTab === 'overview' || grantedTab === 'notes') && (
+                grantedNotes.length > 0 ? (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                        <NotebookPen
+                          className="w-4 h-4 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
+                        <span>تلخيصات وملاحظات مخصّصة لك ({grantedNotes.length})</span>
+                      </h3>
+                      {grantedTab === 'overview' && grantedNotes.length > 6 && (
+                        <button
+                          type="button"
+                          onClick={() => setGrantedTab('notes')}
+                          className="text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                        >
+                          تصفح كل التلخيصات مرتبة ({grantedNotes.length}) ←
+                        </button>
+                      )}
+                    </div>
+
+                    {grantedTab === 'notes' && (
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <div className="relative flex-1 min-w-[200px]">
+                          <Search
+                            className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                            aria-hidden="true"
+                          />
+                          <input
+                            type="text"
+                            value={grantedNotesSearch}
+                            onChange={(e) => setGrantedNotesSearch(e.target.value)}
+                            placeholder="ابحث داخل التلخيصات المخصّصة..."
+                            className="w-full pr-8 pl-3 py-1.5 text-xs bg-[#F7F8FA] border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+                          />
+                        </div>
+                        {grantedNotesCourseOptions.length > 1 && (
+                          <select
+                            value={grantedNotesCourseFilter}
+                            onChange={(e) => setGrantedNotesCourseFilter(e.target.value)}
+                            className="px-3 py-1.5 text-xs bg-[#F7F8FA] border border-slate-200 rounded-xl"
+                          >
+                            <option value="all">كل الكورسات والمصادر</option>
+                            {grantedNotesCourseOptions.map(([val, lbl]) => (
+                              <option key={val} value={val}>
+                                {lbl}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="max-h-[460px] overflow-y-auto thin-scrollbar pr-0.5">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                        {(grantedTab === 'overview'
+                          ? grantedNotes.slice(0, 6)
+                          : filteredGrantedNotes
+                        ).map((bn) => (
+                          <article
+                            key={bn.id}
+                            onClick={() => {
+                              setGrantedNoteDraft('');
+                              setGrantedNoteError(null);
+                              setDetailModal({ type: 'note', item: bn });
+                            }}
+                            className="p-4 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 space-y-1.5 cursor-pointer transition-colors"
+                          >
+                            <p className="text-[11px] text-slate-500 truncate">
+                              {bn.courseTitle || bn.author || 'تلخيص وملاحظة'}
+                            </p>
+                            <h4 className="font-editorial text-base font-bold text-slate-900 line-clamp-1">
+                              <BidiText text={bn.bookTitle} />
+                            </h4>
+                            <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#1E3A5F]">
+                              <span>قراءة الملخص والمرفقات</span>
+                              <ArrowLeft className="w-3 h-3" aria-hidden="true" />
+                            </span>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ) : grantedTab === 'notes' ? (
+                  <p className="text-xs text-slate-500 py-4 text-center">
+                    لا توجد تلخيصات مخصّصة لحسابك حاليًا.
+                  </p>
+                ) : null
               )}
 
-              {(grantedPaths.length > 0 || grantedBooks.length > 0) && (
+              {grantedTab === 'overview' && (grantedPaths.length > 0 || grantedBooks.length > 0) && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {grantedPaths.length > 0 && (
                     <div className="space-y-2.5">
@@ -615,7 +790,7 @@ export default function PublicHomeView({
                 </div>
               )}
 
-              {grantedReflections.length > 0 && (
+              {grantedTab === 'overview' && grantedReflections.length > 0 && (
                 <div className="space-y-3">
                   <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
                     <Feather
@@ -667,7 +842,7 @@ export default function PublicHomeView({
                 </div>
               )}
 
-              {grantedBlogs.length > 0 && (
+              {grantedTab === 'overview' && grantedBlogs.length > 0 && (
                 <div className="space-y-3">
                   <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
                     <BookOpenText
@@ -1108,6 +1283,12 @@ export default function PublicHomeView({
               </div>
             </section>
           )}
+          {/* Contact Us Section */}
+          <ContactUsSection
+            siteConfig={siteConfig}
+            defaultName={user?.displayName || ''}
+            defaultEmail={user?.email || ''}
+          />
         </>
       )}
 

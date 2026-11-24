@@ -304,6 +304,7 @@ export default function TaskFormModal({
               >
                 <option value="todo">للتنفيذ</option>
                 <option value="in_progress">قيد العمل</option>
+                <option value="postponed">مؤجّلة</option>
                 <option value="done">منجزة</option>
               </select>
             </div>

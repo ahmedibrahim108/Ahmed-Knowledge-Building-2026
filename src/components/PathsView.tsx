@@ -22,6 +22,8 @@ import {
   LearningPathStage,
   LearningPathStatus,
   PersonalCourse,
+  PinCollection,
+  PinEntityType,
   PracticalProject,
   ReadingLibraryItem,
   ReadingModeMeta,
@@ -35,6 +37,11 @@ import {
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import LearningObjectivesPanel from './LearningObjectivesPanel';
+import {
+  PinCollectionsBar,
+  PinEntityButton,
+  isEntityInCollection,
+} from './PinCollectionsBar';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
 import TaskFormModal from './TaskFormModal';
 
@@ -63,6 +70,13 @@ interface PathsViewProps {
   onOpenTasks?: () => void;
   customReadingModes?: ReadingModeMeta[];
   onUpdateReadingModes?: (nextModes: ReadingModeMeta[]) => void;
+  pinCollections?: PinCollection[];
+  activeFocusPinCollectionId?: string | null;
+  onSelectFocusPinCollection?: (id: string | null) => void;
+  onSavePinCollection?: (col: PinCollection) => void;
+  onDeletePinCollection?: (id: string) => void;
+  onTogglePinEntity?: (collectionId: string, entityType: PinEntityType, entityId: string) => void;
+  onQuickCreatePinCollection?: (title: string, entityType: PinEntityType, entityId: string) => void;
 }
 
 const STATUS_LABELS: Record<LearningPathStatus, string> = {
@@ -94,6 +108,13 @@ export default function PathsView({
   onOpenTasks,
   customReadingModes,
   onUpdateReadingModes,
+  pinCollections = [],
+  activeFocusPinCollectionId = null,
+  onSelectFocusPinCollection,
+  onSavePinCollection,
+  onDeletePinCollection,
+  onTogglePinEntity,
+  onQuickCreatePinCollection,
 }: PathsViewProps) {
   const [selectedPathId, setSelectedPathId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -130,13 +151,24 @@ export default function PathsView({
   const [expectedDate, setExpectedDate] = useState('');
   const [newStageInput, setNewStageInput] = useState('');
 
+  const activePinCollection = useMemo(
+    () =>
+      activeFocusPinCollectionId
+        ? pinCollections.find((c) => c.id === activeFocusPinCollectionId) || null
+        : null,
+    [pinCollections, activeFocusPinCollectionId]
+  );
+
   const filteredPaths = useMemo(() => {
-    const base =
-      activeHubFilter === 'all'
-        ? paths
-        : paths.filter((p) => p.hubId === activeHubFilter);
+    const base = paths.filter((p) => {
+      if (activeHubFilter !== 'all' && p.hubId !== activeHubFilter) return false;
+      if (activePinCollection && !isEntityInCollection(activePinCollection, 'path', p.id)) {
+        return false;
+      }
+      return true;
+    });
     return sortLearningPathsList(base, sortMode);
-  }, [paths, activeHubFilter, sortMode]);
+  }, [paths, activeHubFilter, activePinCollection, sortMode]);
 
   const handleMovePathOrder = (pathId: string, dir: -1 | 1) => {
     if (!canEdit) {
@@ -387,8 +419,21 @@ export default function PathsView({
             <span>العودة إلى المسارات التعليمية</span>
           </button>
 
-          {canEdit && (
+          {(canEdit || onTogglePinEntity) && (
             <div className="flex flex-wrap items-center gap-2">
+              {onTogglePinEntity && (
+                <PinEntityButton
+                  entityType="path"
+                  entityId={selectedPath.id}
+                  collections={pinCollections}
+                  canEdit={canEdit}
+                  onToggleItemInCollection={onTogglePinEntity}
+                  onQuickCreateCollection={onQuickCreatePinCollection}
+                  size="sm"
+                />
+              )}
+              {canEdit && (
+                <>
               <button
                 type="button"
                 onClick={() =>
@@ -427,6 +472,8 @@ export default function PathsView({
                 <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>حذف المسار</span>
               </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -1160,6 +1207,19 @@ export default function PathsView({
         </label>
       </div>
 
+      {onSelectFocusPinCollection && onSavePinCollection && onDeletePinCollection && (
+        <PinCollectionsBar
+          collections={pinCollections}
+          activeCollectionId={activeFocusPinCollectionId}
+          onSelectCollection={onSelectFocusPinCollection}
+          canEdit={canEdit}
+          onSaveCollection={onSavePinCollection}
+          onDeleteCollection={onDeletePinCollection}
+          filterEntityType="path"
+          compact
+        />
+      )}
+
       {showAddForm && canEdit && (
         <form
           onSubmit={handleCreate}
@@ -1371,40 +1431,52 @@ export default function PathsView({
                     >
                       فتح المسار والمراحل ←
                     </button>
-                    {canEdit && (
-                      <div className="flex items-center gap-1">
-                        {sortMode === 'manual' && (
-                          <>
-                            <button
-                              type="button"
-                              disabled={pathIdx === 0}
-                              onClick={() => handleMovePathOrder(path.id, -1)}
-                              aria-label="تقديم المسار"
-                              className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
-                            >
-                              <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
-                            </button>
-                            <button
-                              type="button"
-                              disabled={pathIdx === filteredPaths.length - 1}
-                              onClick={() => handleMovePathOrder(path.id, 1)}
-                              aria-label="تأخير المسار"
-                              className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
-                            >
-                              <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
-                            </button>
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeletePath(path)}
-                          aria-label={`حذف ${path.title}`}
-                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-md cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                      </div>
-                    )}
+                    <div className="flex items-center gap-1">
+                      {onTogglePinEntity && (
+                        <PinEntityButton
+                          entityType="path"
+                          entityId={path.id}
+                          collections={pinCollections}
+                          canEdit={canEdit}
+                          onToggleItemInCollection={onTogglePinEntity}
+                          onQuickCreateCollection={onQuickCreatePinCollection}
+                        />
+                      )}
+                      {canEdit && (
+                        <>
+                          {sortMode === 'manual' && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={pathIdx === 0}
+                                onClick={() => handleMovePathOrder(path.id, -1)}
+                                aria-label="تقديم المسار"
+                                className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={pathIdx === filteredPaths.length - 1}
+                                onClick={() => handleMovePathOrder(path.id, 1)}
+                                aria-label="تأخير المسار"
+                                className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
+                              </button>
+                            </>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeletePath(path)}
+                            aria-label={`حذف ${path.title}`}
+                            className="p-1.5 text-slate-400 hover:text-red-600 rounded-md cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
               </article>
