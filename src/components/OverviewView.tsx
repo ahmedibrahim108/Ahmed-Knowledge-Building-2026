@@ -82,6 +82,7 @@ import { ActiveTab } from './Header';
 import type { ActivePdfTarget } from './PDFViewerModal';
 import { PinCollectionsBar, isEntityInCollection } from './PinCollectionsBar';
 import ProgressCharts from './ProgressCharts';
+import QuickDropSection from './QuickDropSection';
 import ReflectionAudioPlayer from './ReflectionAudioPlayer';
 import TaskFormModal from './TaskFormModal';
 import VoiceRecorderButton from './VoiceRecorderButton';
@@ -1674,6 +1675,13 @@ export default function OverviewView({
           }}
         />
       </section>
+
+      {/* Quick Drop — Cross-Device Temporary Sharing Inbox (Last Dashboard Section) */}
+      <QuickDropSection
+        uid={user?.uid}
+        canEdit={canEdit}
+        onRequireAuth={onRequireAuth}
+      />
 
       {/* Hub Create / Edit Modal */}
       {hubModalMode && (

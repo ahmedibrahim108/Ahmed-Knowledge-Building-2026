@@ -93,12 +93,16 @@ import {
   updateUserProfileAccess,
   upsertContentAccessGrant,
 } from '../services/supabaseSync';
+import {
+  isPending016Migration,
+} from '../services/quickDropSync';
 import { exportPlanToExcel } from '../utils/excelExport';
 import AutoResizeTextarea from './AutoResizeTextarea';
 import ConfirmDialog from './ConfirmDialog';
 import DomainsView from './DomainsView';
 import { ActiveTab } from './Header';
 import type { ActivePdfTarget } from './PDFViewerModal';
+import QuickDropSection from './QuickDropSection';
 import TwelveMonthPlanView from './TwelveMonthPlanView';
 import ThemeSettingsPanel from './ThemeSettingsPanel';
 import WeeklyMeetingsPanel from './WeeklyMeetingsPanel';
@@ -766,6 +770,12 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
         </div>
 
         <ThemeSettingsPanel
+          canEdit={Boolean(props.uid)}
+          onRequireAuth={props.onRequireAuth}
+        />
+
+        <QuickDropSection
+          uid={props.uid}
           canEdit={Boolean(props.uid)}
           onRequireAuth={props.onRequireAuth}
         />
@@ -3259,6 +3269,17 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                     015_user_theme_preferences_rls.sql
                   </code>{' '}
                   في محرر SQL بلوحة Supabase لتمكين جميع الحسابات المسجّلة (غير المسؤولين) من حفظ ومزامنة تفضيلات المظهر والثيمات الخاصة بكل حساب عبر الأجهزة بأمان.
+                </div>
+              )}
+
+              {isPending016Migration() && (
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                  يرجى تشغيل ملف التحديث{' '}
+                  <code className="font-mono font-bold">
+                    016_quick_drop_items.sql
+                  </code>{' '}
+                  في محرر SQL بلوحة Supabase لإنشاء جدول{' '}
+                  <code className="font-mono">quick_drop_items</code> وتفعيل المزامنة الفورية بين الأجهزة والأرشفة التلقائية بعد 24 ساعة.
                 </div>
               )}
 
