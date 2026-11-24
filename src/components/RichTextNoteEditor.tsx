@@ -1951,6 +1951,7 @@ export default function RichTextNoteEditor({
 
       {/* Editable Rich Canvas */}
       <div
+        data-custom-card-surface={layout.paperTone !== 'clean' ? 'light' : undefined}
         className={`relative rounded-b-xl overflow-x-auto transition-all ${layout.paperToneClass}`}
         onClick={() => {
           if (!canEdit) onRequireAuth?.();

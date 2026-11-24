@@ -127,6 +127,7 @@ import {
   buildAdminSearchIndex,
   buildPublicSearchIndex,
 } from './utils/searchEngine';
+import { ThemeProvider } from './utils/ThemeContext';
 import {
   CloudAttachmentItem,
   PublicCatalogData,
@@ -401,7 +402,7 @@ export default function App() {
   const [backStack, setBackStack] = useState<NavStepSnapshot[]>([]);
   const [forwardStack, setForwardStack] = useState<NavStepSnapshot[]>([]);
   const [accountInitialSubTab, setAccountInitialSubTab] = useState<
-    'workspace' | 'users' | undefined
+    'workspace' | 'appearance' | 'users' | undefined
   >(undefined);
   const [activePdfTarget, setActivePdfTarget] =
     useState<ActivePdfTarget | null>(null);
@@ -3506,8 +3507,22 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F7F8FA] text-slate-900">
-      <Header
+    <ThemeProvider
+      userUid={user?.uid}
+      syncedThemeConfig={isAdmin ? preferences.themeConfig : undefined}
+      onPersistSyncedTheme={(nextCfg) => {
+        if (user && isAdmin) {
+          const nextPrefs: UserPreferences = {
+            ...preferences,
+            themeConfig: nextCfg,
+          };
+          setPreferences(nextPrefs);
+          void saveUserPreferencesDoc(user.uid, nextPrefs);
+        }
+      }}
+    >
+      <div className="min-h-screen flex flex-col bg-[#F7F8FA] text-slate-900">
+        <Header
         activeTab={isAdmin && !isPreviewingPublic ? activeTab : 'public'}
         onSelectTab={(tab) => {
           if (tab === 'public') {
@@ -3586,6 +3601,11 @@ export default function App() {
         onGoBack={handleGoBack}
         onGoForward={handleGoForward}
         onOpenAdvancedSearch={() => setAdvancedSearchOpen(true)}
+        onOpenThemeSettings={() => {
+          setIsPreviewingPublic(false);
+          setAccountInitialSubTab('appearance');
+          navigateToTab('account');
+        }}
       />
 
       {/* Auth Prompt Notice when a read-only trigger is fired */}
@@ -4603,6 +4623,7 @@ export default function App() {
           </div>
         </nav>
       )}
-    </div>
+      </div>
+    </ThemeProvider>
   );
 }

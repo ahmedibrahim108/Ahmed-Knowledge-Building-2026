@@ -20,6 +20,37 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <script>
+      (function () {
+        var presets = {
+          classic: { light: ['#F8F9FC', '#0F172A', '#FFFFFF', '#6D28D9'], dark: ['#0C0F18', '#F1F5F9', '#151B2B', '#7C3AED'] },
+          midnight: { light: ['#EEF2F8', '#0F172A', '#FAFCFF', '#4338CA'], dark: ['#070B14', '#EFF4FB', '#111A2E', '#7C5CFA'] },
+          forest: { light: ['#F2F6F3', '#0D2118', '#FBFDFB', '#15803D'], dark: ['#07120D', '#ECF5F0', '#10241A', '#16A34A'] },
+          lavender: { light: ['#F6F4FC', '#1C1333', '#FDFCFF', '#7C3AED'], dark: ['#100B1D', '#F3EEFC', '#1B1430', '#8B5CF6'] },
+          graphite: { light: ['#F3F4F6', '#111827', '#FFFFFF', '#2563EB'], dark: ['#111317', '#F1F3F5', '#1A1D23', '#3B82F6'] },
+          sepia: { light: ['#F6EFE2', '#2B2118', '#FAF5EA', '#B45309'], dark: ['#14100C', '#F3EAE0', '#211A13', '#D97706'] }
+        };
+        try {
+          var raw = localStorage.getItem('kb_theme_config_v1');
+          var cfg = raw ? JSON.parse(raw) : null;
+          var mode = cfg && (cfg.mode === 'light' || cfg.mode === 'dark' || cfg.mode === 'system') ? cfg.mode : 'light';
+          var presetId = cfg && cfg.preset && presets[cfg.preset] ? cfg.preset : 'classic';
+          var osDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var eff = mode === 'system' ? (osDark ? 'dark' : 'light') : mode;
+          var vals = presets[presetId][eff];
+          var root = document.documentElement;
+          root.setAttribute('data-kb-themed', 'true');
+          root.setAttribute('data-theme-mode', eff);
+          root.setAttribute('data-theme-preset', presetId);
+          root.style.colorScheme = eff;
+          root.style.setProperty('--kb-bg', (cfg && cfg.backgroundOverride) || vals[0]);
+          root.style.setProperty('--kb-canvas-bg', (cfg && cfg.backgroundOverride) || vals[0]);
+          root.style.setProperty('--kb-fg', vals[1]);
+          root.style.setProperty('--kb-card', (cfg && cfg.surfaceOverride) || vals[2]);
+          root.style.setProperty('--kb-primary', (cfg && cfg.primaryAccentOverride) || vals[3]);
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', eff === 'dark' ? vals[0] : vals[3]);
+        } catch (_) {}
+      })();
       window.__pwaInstallPrompt = null;
       window.__mizanAppMounted = false;
       window.addEventListener('beforeinstallprompt', function (e) {
@@ -28,7 +59,7 @@
       });
     </script>
   </head>
-  <body class="bg-[#F7F8FA] text-slate-900 antialiased selection:bg-[#1E3A5F]/15 selection:text-[#1E3A5F]">
+  <body class="bg-[var(--kb-bg)] text-[var(--kb-fg)] antialiased selection:bg-[var(--kb-primary-soft)] selection:text-[var(--kb-primary-ink)]">
     <div id="root"></div>
     <noscript>
       <div dir="rtl" style="padding:24px;font-family:system-ui,sans-serif;text-align:center;color:#0f172a;">

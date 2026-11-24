@@ -1502,6 +1502,7 @@ export default function OverviewView({
                 return (
                   <div
                     key={r.id}
+                    data-custom-card-surface="light"
                     role="button"
                     tabIndex={0}
                     onClick={() => onNavigateTab('reflections')}

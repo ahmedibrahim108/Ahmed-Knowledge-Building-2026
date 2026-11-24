@@ -1315,6 +1315,9 @@ export default function JournalDayModal({
       onClick={handleCloseSafely}
     >
       <div
+        data-custom-card-surface={
+          draft.cardColor && draft.cardColor !== 'default' ? 'light' : undefined
+        }
         className={`w-full h-full sm:h-[92vh] sm:max-w-5xl sm:rounded-2xl border shadow-2xl overflow-hidden flex flex-col ${theme.cardClass}`}
         onClick={(e) => e.stopPropagation()}
       >

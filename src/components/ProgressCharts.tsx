@@ -198,8 +198,8 @@ export default function ProgressCharts({
           ? `${pathStats.filter((p) => p.pct >= 100).length} / ${pathStats.length} مسار`
           : 'لا مسارات بعد',
       radius: 58,
-      color: '#1E3A5F',
-      track: '#E2E8F0',
+      color: 'var(--kb-primary-ink)',
+      track: 'var(--kb-chart-track)',
     },
     {
       id: 'courses',
@@ -207,8 +207,8 @@ export default function ProgressCharts({
       pct: avgCoursesPct,
       detail: `${completedCoursesCount} / ${courses.length} كورس`,
       radius: 44,
-      color: '#059669',
-      track: '#D1FAE5',
+      color: 'var(--kb-success)',
+      track: 'color-mix(in srgb, var(--kb-success) 18%, var(--kb-chart-track))',
     },
     {
       id: 'tasks',
@@ -216,8 +216,8 @@ export default function ProgressCharts({
       pct: tasksPct,
       detail: `${doneUnifiedTasks} / ${totalUnifiedTasks} مهمة`,
       radius: 30,
-      color: '#B45309',
-      track: '#FEF3C7',
+      color: 'var(--kb-warning)',
+      track: 'color-mix(in srgb, var(--kb-warning) 18%, var(--kb-chart-track))',
     },
   ];
 

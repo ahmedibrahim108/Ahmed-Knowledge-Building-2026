@@ -1054,6 +1054,7 @@ export default function ReflectionsView({
             return (
               <article
                 key={r.id}
+                data-custom-card-surface="light"
                 onClick={() => openModalReader(r, false)}
                 className={`rounded-xl border overflow-hidden flex flex-col justify-between cursor-pointer transition-all hover:shadow-sm ${style.cardBg} ${
                   r.pinned ? 'ring-1 ring-[#1E3A5F]/35 ' + style.cardBorder : style.cardBorder
@@ -1211,6 +1212,7 @@ export default function ReflectionsView({
             const isPub = isEffectivelyPublic(activeReflection);
             return (
               <div
+                data-custom-card-surface="light"
                 onClick={(e) => e.stopPropagation()}
                 className={`w-full max-w-2xl max-h-[90dvh] flex flex-col border rounded-2xl shadow-2xl overflow-hidden ${modalStyle.cardBg} ${modalStyle.cardBorder}`}
               >

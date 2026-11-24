@@ -22,6 +22,7 @@ import {
   DEFAULT_PUBLIC_SITE_CONFIG,
   DEFAULT_REFLECTION_CATEGORIES,
   DEFAULT_REFLECTION_IMAGE_FRAME,
+  DEFAULT_THEME_CONFIG,
   DEFAULT_USER_PREFERENCES,
   DEFAULT_WEEKLY_RHYTHM,
   DailyJournalRecord,
@@ -73,6 +74,7 @@ import {
   StudyHistoryEntry,
   StudyResource,
   TaskPriority,
+  ThemeConfig,
   ThinkerInfo,
   UnifiedTask,
   UnifiedTaskStatus,
@@ -91,6 +93,7 @@ import {
   sanitizeTaskStatusOrder,
   toLocalDateKey,
 } from '../data/curriculumData';
+import { sanitizeThemeConfig } from '../utils/themeEngine';
 import {
   ensureSupabaseRealtimeAuth,
   formatSupabaseErrorMessage,
@@ -776,6 +779,7 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
       activeFocusPinCollectionIdMirror: prefs.activeFocusPinCollectionId
         ? clip(String(prefs.activeFocusPinCollectionId), 128)
         : null,
+      themeConfigMirror: sanitizeThemeConfig(prefs.themeConfig ?? DEFAULT_THEME_CONFIG),
     },
     weekly_rhythm: sanitizeWeeklyRhythm(prefs.weeklyRhythm),
     reflection_categories: sanitizeStringList(
@@ -1387,6 +1391,16 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
           ? (raw.calendar_prefs as Record<string, unknown>).activeFocusPinCollectionIdMirror
           : undefined;
       return typeof mirror === 'string' && mirror ? mirror : null;
+    })(),
+    themeConfig: (() => {
+      const mirror =
+        raw.calendar_prefs && typeof raw.calendar_prefs === 'object'
+          ? (raw.calendar_prefs as Record<string, unknown>).themeConfigMirror
+          : undefined;
+      if (mirror && typeof mirror === 'object') {
+        return sanitizeThemeConfig(mirror as Partial<ThemeConfig>);
+      }
+      return DEFAULT_THEME_CONFIG;
     })(),
   };
 }

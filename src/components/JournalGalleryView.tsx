@@ -588,6 +588,11 @@ export default function JournalGalleryView({
             return (
               <div
                 key={day.dateKey}
+                data-custom-card-surface={
+                  day.rec?.cardColor && day.rec.cardColor !== 'default'
+                    ? 'light'
+                    : undefined
+                }
                 role="button"
                 tabIndex={0}
                 onClick={() => onOpenDay(day.dateKey, false)}

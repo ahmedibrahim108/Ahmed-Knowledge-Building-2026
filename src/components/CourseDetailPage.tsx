@@ -3132,6 +3132,7 @@ export default function CourseDetailPage({
                     <div className="space-y-4">
                       {richHtmlToPlainText(activeNote.content) ? (
                         <div
+                          data-custom-card-surface={noteLayout.paperTone !== 'clean' ? 'light' : undefined}
                           className={`${noteLayout.widthClass} ${noteLayout.canvasPaddingClass} ${noteLayout.borderClass} ${noteLayout.paperToneClass} rounded-xl overflow-x-auto transition-all`}
                         >
                           <div

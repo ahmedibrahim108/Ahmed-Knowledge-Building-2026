@@ -817,6 +817,7 @@ export default function PublicHomeView({
                       return (
                         <article
                           key={r.id}
+                          data-custom-card-surface="light"
                           onClick={() => {
                             setGrantedNoteDraft('');
                             setGrantedNoteError(null);
@@ -1261,6 +1262,7 @@ export default function PublicHomeView({
                   return (
                     <article
                       key={r.id}
+                      data-custom-card-surface="light"
                       onClick={() =>
                         setDetailModal({ type: 'reflection', item: r })
                       }
@@ -1386,6 +1388,7 @@ export default function PublicHomeView({
                 return (
                   <article
                     key={r.id}
+                    data-custom-card-surface="light"
                     onClick={() =>
                       setDetailModal({ type: 'reflection', item: r })
                     }

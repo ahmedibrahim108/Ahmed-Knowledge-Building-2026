@@ -813,6 +813,11 @@ export default function FocusNoteStudyModal({
               {!isEditingMain ? (
                 <div className="space-y-4">
                   <div
+                    data-custom-card-surface={
+                      activeColorKey !== 'default' || noteLayout.paperTone !== 'clean'
+                        ? 'light'
+                        : undefined
+                    }
                     className={`${activeColorTheme.cardClass} ${noteLayout.canvasPaddingClass} ${noteLayout.borderClass} ${activeColorKey === 'default' ? noteLayout.paperToneClass : ''} rounded-2xl transition-all space-y-5`}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200/80">

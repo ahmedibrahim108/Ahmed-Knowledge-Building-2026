@@ -880,6 +880,7 @@ export default function NotesJournalView({
 
         {/* Standalone Full-Width Note Studio */}
         <article
+          data-custom-card-surface={activeColorKey !== 'default' ? 'light' : undefined}
           className={`border rounded-xl p-4 sm:p-8 space-y-5 sm:space-y-6 ${activeColorTheme.cardClass}`}
         >
           {/* Header & Title */}
@@ -1230,6 +1231,7 @@ export default function NotesJournalView({
               />
             ) : (
               <div
+                data-custom-card-surface={noteLayout.paperTone !== 'clean' ? 'light' : undefined}
                 className={`${noteLayout.widthClass} ${noteLayout.canvasPaddingClass} ${noteLayout.borderClass} ${noteLayout.paperToneClass} rounded-xl min-h-[140px] overflow-x-auto transition-all`}
               >
                 {richHtmlToPlainText(standaloneNote.content) ? (
@@ -2510,6 +2512,11 @@ export default function NotesJournalView({
                       return (
                         <article
                           key={bn.id}
+                          data-custom-card-surface={
+                            bn.noteColor && bn.noteColor !== 'default'
+                              ? 'light'
+                              : undefined
+                          }
                           role="button"
                           tabIndex={0}
                           onClick={() => openNoteStandalone(bn, false)}
@@ -2695,6 +2702,11 @@ export default function NotesJournalView({
                       return (
                         <article
                           key={bn.id}
+                          data-custom-card-surface={
+                            bn.noteColor && bn.noteColor !== 'default'
+                              ? 'light'
+                              : undefined
+                          }
                           role="button"
                           tabIndex={0}
                           onClick={() => openNoteStandalone(bn, false)}
@@ -2975,6 +2987,11 @@ export default function NotesJournalView({
                   return (
                     <article
                       key={bn.id}
+                      data-custom-card-surface={
+                        bn.noteColor && bn.noteColor !== 'default'
+                          ? 'light'
+                          : undefined
+                      }
                       role="button"
                       tabIndex={0}
                       onClick={() => openNoteStandalone(bn, false)}

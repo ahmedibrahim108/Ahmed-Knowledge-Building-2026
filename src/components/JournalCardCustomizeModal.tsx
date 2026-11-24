@@ -362,6 +362,7 @@ export default function JournalCardCustomizeModal({
 
             <div className="max-w-[270px] mx-auto">
               <div
+                data-custom-card-surface={cardColor !== 'default' ? 'light' : undefined}
                 className={`rounded-2xl border overflow-hidden flex flex-col justify-between min-h-[210px] shadow-xs transition-colors ${activeTheme.cardClass}`}
               >
                 <div>

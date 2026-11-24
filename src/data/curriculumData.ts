@@ -1436,6 +1436,44 @@ export type EntitySortMode =
   | 'stage'
   | 'progress';
 
+export type ThemeMode = 'light' | 'dark' | 'system';
+
+export type ThemePresetId =
+  | 'classic'
+  | 'midnight'
+  | 'forest'
+  | 'lavender'
+  | 'graphite'
+  | 'sepia';
+
+export type ThemeBackgroundStyle = 'default' | 'flat' | 'tinted' | 'gradient';
+export type ThemeSurfaceStyle = 'default' | 'crisp' | 'soft' | 'elevated';
+export type ThemeBorderStyle = 'default' | 'subtle' | 'defined' | 'minimal';
+export type ThemeContrastLevel = 'standard' | 'high' | 'soft';
+
+export interface ThemeConfig {
+  mode: ThemeMode;
+  preset: ThemePresetId;
+  primaryAccentOverride?: string;
+  secondaryAccentOverride?: string;
+  backgroundOverride?: string;
+  surfaceOverride?: string;
+  borderOverride?: string;
+  backgroundStyle?: ThemeBackgroundStyle;
+  surfaceStyle?: ThemeSurfaceStyle;
+  borderStyle?: ThemeBorderStyle;
+  contrastLevel?: ThemeContrastLevel;
+}
+
+export const DEFAULT_THEME_CONFIG: ThemeConfig = {
+  mode: 'light',
+  preset: 'classic',
+  backgroundStyle: 'default',
+  surfaceStyle: 'default',
+  borderStyle: 'default',
+  contrastLevel: 'standard',
+};
+
 export interface UserPreferences {
   noteFontSize: 'sm' | 'base' | 'lg';
   noteHighlightColor: HighlightColorKey;
@@ -1461,6 +1499,7 @@ export interface UserPreferences {
   dashboardHeroImageFrame?: ImageFrameSpec;
   taskStatusOrder?: UnifiedTaskStatus[];
   activeFocusPinCollectionId?: string | null;
+  themeConfig?: ThemeConfig;
 }
 
 export interface PinnableNavTabMeta {
@@ -2017,6 +2056,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   pinnedNavTabs: DEFAULT_PINNED_NAV_TABS,
   customHubs: DEFAULT_LEARNING_HUBS,
   taskStatusOrder: DEFAULT_TASK_STATUS_ORDER,
+  themeConfig: DEFAULT_THEME_CONFIG,
 };
 
 export interface WeeklyRhythmSlot {

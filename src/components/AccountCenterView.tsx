@@ -18,6 +18,7 @@ import {
   Loader2,
   Mail,
   MessageSquarePlus,
+  Palette,
   PenLine,
   Pin,
   PinOff,
@@ -98,10 +99,12 @@ import DomainsView from './DomainsView';
 import { ActiveTab } from './Header';
 import type { ActivePdfTarget } from './PDFViewerModal';
 import TwelveMonthPlanView from './TwelveMonthPlanView';
+import ThemeSettingsPanel from './ThemeSettingsPanel';
 import WeeklyMeetingsPanel from './WeeklyMeetingsPanel';
 
 type AccountSubTab =
   | 'workspace'
+  | 'appearance'
   | 'public_site'
   | 'plan'
   | 'meetings'
@@ -666,6 +669,12 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
       icon: LayoutGrid,
     },
     {
+      id: 'appearance',
+      label: 'المظهر والثيمات',
+      subtitle: 'الأوضاع والألوان والتباين',
+      icon: Palette,
+    },
+    {
       id: 'public_site',
       label: 'الموقع العام والنشر',
       subtitle: 'الرئيسية والخواطر والمدونة',
@@ -772,6 +781,13 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
         </aside>
 
         <div className="lg:col-span-9 space-y-6">
+          {subTab === 'appearance' && (
+            <ThemeSettingsPanel
+              canEdit={props.canEdit}
+              onRequireAuth={props.onRequireAuth}
+            />
+          )}
+
           {/* SECTION 1: Workspace Navigation Pins & Learning Hubs Customizer */}
           {subTab === 'workspace' && (
             <div className="space-y-6">
