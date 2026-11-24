@@ -1439,6 +1439,7 @@ export type EntitySortMode =
 export type ThemeMode = 'light' | 'dark' | 'system';
 
 export type ThemePresetId =
+  | 'original'
   | 'classic'
   | 'midnight'
   | 'forest'
@@ -1467,7 +1468,7 @@ export interface ThemeConfig {
 
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   mode: 'light',
-  preset: 'classic',
+  preset: 'original',
   backgroundStyle: 'default',
   surfaceStyle: 'default',
   borderStyle: 'default',

@@ -17,6 +17,7 @@ import {
   Map as MapIcon,
   MessageSquarePlus,
   NotebookPen,
+  Palette,
   Search,
   Send,
   ShieldCheck,
@@ -72,6 +73,7 @@ interface PublicHomeViewProps {
   onGoogleSignIn: () => void;
   onSignOut: () => void;
   onReturnToAdmin?: () => void;
+  onOpenMyAccount?: () => void;
   onOpenPdf: (target: ActivePdfTarget) => void;
   onAddGrantedItemNote?: (
     targetType: GrantedItemNote['targetType'],
@@ -119,6 +121,7 @@ export default function PublicHomeView({
   onGoogleSignIn,
   onSignOut,
   onReturnToAdmin,
+  onOpenMyAccount,
   onOpenPdf,
   onAddGrantedItemNote,
   onDeleteGrantedItemNote,
@@ -393,14 +396,26 @@ export default function PublicHomeView({
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onSignOut}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
-          >
-            <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>تسجيل الخروج</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {onOpenMyAccount && (
+              <button
+                type="button"
+                onClick={onOpenMyAccount}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-[#F7F8FA] border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer"
+              >
+                <Palette className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>حسابي والمظهر</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>تسجيل الخروج</span>
+            </button>
+          </div>
         </div>
       )}
 

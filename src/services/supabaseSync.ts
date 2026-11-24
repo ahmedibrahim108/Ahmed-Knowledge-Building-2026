@@ -1397,10 +1397,10 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
         raw.calendar_prefs && typeof raw.calendar_prefs === 'object'
           ? (raw.calendar_prefs as Record<string, unknown>).themeConfigMirror
           : undefined;
-      if (mirror && typeof mirror === 'object') {
+      if (mirror && typeof mirror === 'object' && Object.keys(mirror as Record<string, unknown>).length > 0) {
         return sanitizeThemeConfig(mirror as Partial<ThemeConfig>);
       }
-      return DEFAULT_THEME_CONFIG;
+      return undefined;
     })(),
   };
 }
@@ -2735,6 +2735,11 @@ export function isPending014Migration(): boolean {
   return hasPending014Migration;
 }
 
+let hasPending015Migration = false;
+export function isPending015Migration(): boolean {
+  return hasPending015Migration;
+}
+
 const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
   courses: ['learning_objectives', 'sort_order', 'is_public'],
   learning_paths: ['learning_objectives', 'sort_order', 'is_public'],
@@ -2951,7 +2956,199 @@ export async function saveUserPreferencesDoc(
   prefs: UserPreferences
 ): Promise<void> {
   const row = buildUserPreferencesRow(uid, prefs);
+  if (!prefs.themeConfig && isSupabaseConfigured && supabase) {
+    try {
+      const existing = await withFirebaseTokenRetry(async (c) =>
+        c
+          .from('user_preferences')
+          .select('calendar_prefs')
+          .eq('owner_id', uid)
+          .eq('id', 'settings')
+          .maybeSingle()
+      );
+      const existingCal =
+        existing.data?.calendar_prefs &&
+        typeof existing.data.calendar_prefs === 'object'
+          ? (existing.data.calendar_prefs as Record<string, unknown>)
+          : null;
+      if (
+        existingCal?.themeConfigMirror &&
+        typeof existingCal.themeConfigMirror === 'object'
+      ) {
+        row.calendar_prefs.themeConfigMirror = sanitizeThemeConfig(
+          existingCal.themeConfigMirror
+        );
+      }
+    } catch {
+      // Non-blocking fallback
+    }
+  }
   await runUpsertWith007Fallback('user_preferences', row, 'owner_id,id');
+}
+
+function isRlsPermissionError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; status?: number; message?: string };
+  const code = (e.code || '').toUpperCase();
+  const msg = (e.message || '').toLowerCase();
+  return (
+    code === '42501' ||
+    e.status === 403 ||
+    msg.includes('row-level security') ||
+    msg.includes('permission denied')
+  );
+}
+
+/**
+ * Fetches ONLY the current authenticated user's persisted theme configuration
+ * from `user_preferences.calendar_prefs.themeConfigMirror` (safe for both admins
+ * and regular non-admin users once migration 015 is applied).
+ */
+export async function fetchUserThemeConfig(uid: string): Promise<{
+  themeConfig: ThemeConfig | null;
+  rlsBlocked?: boolean;
+  error?: unknown;
+}> {
+  if (!isSupabaseConfigured || !supabase || !uid) {
+    return { themeConfig: null };
+  }
+  try {
+    const { data, error } = await withFirebaseTokenRetry(async (c) =>
+      c
+        .from('user_preferences')
+        .select('calendar_prefs')
+        .eq('owner_id', uid)
+        .eq('id', 'settings')
+        .maybeSingle()
+    );
+    if (error) {
+      if (isRlsPermissionError(error)) {
+        hasPending015Migration = true;
+        return { themeConfig: null, rlsBlocked: true, error };
+      }
+      return { themeConfig: null, error };
+    }
+    hasPending015Migration = false;
+    const cal =
+      data?.calendar_prefs && typeof data.calendar_prefs === 'object'
+        ? (data.calendar_prefs as Record<string, unknown>)
+        : null;
+    const mirror = cal?.themeConfigMirror;
+    if (
+      mirror &&
+      typeof mirror === 'object' &&
+      Object.keys(mirror as Record<string, unknown>).length > 0
+    ) {
+      return { themeConfig: sanitizeThemeConfig(mirror as Partial<ThemeConfig>) };
+    }
+    return { themeConfig: null };
+  } catch (err) {
+    if (isRlsPermissionError(err)) {
+      hasPending015Migration = true;
+      return { themeConfig: null, rlsBlocked: true, error: err };
+    }
+    return { themeConfig: null, error: err };
+  }
+}
+
+/**
+ * Persists ONLY `themeConfigMirror` inside `user_preferences.calendar_prefs`
+ * for the authenticated user (`owner_id = uid`), performing a read-merge-update
+ * so existing calendar preferences, pinned nav tabs, custom hubs, hero frame,
+ * and unrelated preference columns are never overwritten.
+ */
+export async function saveUserThemeConfigOnly(
+  uid: string,
+  themeConfig: ThemeConfig
+): Promise<ThemeConfig> {
+  const clean = sanitizeThemeConfig(themeConfig);
+  if (!isSupabaseConfigured || !supabase || !uid) {
+    return clean;
+  }
+
+  await withFirebaseTokenRetry(async (client) => {
+    const { data: existing, error: selErr } = await client
+      .from('user_preferences')
+      .select('calendar_prefs')
+      .eq('owner_id', uid)
+      .eq('id', 'settings')
+      .maybeSingle();
+
+    if (selErr) {
+      if (isRlsPermissionError(selErr)) {
+        hasPending015Migration = true;
+        throw new Error(
+          'تحتاج قاعدة البيانات إلى تفعيل سياسة حفظ المظهر للحسابات (ملف الترحيل 015) في Supabase.'
+        );
+      }
+      throw new Error(formatSupabaseErrorMessage(selErr));
+    }
+
+    if (existing) {
+      const prevCal =
+        existing.calendar_prefs && typeof existing.calendar_prefs === 'object'
+          ? { ...(existing.calendar_prefs as Record<string, unknown>) }
+          : {};
+      const mergedCal = {
+        ...prevCal,
+        themeConfigMirror: clean,
+      };
+      const { error: updErr } = await client
+        .from('user_preferences')
+        .update({ calendar_prefs: mergedCal })
+        .eq('owner_id', uid)
+        .eq('id', 'settings');
+      if (updErr) {
+        if (isRlsPermissionError(updErr)) {
+          hasPending015Migration = true;
+          throw new Error(
+            'تحتاج قاعدة البيانات إلى تفعيل سياسة حفظ المظهر للحسابات (ملف الترحيل 015) في Supabase.'
+          );
+        }
+        throw new Error(formatSupabaseErrorMessage(updErr));
+      }
+      hasPending015Migration = false;
+      return;
+    }
+
+    // First-time preferences row for this user
+    const freshRow = buildUserPreferencesRow(uid, {
+      ...DEFAULT_USER_PREFERENCES,
+      themeConfig: clean,
+    });
+    const { error: insErr } = await client
+      .from('user_preferences')
+      .upsert(freshRow, { onConflict: 'owner_id,id' });
+    if (insErr) {
+      if (isMissingColumnError(insErr) && OPTIONAL_007_COLUMNS_BY_TABLE.user_preferences) {
+        const fallbackRow = strip007Columns('user_preferences', freshRow);
+        const { error: retryErr } = await client
+          .from('user_preferences')
+          .upsert(fallbackRow, { onConflict: 'owner_id,id' });
+        if (retryErr) {
+          if (isRlsPermissionError(retryErr)) {
+            hasPending015Migration = true;
+            throw new Error(
+              'تحتاج قاعدة البيانات إلى تفعيل سياسة حفظ المظهر للحسابات (ملف الترحيل 015) في Supabase.'
+            );
+          }
+          throw new Error(formatSupabaseErrorMessage(retryErr));
+        }
+        hasPending015Migration = false;
+        return;
+      }
+      if (isRlsPermissionError(insErr)) {
+        hasPending015Migration = true;
+        throw new Error(
+          'تحتاج قاعدة البيانات إلى تفعيل سياسة حفظ المظهر للحسابات (ملف الترحيل 015) في Supabase.'
+        );
+      }
+      throw new Error(formatSupabaseErrorMessage(insErr));
+    }
+    hasPending015Migration = false;
+  });
+
+  return clean;
 }
 
 export async function saveReflectionDoc(

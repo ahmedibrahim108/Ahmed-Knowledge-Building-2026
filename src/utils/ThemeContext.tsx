@@ -24,6 +24,14 @@ import {
   saveStoredThemeConfig,
 } from './themeEngine';
 
+export type ThemeSyncStatus =
+  | 'idle'
+  | 'loading'
+  | 'saving'
+  | 'saved'
+  | 'offline'
+  | 'error';
+
 interface ThemeContextValue {
   savedConfig: ThemeConfig;
   activeConfig: ThemeConfig;
@@ -32,6 +40,9 @@ interface ThemeContextValue {
   osPrefersDark: boolean;
   effectiveMode: 'light' | 'dark';
   resolved: ResolvedThemeResult;
+  isAuthenticated: boolean;
+  syncStatus: ThemeSyncStatus;
+  syncError: string | null;
   setPreviewConfig: (next: ThemeConfig | null) => void;
   applyTheme: (next: ThemeConfig) => void;
   setMode: (mode: ThemeMode) => void;
@@ -39,6 +50,7 @@ interface ThemeContextValue {
   commitPreview: () => void;
   discardPreview: () => void;
   resetToDefault: () => void;
+  retryCloudSync: () => Promise<void>;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -46,8 +58,10 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 interface ThemeProviderProps {
   children: ReactNode;
   userUid?: string | null;
+  cloudLoading?: boolean;
   syncedThemeConfig?: ThemeConfig;
-  onPersistSyncedTheme?: (next: ThemeConfig) => void;
+  cloudSyncError?: string | null;
+  onPersistSyncedTheme?: (next: ThemeConfig) => Promise<void> | void;
 }
 
 function getSystemPrefersDark(): boolean {
@@ -58,7 +72,9 @@ function getSystemPrefersDark(): boolean {
 export function ThemeProvider({
   children,
   userUid,
+  cloudLoading = false,
   syncedThemeConfig,
+  cloudSyncError,
   onPersistSyncedTheme,
 }: ThemeProviderProps) {
   const [osPrefersDark, setOsPrefersDark] = useState<boolean>(getSystemPrefersDark);
@@ -66,7 +82,18 @@ export function ThemeProvider({
     () => loadStoredThemeConfig(userUid) ?? DEFAULT_THEME_CONFIG
   );
   const [previewConfig, setPreviewConfig] = useState<ThemeConfig | null>(null);
+  const [syncStatus, setSyncStatus] = useState<ThemeSyncStatus>('idle');
+  const [syncError, setSyncError] = useState<string | null>(null);
+
   const hasMountedRef = useRef(false);
+  const activeUidRef = useRef<string | null | undefined>(userUid);
+  const inFlightSavesRef = useRef(0);
+  const mutationVersionRef = useRef(0);
+  const pendingOfflineConfigRef = useRef<ThemeConfig | null>(null);
+  const persistCallbackRef = useRef(onPersistSyncedTheme);
+
+  persistCallbackRef.current = onPersistSyncedTheme;
+  activeUidRef.current = userUid;
 
   // Track OS prefers-color-scheme live
   useEffect(() => {
@@ -80,25 +107,126 @@ export function ThemeProvider({
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  // Rehydrate user-scoped local theme when authenticated UID changes
+  // Rehydrate cleanly when authenticated UID changes or signs out
   useEffect(() => {
-    if (!userUid) return;
+    setPreviewConfig(null);
+    pendingOfflineConfigRef.current = null;
+    inFlightSavesRef.current = 0;
+
+    if (!userUid) {
+      setSyncStatus('idle');
+      setSyncError(null);
+      const localDevice = loadStoredThemeConfig(null);
+      if (localDevice) {
+        setSavedConfig(localDevice);
+      }
+      return;
+    }
+
     const userLocal = loadStoredThemeConfig(userUid);
     if (userLocal) {
       setSavedConfig(userLocal);
     }
+    setSyncStatus(cloudLoading ? 'loading' : 'idle');
+    setSyncError(cloudSyncError ?? null);
   }, [userUid]);
 
-  // Sync from cloud UserPreferences when loaded/updated
+  // Reflect external cloud fetch loading/error state when idle
   useEffect(() => {
-    if (!syncedThemeConfig) return;
+    if (!userUid) return;
+    if (inFlightSavesRef.current > 0 || pendingOfflineConfigRef.current) return;
+    if (cloudLoading) {
+      setSyncStatus('loading');
+      setSyncError(null);
+    } else if (cloudSyncError) {
+      setSyncStatus('error');
+      setSyncError(cloudSyncError);
+    } else if (syncedThemeConfig) {
+      setSyncStatus((prev) => (prev === 'loading' ? 'saved' : prev));
+    }
+  }, [userUid, cloudLoading, cloudSyncError, syncedThemeConfig]);
+
+  // Cloud preferences become authoritative once synchronized (guarded against races)
+  useEffect(() => {
+    if (!userUid || !syncedThemeConfig) return;
+    // Never let a stale cloud snapshot overwrite an active local save or pending offline write
+    if (inFlightSavesRef.current > 0 || pendingOfflineConfigRef.current !== null) {
+      return;
+    }
     const clean = sanitizeThemeConfig(syncedThemeConfig);
     setSavedConfig((prev) => {
-      if (JSON.stringify(prev) === JSON.stringify(clean)) return prev;
+      if (JSON.stringify(prev) === JSON.stringify(clean)) {
+        return prev;
+      }
       saveStoredThemeConfig(clean, userUid);
       return clean;
     });
+    setSyncStatus('saved');
+    setSyncError(null);
   }, [syncedThemeConfig, userUid]);
+
+  const persistToCloud = useCallback(
+    async (clean: ThemeConfig, expectedUid: string | null | undefined, version: number) => {
+      const persistFn = persistCallbackRef.current;
+      if (!expectedUid || !persistFn) {
+        return;
+      }
+
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        pendingOfflineConfigRef.current = clean;
+        setSyncStatus('offline');
+        setSyncError('تم حفظ المظهر محليًا الآن، وسيتم مزامنته سحابيًا فور عودة الاتصال بالإنترنت.');
+        return;
+      }
+
+      inFlightSavesRef.current += 1;
+      setSyncStatus('saving');
+      setSyncError(null);
+      try {
+        await persistFn(clean);
+        if (activeUidRef.current !== expectedUid) return;
+        if (mutationVersionRef.current === version) {
+          pendingOfflineConfigRef.current = null;
+          setSyncStatus('saved');
+          setSyncError(null);
+        }
+      } catch (err) {
+        if (activeUidRef.current !== expectedUid) return;
+        const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+        const msg =
+          err instanceof Error
+            ? err.message
+            : 'تعذر حفظ المظهر على السحابة حاليًا، تم الاحتفاظ به محليًا على هذا الجهاز.';
+        pendingOfflineConfigRef.current = clean;
+        if (mutationVersionRef.current === version) {
+          setSyncStatus(offline ? 'offline' : 'error');
+          setSyncError(
+            offline
+              ? 'تم حفظ المظهر محليًا الآن، وسيتم مزامنته سحابيًا فور عودة الاتصال بالإنترنت.'
+              : msg
+          );
+        }
+      } finally {
+        inFlightSavesRef.current = Math.max(0, inFlightSavesRef.current - 1);
+      }
+    },
+    []
+  );
+
+  // Auto-retry pending offline theme save when browser reconnects
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onOnline = () => {
+      const pending = pendingOfflineConfigRef.current;
+      const uid = activeUidRef.current;
+      if (pending && uid && persistCallbackRef.current) {
+        const nextVersion = ++mutationVersionRef.current;
+        void persistToCloud(pending, uid, nextVersion);
+      }
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [persistToCloud]);
 
   const activeConfig = previewConfig ?? savedConfig;
 
@@ -116,12 +244,16 @@ export function ThemeProvider({
   const applyTheme = useCallback(
     (next: ThemeConfig) => {
       const clean = sanitizeThemeConfig(next);
+      const version = ++mutationVersionRef.current;
+      const uid = activeUidRef.current;
       setPreviewConfig(null);
       setSavedConfig(clean);
-      saveStoredThemeConfig(clean, userUid);
-      onPersistSyncedTheme?.(clean);
+      saveStoredThemeConfig(clean, uid);
+      if (uid && persistCallbackRef.current) {
+        void persistToCloud(clean, uid, version);
+      }
     },
-    [onPersistSyncedTheme, userUid]
+    [persistToCloud]
   );
 
   const setMode = useCallback(
@@ -143,7 +275,6 @@ export function ThemeProvider({
       const next: ThemeConfig = {
         ...base,
         preset,
-        // Reset custom overrides when switching full preset cleanly unless user is explicitly customizing after
         primaryAccentOverride: undefined,
         secondaryAccentOverride: undefined,
         backgroundOverride: undefined,
@@ -172,6 +303,14 @@ export function ThemeProvider({
     applyTheme({ ...DEFAULT_THEME_CONFIG });
   }, [applyTheme]);
 
+  const retryCloudSync = useCallback(async () => {
+    const uid = activeUidRef.current;
+    if (!uid || !persistCallbackRef.current) return;
+    const cfg = pendingOfflineConfigRef.current ?? savedConfig;
+    const version = ++mutationVersionRef.current;
+    await persistToCloud(cfg, uid, version);
+  }, [persistToCloud, savedConfig]);
+
   const value = useMemo<ThemeContextValue>(
     () => ({
       savedConfig,
@@ -181,6 +320,9 @@ export function ThemeProvider({
       osPrefersDark,
       effectiveMode: resolved.effectiveMode,
       resolved,
+      isAuthenticated: Boolean(userUid),
+      syncStatus,
+      syncError,
       setPreviewConfig,
       applyTheme,
       setMode,
@@ -188,6 +330,7 @@ export function ThemeProvider({
       commitPreview,
       discardPreview,
       resetToDefault,
+      retryCloudSync,
     }),
     [
       savedConfig,
@@ -195,12 +338,16 @@ export function ThemeProvider({
       previewConfig,
       osPrefersDark,
       resolved,
+      userUid,
+      syncStatus,
+      syncError,
       applyTheme,
       setMode,
       setPreset,
       commitPreview,
       discardPreview,
       resetToDefault,
+      retryCloudSync,
     ]
   );
 

@@ -88,6 +88,7 @@ import {
   isPending012Migration,
   isPending013Migration,
   isPending014Migration,
+  isPending015Migration,
   updateContactMessageStatus,
   updateUserProfileAccess,
   upsertContentAccessGrant,
@@ -114,6 +115,10 @@ type AccountSubTab =
 
 interface AccountCenterViewProps {
   uid?: string;
+  isAdmin: boolean;
+  userDisplayName?: string;
+  userEmail?: string;
+  userPhotoUrl?: string | null;
   canEdit: boolean;
   onRequireAuth: () => void;
   voiceDialect: VoiceDialectMode;
@@ -474,11 +479,11 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
   };
 
   useEffect(() => {
-    if (subTab === 'users') {
+    if (props.isAdmin && subTab === 'users') {
       void loadProfiles();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subTab]);
+  }, [props.isAdmin, subTab]);
 
   const openGrantModalForUser = (prof: UserProfileItem) => {
     const existing = grantsByUid[prof.uid];
@@ -711,6 +716,62 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
       icon: Database,
     },
   ];
+
+  // Strict RBAC separation: Non-admin authenticated users see ONLY their personal summary,
+  // Public Website link, and Theme Settings Studio—never any admin navigation, analytics, or controls.
+  if (!props.isAdmin) {
+    const accountName =
+      props.userDisplayName?.trim() || props.userEmail || 'حسابي';
+    const accountInitial = accountName.charAt(0).toUpperCase();
+
+    return (
+      <div className="space-y-6">
+        <div className="bg-white border border-slate-200 rounded-2xl px-5 sm:px-6 py-5 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5 min-w-0">
+            {props.userPhotoUrl ? (
+              <img
+                src={props.userPhotoUrl}
+                alt=""
+                referrerPolicy="no-referrer"
+                className="w-12 h-12 rounded-full object-cover border border-slate-200 shrink-0"
+              />
+            ) : (
+              <span className="w-12 h-12 rounded-full bg-[#1E3A5F] text-white text-base font-bold inline-flex items-center justify-center shrink-0">
+                {accountInitial}
+              </span>
+            )}
+            <div className="min-w-0 space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900 truncate">
+                  {accountName}
+                </h1>
+                <span className="px-2 py-0.5 text-[11px] font-semibold bg-[#F1F5F9] text-[#1E3A5F] border border-slate-200 rounded-md">
+                  حساب عضو مسجّل
+                </span>
+              </div>
+              {props.userEmail && (
+                <p className="text-xs text-slate-500 truncate">{props.userEmail}</p>
+              )}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={props.onPreviewPublicSite}
+            className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[38px] text-xs font-semibold text-[#1E3A5F] bg-[#F7F8FA] border border-slate-200 hover:bg-slate-100 rounded-xl cursor-pointer whitespace-nowrap shrink-0"
+          >
+            <Eye className="w-4 h-4" aria-hidden="true" />
+            <span>عرض الموقع العام</span>
+          </button>
+        </div>
+
+        <ThemeSettingsPanel
+          canEdit={Boolean(props.uid)}
+          onRequireAuth={props.onRequireAuth}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -3188,6 +3249,16 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                   </code>{' '}
                   في محرر SQL بلوحة Supabase لتفعيل حفظ عمود «اقتباس اليوم» (
                   <code className="font-mono">daily_quote</code>) في جدول اليوميات سحابيًا.
+                </div>
+              )}
+
+              {isPending015Migration() && (
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                  يرجى تشغيل ملف التحديث{' '}
+                  <code className="font-mono font-bold">
+                    015_user_theme_preferences_rls.sql
+                  </code>{' '}
+                  في محرر SQL بلوحة Supabase لتمكين جميع الحسابات المسجّلة (غير المسؤولين) من حفظ ومزامنة تفضيلات المظهر والثيمات الخاصة بكل حساب عبر الأجهزة بأمان.
                 </div>
               )}
 

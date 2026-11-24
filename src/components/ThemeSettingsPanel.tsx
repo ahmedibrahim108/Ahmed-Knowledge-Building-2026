@@ -1,11 +1,16 @@
 import { useMemo, useState } from 'react';
 import {
+  AlertCircle,
   Check,
+  Cloud,
+  CloudOff,
   Contrast,
   Eye,
+  Loader2,
   Monitor,
   Moon,
   Palette,
+  RefreshCw,
   RotateCcw,
   Save,
   Sparkles,
@@ -48,15 +53,20 @@ export default function ThemeSettingsPanel({
     osPrefersDark,
     effectiveMode,
     resolved,
+    isAuthenticated,
+    syncStatus,
+    syncError,
     setPreviewConfig,
     applyTheme,
     commitPreview,
     discardPreview,
     resetToDefault,
+    retryCloudSync,
   } = useTheme();
 
   // Default to staging/preview-before-apply toggle OR direct live apply
   const [stageBeforeApply, setStageBeforeApply] = useState<boolean>(true);
+  const [retryingSync, setRetryingSync] = useState(false);
 
   const updateDraft = (updater: (prev: ThemeConfig) => ThemeConfig) => {
     if (!canEdit && onRequireAuth) {
@@ -98,13 +108,9 @@ export default function ThemeSettingsPanel({
 
   const handleTogglePreset = (presetId: ThemePresetId) => {
     const presetDef = THEME_PRESETS[presetId];
-    // Preserve 'system' if already selected, otherwise pick the preset's natural mode OR keep current explicit mode if user already switched intentionally
+    // Preserve 'system' if already selected, otherwise pick the preset's natural mode
     const nextMode: ThemeMode =
-      activeConfig.mode === 'system'
-        ? 'system'
-        : presetId === 'classic'
-        ? 'light'
-        : presetDef.recommendedMode;
+      activeConfig.mode === 'system' ? 'system' : presetDef.recommendedMode;
 
     updateDraft((prev) => ({
       ...prev,
@@ -135,26 +141,26 @@ export default function ThemeSettingsPanel({
         <div
           role="status"
           aria-live="polite"
-          className="sticky top-20 z-20 rounded-2xl border border-[#1E3A5F]/35 bg-white/95 backdrop-blur-md shadow-md px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+          className="sticky top-24 lg:top-24 z-20 rounded-2xl border border-[#1E3A5F]/35 bg-white/95 backdrop-blur-md shadow-md px-3.5 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
         >
-          <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex items-start sm:items-center gap-2.5 min-w-0">
             <span className="w-8 h-8 rounded-xl bg-[#1E3A5F]/10 text-[#1E3A5F] inline-flex items-center justify-center shrink-0">
               <Eye className="w-4 h-4" aria-hidden="true" />
             </span>
             <div className="min-w-0">
               <p className="text-xs sm:text-sm font-bold text-slate-900">
-                معاينة حية نشطة على كامل التطبيق
+                معاينة مؤقتة نشطة (لم تُحفظ بعد)
               </p>
-              <p className="text-[11px] text-slate-500">
-                تستطيع تصفح جميع الصفحات للمعاينة الآن، ثم اضغط «تطبيق وحفظ الثيم» لتثبيته.
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                يمكنك تجربة الألوان الآن دون تعديل إعداداتك المحفوظة، ثم اضغط «تطبيق وحفظ الثيم» أو «تراجع».
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
             <button
               type="button"
               onClick={discardPreview}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer whitespace-nowrap"
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 min-h-[38px] text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer whitespace-nowrap flex-1 sm:flex-initial"
             >
               <X className="w-3.5 h-3.5" aria-hidden="true" />
               <span>تراجع عن المعاينة</span>
@@ -162,7 +168,7 @@ export default function ThemeSettingsPanel({
             <button
               type="button"
               onClick={commitPreview}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 min-h-[36px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer whitespace-nowrap"
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 min-h-[38px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer whitespace-nowrap flex-1 sm:flex-initial"
             >
               <Save className="w-3.5 h-3.5" aria-hidden="true" />
               <span>تطبيق وحفظ الثيم</span>
@@ -187,7 +193,7 @@ export default function ThemeSettingsPanel({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs font-medium text-slate-700 cursor-pointer select-none">
+            <label className="inline-flex items-center gap-2 px-3 py-1.5 min-h-[36px] rounded-xl border border-slate-200 bg-slate-50 text-xs font-medium text-slate-700 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={stageBeforeApply}
@@ -205,15 +211,70 @@ export default function ThemeSettingsPanel({
 
             <button
               type="button"
-              disabled={isDefaultConfig}
+              disabled={isDefaultConfig && !isPreviewing}
               onClick={resetToDefault}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[34px] text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed whitespace-nowrap"
             >
               <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
               <span>إعادة الافتراضي</span>
             </button>
           </div>
         </div>
+
+        {/* Cloud Persistence Status Strip */}
+        {isAuthenticated && (
+          <div
+            className={`rounded-xl border px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs ${
+              syncStatus === 'error'
+                ? 'bg-amber-50 border-amber-200 text-amber-900'
+                : syncStatus === 'offline'
+                ? 'bg-amber-50 border-amber-200 text-amber-900'
+                : 'bg-slate-50 border-slate-200 text-slate-600'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              {syncStatus === 'loading' || syncStatus === 'saving' ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#1E3A5F] shrink-0" aria-hidden="true" />
+              ) : syncStatus === 'offline' ? (
+                <CloudOff className="w-3.5 h-3.5 text-amber-700 shrink-0" aria-hidden="true" />
+              ) : syncStatus === 'error' ? (
+                <AlertCircle className="w-3.5 h-3.5 text-amber-700 shrink-0" aria-hidden="true" />
+              ) : (
+                <Cloud className="w-3.5 h-3.5 text-emerald-700 shrink-0" aria-hidden="true" />
+              )}
+              <span className="truncate sm:whitespace-normal">
+                {syncStatus === 'loading'
+                  ? 'جاري مزامنة تفضيلات المظهر من حسابك السحابي...'
+                  : syncStatus === 'saving'
+                  ? 'جاري حفظ تفضيلات المظهر لحسابك على جميع الأجهزة...'
+                  : syncStatus === 'offline' || syncStatus === 'error'
+                  ? syncError || 'تعذرت المزامنة السحابية الآن؛ تم حفظ المظهر محليًا على هذا الجهاز.'
+                  : 'المظهر المحفوظ متزامن تلقائيًا مع حسابك الشخصي عبر الأجهزة.'}
+              </span>
+            </div>
+            {(syncStatus === 'error' || syncStatus === 'offline') && (
+              <button
+                type="button"
+                disabled={retryingSync}
+                onClick={async () => {
+                  setRetryingSync(true);
+                  try {
+                    await retryCloudSync();
+                  } finally {
+                    setRetryingSync(false);
+                  }
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-amber-300 text-amber-900 font-semibold hover:bg-amber-100 cursor-pointer shrink-0"
+              >
+                <RefreshCw
+                  className={`w-3 h-3 ${retryingSync ? 'animate-spin' : ''}`}
+                  aria-hidden="true"
+                />
+                <span>إعادة المحاولة</span>
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Light / Dark / System Mode Switcher */}
         <div className="space-y-2.5">

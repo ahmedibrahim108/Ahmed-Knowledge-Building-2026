@@ -27,6 +27,7 @@ export interface ThemeVariantPalette {
   fg500: string;
   fg400: string;
   primary: string;
+  primaryHover?: string;
   secondary: string;
   accent: string;
   border: string;
@@ -78,6 +79,67 @@ export interface ResolvedThemeResult {
 }
 
 export const THEME_PRESETS: Record<ThemePresetId, ThemePresetDefinition> = {
+  original: {
+    id: 'original',
+    nameAr: 'الافتراضي الأصلي',
+    nameEn: 'Original Default',
+    descriptionAr: 'التصميم الأصلي الهادئ لمنصة ميزان المعرفة بخلفياته الصافية ولونه الكحلي العميق المتوازن.',
+    recommendedMode: 'light',
+    light: {
+      bg: '#F7F8FA',
+      surface: '#F7F8FA',
+      surface2: '#F1F5F9',
+      elevated: '#FFFFFF',
+      card: '#FFFFFF',
+      popover: '#FFFFFF',
+      muted: '#F1F5F9',
+      fg: '#0F172A',
+      fg800: '#1E293B',
+      fg700: '#334155',
+      fg600: '#475569',
+      fg500: '#64748B',
+      fg400: '#94A3B8',
+      primary: '#1E3A5F',
+      primaryHover: '#162C49',
+      secondary: '#2563EB',
+      accent: '#1E3A5F',
+      border: '#E2E8F0',
+      borderSubtle: '#F1F5F9',
+      borderStrong: '#CBD5E1',
+      input: '#FFFFFF',
+      success: '#059669',
+      warning: '#D97706',
+      destructive: '#DC2626',
+      chartTrack: '#E2E8F0',
+    },
+    dark: {
+      bg: '#0B111B',
+      surface: '#111927',
+      surface2: '#182334',
+      elevated: '#1B273A',
+      card: '#131C2B',
+      popover: '#1A2639',
+      muted: '#172233',
+      fg: '#F1F5F9',
+      fg800: '#E2E8F0',
+      fg700: '#CBD5E1',
+      fg600: '#94A3B8',
+      fg500: '#7C8EA6',
+      fg400: '#5C6F88',
+      primary: '#2B5387',
+      primaryHover: '#3564A1',
+      secondary: '#3B82F6',
+      accent: '#7DB1F0',
+      border: '#243247',
+      borderSubtle: '#192436',
+      borderStrong: '#344764',
+      input: '#0E1623',
+      success: '#10B981',
+      warning: '#F59E0B',
+      destructive: '#EF4444',
+      chartTrack: '#223045',
+    },
+  },
   classic: {
     id: 'classic',
     nameAr: 'كلاسيكي فاتح',
@@ -439,6 +501,7 @@ export const THEME_PRESETS: Record<ThemePresetId, ThemePresetDefinition> = {
 };
 
 export const THEME_PRESET_ORDER: ThemePresetId[] = [
+  'original',
   'classic',
   'midnight',
   'forest',
@@ -608,6 +671,7 @@ export function sanitizeThemeConfig(raw: unknown): ThemeConfig {
       : DEFAULT_THEME_CONFIG.mode;
 
   const preset: ThemePresetId =
+    obj.preset === 'original' ||
     obj.preset === 'classic' ||
     obj.preset === 'midnight' ||
     obj.preset === 'forest' ||
@@ -697,7 +761,7 @@ export function resolveThemeTokens(
 ): ResolvedThemeResult {
   const config = sanitizeThemeConfig(rawConfig);
   const effectiveMode = resolveEffectiveMode(config.mode, osPrefersDark);
-  const presetDef = THEME_PRESETS[config.preset] || THEME_PRESETS.classic;
+  const presetDef = THEME_PRESETS[config.preset] || THEME_PRESETS.original;
   const base = effectiveMode === 'dark' ? { ...presetDef.dark } : { ...presetDef.light };
 
   // 1) Accent overrides
@@ -810,7 +874,9 @@ export function resolveThemeTokens(
   );
 
   const primaryHover =
-    effectiveMode === 'dark'
+    !config.primaryAccentOverride && base.primaryHover
+      ? base.primaryHover
+      : effectiveMode === 'dark'
       ? mixHex(primary, '#FFFFFF', 0.12)
       : mixHex(primary, '#000000', 0.14);
 

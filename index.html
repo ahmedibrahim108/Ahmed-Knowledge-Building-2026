@@ -22,6 +22,7 @@
     <script>
       (function () {
         var presets = {
+          original: { light: ['#F7F8FA', '#0F172A', '#FFFFFF', '#1E3A5F'], dark: ['#0B111B', '#F1F5F9', '#131C2B', '#2B5387'] },
           classic: { light: ['#F8F9FC', '#0F172A', '#FFFFFF', '#6D28D9'], dark: ['#0C0F18', '#F1F5F9', '#151B2B', '#7C3AED'] },
           midnight: { light: ['#EEF2F8', '#0F172A', '#FAFCFF', '#4338CA'], dark: ['#070B14', '#EFF4FB', '#111A2E', '#7C5CFA'] },
           forest: { light: ['#F2F6F3', '#0D2118', '#FBFDFB', '#15803D'], dark: ['#07120D', '#ECF5F0', '#10241A', '#16A34A'] },
@@ -33,7 +34,7 @@
           var raw = localStorage.getItem('kb_theme_config_v1');
           var cfg = raw ? JSON.parse(raw) : null;
           var mode = cfg && (cfg.mode === 'light' || cfg.mode === 'dark' || cfg.mode === 'system') ? cfg.mode : 'light';
-          var presetId = cfg && cfg.preset && presets[cfg.preset] ? cfg.preset : 'classic';
+          var presetId = cfg && cfg.preset && presets[cfg.preset] ? cfg.preset : 'original';
           var osDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
           var eff = mode === 'system' ? (osDark ? 'dark' : 'light') : mode;
           var vals = presets[presetId][eff];

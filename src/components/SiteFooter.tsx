@@ -5,6 +5,7 @@ interface SiteFooterProps {
   siteConfig: PublicSiteConfig;
   isAdmin: boolean;
   canEdit: boolean;
+  showPublicLink?: boolean;
   showExcelExport?: boolean;
   onExportExcel?: () => void;
   onOpenContact?: () => void;
@@ -16,6 +17,7 @@ export default function SiteFooter({
   siteConfig,
   isAdmin,
   canEdit,
+  showPublicLink = false,
   showExcelExport = false,
   onExportExcel,
   onOpenContact,
@@ -72,7 +74,7 @@ export default function SiteFooter({
             </button>
           )}
 
-          {isAdmin && onOpenPublicPreview && (
+          {(isAdmin || showPublicLink) && onOpenPublicPreview && (
             <button
               type="button"
               onClick={onOpenPublicPreview}

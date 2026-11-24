@@ -7,7 +7,6 @@ import {
   BookOpenText,
   CalendarClock,
   CalendarHeart,
-  Check,
   ChevronDown,
   Cloud,
   Eye,
@@ -16,23 +15,17 @@ import {
   LayoutDashboard,
   LogIn,
   LogOut,
-  Monitor,
-  Moon,
   NotebookPen,
   Palette,
   RefreshCw,
   Search,
   Settings2,
-  Sun,
 } from 'lucide-react';
 import {
   DEFAULT_PINNED_NAV_TABS,
   NAV_PINNABLE_TABS_META,
   PublicPageId,
-  ThemeMode,
 } from '../data/curriculumData';
-import { useTheme } from '../utils/ThemeContext';
-import { THEME_PRESETS, THEME_PRESET_ORDER } from '../utils/themeEngine';
 import BrandMark from './BrandMark';
 import PWAInstallButton from './PWAInstallButton';
 
@@ -129,8 +122,6 @@ export default function Header({
 }: HeaderProps) {
   const showAdminNav = isAdmin && !isPreviewingPublic;
   const [reloading, setReloading] = useState(false);
-  const { activeConfig, effectiveMode, applyTheme, setMode } = useTheme();
-  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
 
   const navItems: Array<{ id: ActiveTab; label: string }> = useMemo(() => {
     if (!showAdminNav) {
@@ -175,7 +166,6 @@ export default function Header({
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuOpen(false);
-        setThemeMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -313,7 +303,7 @@ export default function Header({
             className="hidden md:flex items-center gap-5 h-full"
           >
             {publicNavItems.map((pItem) => {
-              const isActive = publicPage === pItem.id;
+              const isActive = activeTab === 'public' && publicPage === pItem.id;
               return (
                 <button
                   key={pItem.id}
@@ -341,7 +331,7 @@ export default function Header({
           </nav>
         )}
 
-        {/* Zone 3: Global Search · Public Preview · User Account */}
+        {/* Zone 3: Global Search · User Account */}
         <div className="flex items-center gap-2 shrink-0 relative" ref={menuRef}>
           {onOpenAdvancedSearch && (
             <button
@@ -356,166 +346,6 @@ export default function Header({
               <span className="hidden xl:inline text-[10px] font-mono text-slate-400">
                 Ctrl+K
               </span>
-            </button>
-          )}
-
-          {/* Quick Theme & Mode Switcher (Available for All Visitors & Admin) */}
-          <div className="relative shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                setThemeMenuOpen((v) => !v);
-                setMenuOpen(false);
-              }}
-              aria-expanded={themeMenuOpen}
-              aria-label="تغيير المظهر والثيم"
-              title="تبديل المظهر (فاتح / داكن / الثيمات)"
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[34px] text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F] ${
-                themeMenuOpen
-                  ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-                  : 'bg-[#F7F8FA] text-slate-700 hover:text-[#1E3A5F] hover:bg-slate-100 border-slate-200'
-              }`}
-            >
-              {effectiveMode === 'dark' ? (
-                <Moon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-              ) : (
-                <Sun className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-              )}
-              <span className="hidden xl:inline">المظهر</span>
-            </button>
-
-            {themeMenuOpen && (
-              <div className="absolute left-0 top-full mt-2 w-72 bg-white border border-slate-200 rounded-2xl shadow-xl p-3 z-50 space-y-3 text-right">
-                <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
-                  <span className="text-xs font-bold text-slate-900 inline-flex items-center gap-1.5">
-                    <Palette className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-                    <span>المظهر السريع</span>
-                  </span>
-                  <span className="text-[10px] font-semibold text-slate-500">
-                    {THEME_PRESETS[activeConfig.preset]?.nameAr}
-                  </span>
-                </div>
-
-                {/* Mode Pills */}
-                <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-xl">
-                  {(
-                    [
-                      { id: 'light', label: 'فاتح', icon: Sun },
-                      { id: 'dark', label: 'داكن', icon: Moon },
-                      { id: 'system', label: 'النظام', icon: Monitor },
-                    ] as Array<{ id: ThemeMode; label: string; icon: typeof Sun }>
-                  ).map((m) => {
-                    const Icon = m.icon;
-                    const active = activeConfig.mode === m.id;
-                    return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => setMode(m.id)}
-                        className={`inline-flex items-center justify-center gap-1 py-1.5 px-2 text-[11px] font-semibold rounded-lg cursor-pointer transition-colors ${
-                          active
-                            ? 'bg-white text-[#1E3A5F] shadow-2xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        <Icon className="w-3 h-3" aria-hidden="true" />
-                        <span>{m.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* 6 Preset Quick Picker */}
-                <div className="grid grid-cols-2 gap-1.5">
-                  {THEME_PRESET_ORDER.map((presetId) => {
-                    const def = THEME_PRESETS[presetId];
-                    const selected = activeConfig.preset === presetId;
-                    const swatchPalette =
-                      effectiveMode === 'dark' ? def.dark : def.light;
-                    return (
-                      <button
-                        key={presetId}
-                        type="button"
-                        onClick={() => {
-                          const nextMode: ThemeMode =
-                            activeConfig.mode === 'system'
-                              ? 'system'
-                              : presetId === 'classic'
-                              ? 'light'
-                              : def.recommendedMode;
-                          applyTheme({
-                            ...activeConfig,
-                            preset: presetId,
-                            mode: nextMode,
-                            primaryAccentOverride: undefined,
-                            secondaryAccentOverride: undefined,
-                            backgroundOverride: undefined,
-                            surfaceOverride: undefined,
-                            borderOverride: undefined,
-                          });
-                        }}
-                        className={`flex items-center justify-between gap-1.5 px-2.5 py-2 rounded-xl border text-right cursor-pointer transition-colors ${
-                          selected
-                            ? 'border-[#1E3A5F] bg-[#F8FAFC]'
-                            : 'border-slate-200 hover:bg-slate-50'
-                        }`}
-                      >
-                        <span className="flex items-center gap-1.5 min-w-0">
-                          <span
-                            className="w-4 h-4 rounded-full border shrink-0 flex items-center justify-center"
-                            style={{
-                              backgroundColor: swatchPalette.bg,
-                              borderColor: swatchPalette.primary,
-                            }}
-                          >
-                            <span
-                              className="w-2 h-2 rounded-full"
-                              style={{ backgroundColor: swatchPalette.primary }}
-                            />
-                          </span>
-                          <span className="text-[11px] font-semibold text-slate-800 truncate">
-                            {def.nameAr}
-                          </span>
-                        </span>
-                        {selected && (
-                          <Check className="w-3 h-3 text-[#1E3A5F] shrink-0" aria-hidden="true" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {onOpenThemeSettings && isAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setThemeMenuOpen(false);
-                      onOpenThemeSettings();
-                    }}
-                    className="w-full py-2 px-3 rounded-xl bg-[#F0F4F9] hover:bg-[#E3ECF6] text-[#1E3A5F] text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-                  >
-                    <Palette className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>تخصيص كامل للألوان والتباين</span>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-          {isAdmin && onTogglePreviewPublic && (
-            <button
-              type="button"
-              onClick={onTogglePreviewPublic}
-              className={`hidden md:inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[34px] text-xs font-semibold rounded-lg border cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
-                isPreviewingPublic
-                  ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-                  : 'bg-[#F7F8FA] text-[#1E3A5F] border-slate-200 hover:bg-slate-100'
-              }`}
-              title={
-                isPreviewingPublic ? 'العودة للوحة الإدارة' : 'معاينة الموقع العام'
-              }
-            >
-              <Eye className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>{isPreviewingPublic ? 'لوحة الإدارة' : 'الموقع العام'}</span>
             </button>
           )}
 
@@ -554,7 +384,7 @@ export default function Header({
                         ? syncingCloud
                           ? 'جاري المزامنة...'
                           : 'مسؤول'
-                        : 'حساب عام'}
+                        : 'حساب عضو'}
                     </span>
                   </span>
                 </div>
@@ -575,7 +405,7 @@ export default function Header({
                     </p>
                   </div>
 
-                  {isAdmin && (
+                  {isAdmin ? (
                     <div className="py-1">
                       <button
                         type="button"
@@ -703,6 +533,22 @@ export default function Header({
                         />
                         <span>مركز الحساب والإدارة</span>
                       </button>
+                      {onOpenThemeSettings && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onOpenThemeSettings();
+                            setMenuOpen(false);
+                          }}
+                          className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                        >
+                          <Palette
+                            className="w-3.5 h-3.5 text-[#1E3A5F]"
+                            aria-hidden="true"
+                          />
+                          <span>إعدادات المظهر والثيمات</span>
+                        </button>
+                      )}
                       {onTogglePreviewPublic && (
                         <button
                           type="button"
@@ -720,6 +566,39 @@ export default function Header({
                           </span>
                         </button>
                       )}
+                    </div>
+                  ) : (
+                    <div className="py-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onOpenThemeSettings) {
+                            onOpenThemeSettings();
+                          } else {
+                            onSelectTab('account');
+                          }
+                          setMenuOpen(false);
+                        }}
+                        className="w-full px-4 py-2 text-right text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <Palette
+                          className="w-3.5 h-3.5 text-[#1E3A5F]"
+                          aria-hidden="true"
+                        />
+                        <span>حسابي وإعدادات المظهر</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectPublicPage?.('home');
+                          onSelectTab('public');
+                          setMenuOpen(false);
+                        }}
+                        className="w-full px-4 py-2 text-right text-xs font-medium text-[#1E3A5F] hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                      >
+                        <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>عرض الموقع العام</span>
+                      </button>
                     </div>
                   )}
 
@@ -783,7 +662,7 @@ export default function Header({
           className="md:hidden border-t border-slate-100 px-3 py-1 flex items-center gap-4 overflow-x-auto no-scrollbar"
         >
           {publicNavItems.map((pItem) => {
-            const isActive = publicPage === pItem.id;
+            const isActive = activeTab === 'public' && publicPage === pItem.id;
             return (
               <button
                 key={pItem.id}

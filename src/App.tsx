@@ -91,6 +91,7 @@ import {
   SmallTask,
   StudyHistoryEntry,
   StudyResource,
+  ThemeConfig,
   UnifiedTask,
   UserPreferences,
   WeeklyMeeting,
@@ -155,6 +156,7 @@ import {
   ensureUserProfileExists,
   fetchGrantedWorkspaceForUser,
   fetchPublicCatalog,
+  fetchUserThemeConfig,
   sanitizeId,
   saveActivityLogDoc,
   saveBlogPostDoc,
@@ -177,6 +179,7 @@ import {
   saveReflectionDoc,
   saveUnifiedTaskDoc,
   saveUserPreferencesDoc,
+  saveUserThemeConfigOnly,
   saveWeeklyMeetingDoc,
   saveWeeklyPlanDoc,
   subscribeCloudAttachments,
@@ -446,6 +449,13 @@ export default function App() {
   const [grantedWorkspace, setGrantedWorkspace] =
     useState<GrantedWorkspaceData | null>(null);
   const [loadingGranted, setLoadingGranted] = useState(false);
+  const [nonAdminThemeConfig, setNonAdminThemeConfig] = useState<
+    ThemeConfig | undefined
+  >(undefined);
+  const [nonAdminThemeLoading, setNonAdminThemeLoading] = useState(false);
+  const [nonAdminThemeError, setNonAdminThemeError] = useState<string | null>(
+    null
+  );
 
   const isAdmin = checkIsAdminAccess(user, userProfile);
   const canEdit = isAdmin && !isPreviewingPublic;
@@ -541,8 +551,9 @@ export default function App() {
         setSelectedCourseId(null);
         syncLocationHash('courses', null, null);
       } else {
-        setActiveTab('overview');
-        syncLocationHash('overview', null, null);
+        const fallbackTab: ActiveTab = isAdmin ? 'overview' : 'public';
+        setActiveTab(fallbackTab);
+        syncLocationHash(fallbackTab, null, null);
       }
       safeScrollToTop();
       return;
@@ -740,6 +751,9 @@ export default function App() {
       setUserProfile(null);
       setGrantedWorkspace(null);
       setLoadingGranted(false);
+      setNonAdminThemeConfig(undefined);
+      setNonAdminThemeLoading(false);
+      setNonAdminThemeError(null);
       setIsPreviewingPublic(false);
       setUser(nextUser);
 
@@ -765,11 +779,14 @@ export default function App() {
 
         if (!adminAllowed) {
           // Strict RBAC: Non-admin users never seed or access admin workspace data directly,
-          // only public items plus explicitly granted read-only content for their account.
-          setActiveTab('public');
+          // only public items, explicitly granted content, and their own per-user theme preferences.
+          setActiveTab((prev) => {
+            const target: ActiveTab = prev === 'account' ? 'account' : 'public';
+            syncLocationHash(target, null, null, target === 'public' ? publicPage : undefined);
+            return target;
+          });
           setSelectedCourseId(null);
           setStudyModalState(null);
-          syncLocationHash('public', null, null);
           void refreshPublicCatalog();
           setLoadingGranted(true);
           fetchGrantedWorkspaceForUser(nextUser)
@@ -778,6 +795,32 @@ export default function App() {
             })
             .finally(() => {
               if (isMounted) setLoadingGranted(false);
+            });
+
+          setNonAdminThemeLoading(true);
+          fetchUserThemeConfig(nextUser.uid)
+            .then((res) => {
+              if (!isMounted) return;
+              if (res.themeConfig) {
+                setNonAdminThemeConfig(res.themeConfig);
+              }
+              if (res.rlsBlocked) {
+                setNonAdminThemeError(
+                  'مزامنة المظهر السحابية للحسابات المسجّلة بانتظار تفعيل سياسة الحفظ (Migration 015)؛ يتم الحفظ محليًا حاليًا.'
+                );
+              } else if (res.error) {
+                setNonAdminThemeError(
+                  formatSupabaseErrorMessage(
+                    res.error,
+                    'تعذر تحميل تفضيلات المظهر السحابية؛ تم استخدام المظهر المحلي.'
+                  )
+                );
+              } else {
+                setNonAdminThemeError(null);
+              }
+            })
+            .finally(() => {
+              if (isMounted) setNonAdminThemeLoading(false);
             });
           return;
         }
@@ -893,10 +936,29 @@ export default function App() {
     };
   }, [syncRefreshTick]);
 
-  // Route guard: guests, non-admins, and public preview mode are locked strictly to public view
+  // Route guard: guests locked to public; signed-in non-admins allowed public + personal account ONLY;
+  // admin preview mode locked to public until toggled back.
   useEffect(() => {
     if (!authReady) return;
-    if (!isAdmin || isPreviewingPublic) {
+    if (!user) {
+      if (activeTab !== 'public') {
+        setActiveTab('public');
+        syncLocationHash('public', null, null);
+      }
+      if (selectedCourseId !== null) setSelectedCourseId(null);
+      if (studyModalState !== null) setStudyModalState(null);
+      return;
+    }
+    if (!isAdmin) {
+      if (activeTab !== 'public' && activeTab !== 'account') {
+        setActiveTab('public');
+        syncLocationHash('public', null, null);
+      }
+      if (selectedCourseId !== null) setSelectedCourseId(null);
+      if (studyModalState !== null) setStudyModalState(null);
+      return;
+    }
+    if (isPreviewingPublic) {
       if (activeTab !== 'public') {
         setActiveTab('public');
         syncLocationHash('public', null, null);
@@ -904,7 +966,15 @@ export default function App() {
       if (selectedCourseId !== null) setSelectedCourseId(null);
       if (studyModalState !== null) setStudyModalState(null);
     }
-  }, [authReady, isAdmin, isPreviewingPublic, activeTab, selectedCourseId, studyModalState]);
+  }, [
+    authReady,
+    user,
+    isAdmin,
+    isPreviewingPublic,
+    activeTab,
+    selectedCourseId,
+    studyModalState,
+  ]);
 
   // Automatically rescue stranded local-only IndexedDB attachments (or reconcile from cloudAttachments) to Supabase Storage
   const rescuedAttachmentKeysRef = useRef<Set<string>>(new Set());
@@ -1253,10 +1323,12 @@ export default function App() {
       handleRequireAuth();
       return;
     }
-    const nextPrefs: UserPreferences = { ...preferences, ...updates };
-    setPreferences(nextPrefs);
-    setActiveLearningHubs(nextPrefs.customHubs);
-    void saveUserPreferencesDoc(user.uid, nextPrefs);
+    setPreferences((prev) => {
+      const nextPrefs: UserPreferences = { ...prev, ...updates };
+      setActiveLearningHubs(nextPrefs.customHubs);
+      void saveUserPreferencesDoc(user.uid, nextPrefs);
+      return nextPrefs;
+    });
   };
 
   // --- Quarter CRUD ---
@@ -3509,24 +3581,44 @@ export default function App() {
   return (
     <ThemeProvider
       userUid={user?.uid}
-      syncedThemeConfig={isAdmin ? preferences.themeConfig : undefined}
-      onPersistSyncedTheme={(nextCfg) => {
-        if (user && isAdmin) {
-          const nextPrefs: UserPreferences = {
-            ...preferences,
-            themeConfig: nextCfg,
-          };
-          setPreferences(nextPrefs);
-          void saveUserPreferencesDoc(user.uid, nextPrefs);
-        }
-      }}
+      cloudLoading={
+        Boolean(user) &&
+        (isAdmin ? syncingCloud && !preferences.themeConfig : nonAdminThemeLoading)
+      }
+      cloudSyncError={user && !isAdmin ? nonAdminThemeError : null}
+      syncedThemeConfig={
+        user ? (isAdmin ? preferences.themeConfig : nonAdminThemeConfig) : undefined
+      }
+      onPersistSyncedTheme={
+        user
+          ? async (nextCfg) => {
+              const saved = await saveUserThemeConfigOnly(user.uid, nextCfg);
+              if (isAdmin) {
+                setPreferences((prev) => ({
+                  ...prev,
+                  themeConfig: saved,
+                }));
+              } else {
+                setNonAdminThemeConfig(saved);
+                setNonAdminThemeError(null);
+              }
+            }
+          : undefined
+      }
     >
       <div className="min-h-screen flex flex-col bg-[#F7F8FA] text-slate-900">
         <Header
-        activeTab={isAdmin && !isPreviewingPublic ? activeTab : 'public'}
+        activeTab={
+          isAdmin && !isPreviewingPublic
+            ? activeTab
+            : user && !isAdmin && activeTab === 'account'
+            ? 'account'
+            : 'public'
+        }
         onSelectTab={(tab) => {
+          if (!isAdmin && tab !== 'account' && tab !== 'public') return;
           if (tab === 'public') {
-            setIsPreviewingPublic(true);
+            setIsPreviewingPublic(isAdmin);
             setPublicPage('home');
             void refreshPublicCatalog();
             navigateToTab('public', false);
@@ -3570,11 +3662,11 @@ export default function App() {
         publicPage={publicPage}
         onSelectPublicPage={(page) => {
           setPublicPage(page);
-          if (isAdmin && !isPreviewingPublic && activeTab !== 'public') {
+          if (isAdmin && !isPreviewingPublic) {
             setIsPreviewingPublic(true);
             void refreshPublicCatalog();
-            setActiveTab('public');
           }
+          setActiveTab('public');
           syncLocationHash('public', null, null, page);
           safeScrollToTop();
         }}
@@ -3602,6 +3694,10 @@ export default function App() {
         onGoForward={handleGoForward}
         onOpenAdvancedSearch={() => setAdvancedSearchOpen(true)}
         onOpenThemeSettings={() => {
+          if (!user) {
+            handleGoogleSignIn();
+            return;
+          }
           setIsPreviewingPublic(false);
           setAccountInitialSubTab('appearance');
           navigateToTab('account');
@@ -3677,7 +3773,10 @@ export default function App() {
             navigateToTab(isAdmin && !isPreviewingPublic ? 'overview' : 'public', false)
           }
         >
-        {(!isAdmin || isPreviewingPublic || activeTab === 'public') ? (
+        {(!user ||
+          (isAdmin && isPreviewingPublic) ||
+          activeTab === 'public' ||
+          (!isAdmin && activeTab !== 'account')) ? (
           <PublicHomeView
             siteConfig={publicSiteConfig}
             publicPage={publicPage}
@@ -3732,6 +3831,14 @@ export default function App() {
                 ? () => {
                     setIsPreviewingPublic(false);
                     navigateToTab('overview', false);
+                  }
+                : undefined
+            }
+            onOpenMyAccount={
+              user && !isAdmin
+                ? () => {
+                    setAccountInitialSubTab('appearance');
+                    navigateToTab('account');
                   }
                 : undefined
             }
@@ -3794,6 +3901,8 @@ export default function App() {
             onConsumeExternalOpenDetail={() => setPendingPublicDetail(null)}
           />
         ) : (
+          <>
+        {isAdmin && (
           <>
         {activeTab === 'overview' && (
           <OverviewView
@@ -4333,10 +4442,18 @@ export default function App() {
             }}
           />
         )}
+          </>
+        )}
 
-        {activeTab === 'account' && (
+        {activeTab === 'account' && user && (
           <AccountCenterView
-            uid={user?.uid}
+            uid={user.uid}
+            isAdmin={isAdmin}
+            userDisplayName={
+              user.displayName || userProfile?.display_name || undefined
+            }
+            userEmail={user.email || undefined}
+            userPhotoUrl={user.photoURL}
             canEdit={canEdit}
             onRequireAuth={handleRequireAuth}
             voiceDialect={preferences.voiceDialect}
@@ -4428,7 +4545,7 @@ export default function App() {
               handleUpdateReadingItem(bookId, { isPublic: isPub });
             }}
             onPreviewPublicSite={() => {
-              setIsPreviewingPublic(true);
+              setIsPreviewingPublic(isAdmin);
               setPublicPage('home');
               void refreshPublicCatalog();
               navigateToTab('public', false);
@@ -4461,10 +4578,11 @@ export default function App() {
         siteConfig={publicSiteConfig}
         isAdmin={isAdmin}
         canEdit={canEdit}
+        showPublicLink={Boolean(user && !isAdmin && activeTab === 'account')}
         showExcelExport={preferences.showExcelExport !== false}
         onExportExcel={handleExportExcel}
         onOpenContact={() => {
-          setIsPreviewingPublic(true);
+          setIsPreviewingPublic(isAdmin);
           setPublicPage('home');
           void refreshPublicCatalog();
           navigateToTab('public', false);
@@ -4475,7 +4593,7 @@ export default function App() {
           }, 120);
         }}
         onOpenPublicPreview={() => {
-          setIsPreviewingPublic(true);
+          setIsPreviewingPublic(isAdmin);
           setPublicPage('home');
           void refreshPublicCatalog();
           navigateToTab('public', false);
