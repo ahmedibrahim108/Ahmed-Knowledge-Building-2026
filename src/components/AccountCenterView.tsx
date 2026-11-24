@@ -86,6 +86,7 @@ import {
   isPending011Migration,
   isPending012Migration,
   isPending013Migration,
+  isPending014Migration,
   updateContactMessageStatus,
   updateUserProfileAccess,
   upsertContentAccessGrant,
@@ -3160,6 +3161,17 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                     013_visual_journal_gallery.sql
                   </code>{' '}
                   في محرر SQL بلوحة Supabase لتفعيل حفظ حقول معرض اليوميات المرئي (الألوان، الأغلفة، التدوين الحر، والملاحظات السريعة) سحابيًا.
+                </div>
+              )}
+
+              {isPending014Migration() && (
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                  يرجى تشغيل ملف التحديث{' '}
+                  <code className="font-mono font-bold">
+                    014_daily_journal_quote.sql
+                  </code>{' '}
+                  في محرر SQL بلوحة Supabase لتفعيل حفظ عمود «اقتباس اليوم» (
+                  <code className="font-mono">daily_quote</code>) في جدول اليوميات سحابيًا.
                 </div>
               )}
 

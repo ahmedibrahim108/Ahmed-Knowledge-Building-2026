@@ -1688,6 +1688,14 @@ export interface JournalQuickNote {
   updatedAtMs: number;
 }
 
+export interface JournalQuoteMeta {
+  text: string;
+  author?: string;
+  theme?: string;
+  dateKey: string;
+  savedAtMs?: number;
+}
+
 export interface DailyJournalRecord {
   dateKey: string; // YYYY-MM-DD (one per user + local date)
   title?: string;
@@ -1699,6 +1707,7 @@ export interface DailyJournalRecord {
   coverImageUrl?: string;
   coverImageStoragePath?: string;
   coverFrame?: ImageFrameSpec;
+  dailyQuote?: JournalQuoteMeta;
   reflectionText: string;
   highlightsText: string;
   moodLabel?: string;

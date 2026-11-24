@@ -36,6 +36,7 @@ import {
   JournalCardColorKey,
   JournalQuickNote,
   JournalQuickNoteKind,
+  JournalQuoteMeta,
   JournalTextSection,
   LearningHubId,
   LearningHubMeta,
@@ -2715,6 +2716,11 @@ export function isPending013Migration(): boolean {
   return hasPending013Migration;
 }
 
+let hasPending014Migration = false;
+export function isPending014Migration(): boolean {
+  return hasPending014Migration;
+}
+
 const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
   courses: ['learning_objectives', 'sort_order', 'is_public'],
   learning_paths: ['learning_objectives', 'sort_order', 'is_public'],
@@ -4191,6 +4197,30 @@ function sanitizeJournalCardColor(raw: unknown): JournalCardColorKey {
   return 'default';
 }
 
+function sanitizeJournalQuote(
+  raw: unknown,
+  fallbackDateKey: string
+): JournalQuoteMeta | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const obj = raw as Record<string, unknown>;
+  const text = clip(typeof obj.text === 'string' ? obj.text : '', 600).trim();
+  if (!text) return undefined;
+  const dk =
+    sanitizeDateKeyOrEmpty(obj.dateKey) ||
+    sanitizeDateKeyOrEmpty(fallbackDateKey) ||
+    toLocalDateKey();
+  return {
+    text,
+    author: clip(typeof obj.author === 'string' ? obj.author : '', 120),
+    theme: clip(typeof obj.theme === 'string' ? obj.theme : '', 80),
+    dateKey: dk,
+    savedAtMs:
+      typeof obj.savedAtMs === 'number' && Number.isFinite(obj.savedAtMs)
+        ? Math.round(obj.savedAtMs)
+        : undefined,
+  };
+}
+
 export function buildDailyJournalBaseRow(uid: string, rec: DailyJournalRecord) {
   return {
     owner_id: uid,
@@ -4206,7 +4236,7 @@ export function buildDailyJournalBaseRow(uid: string, rec: DailyJournalRecord) {
   };
 }
 
-export function buildDailyJournalRow(uid: string, rec: DailyJournalRecord) {
+export function buildDailyJournal013Row(uid: string, rec: DailyJournalRecord) {
   return {
     ...buildDailyJournalBaseRow(uid, rec),
     title: clip(rec.title || '', 240),
@@ -4221,9 +4251,19 @@ export function buildDailyJournalRow(uid: string, rec: DailyJournalRecord) {
   };
 }
 
-function mapDailyJournalRow(raw: Record<string, unknown>): DailyJournalRecord {
+export function buildDailyJournalRow(uid: string, rec: DailyJournalRecord) {
+  const row013 = buildDailyJournal013Row(uid, rec);
+  const cleanQuote = sanitizeJournalQuote(rec.dailyQuote, row013.date_key);
   return {
-    dateKey: String(raw.date_key || toLocalDateKey()),
+    ...row013,
+    daily_quote: cleanQuote || null,
+  };
+}
+
+function mapDailyJournalRow(raw: Record<string, unknown>): DailyJournalRecord {
+  const dateKey = String(raw.date_key || toLocalDateKey());
+  return {
+    dateKey,
     title: raw.title ? String(raw.title) : undefined,
     subtitle: raw.subtitle ? String(raw.subtitle) : undefined,
     bodyHtml: raw.body_html ? String(raw.body_html) : undefined,
@@ -4242,6 +4282,7 @@ function mapDailyJournalRow(raw: Record<string, unknown>): DailyJournalRecord {
       raw.cover_frame && typeof raw.cover_frame === 'object'
         ? sanitizeImageFrameSpec(raw.cover_frame)
         : undefined,
+    dailyQuote: sanitizeJournalQuote(raw.daily_quote, dateKey),
     reflectionText: String(raw.reflection_text || ''),
     highlightsText: String(raw.highlights_text || ''),
     moodLabel: raw.mood_label ? String(raw.mood_label) : undefined,
@@ -4268,12 +4309,24 @@ export async function saveDailyJournalDoc(
       return;
     }
     if (isMissingColumnError(err)) {
-      hasPending013Migration = true;
-      const baseRow = buildDailyJournalBaseRow(uid, rec);
-      await runWrite((c) =>
-        c.from('daily_journals').upsert(baseRow, { onConflict: 'owner_id,date_key' })
-      );
-      return;
+      hasPending014Migration = true;
+      const row013 = buildDailyJournal013Row(uid, rec);
+      try {
+        await runWrite((c) =>
+          c.from('daily_journals').upsert(row013, { onConflict: 'owner_id,date_key' })
+        );
+        return;
+      } catch (err2) {
+        if (isMissingColumnError(err2)) {
+          hasPending013Migration = true;
+          const baseRow = buildDailyJournalBaseRow(uid, rec);
+          await runWrite((c) =>
+            c.from('daily_journals').upsert(baseRow, { onConflict: 'owner_id,date_key' })
+          );
+          return;
+        }
+        throw err2;
+      }
     }
     throw err;
   }
