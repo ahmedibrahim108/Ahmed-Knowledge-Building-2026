@@ -45,6 +45,7 @@ import {
 } from './PinCollectionsBar';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
 import TaskFormModal from './TaskFormModal';
+import { DurationPickerField, TimePickerField } from './TimeAndDurationPickers';
 import { formatRecurrenceSummaryAr } from '../utils/taskRecurrence';
 
 interface PathsViewProps {
@@ -790,41 +791,16 @@ export default function PathsView({
                       </div>
 
                       {isSchedOpen && canEdit && (
-                        <div className="px-4 pb-3 pt-2 bg-slate-50 border-t border-slate-100 space-y-2">
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                        <div className="px-4 pb-3 pt-2 bg-slate-50 border-t border-slate-100 space-y-2.5">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-[11px]">
                             <label className="block text-slate-600">
                               التاريخ
                               <input
                                 type="date"
                                 value={schedDate}
                                 onChange={(e) => setSchedDate(e.target.value)}
-                                className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
+                                className="mt-1 w-full px-2 py-1.5 min-h-[36px] bg-white border border-slate-300 rounded-lg"
                               />
-                            </label>
-                            <label className="block text-slate-600">
-                              الوقت
-                              <input
-                                type="time"
-                                value={schedTime}
-                                onChange={(e) => setSchedTime(e.target.value)}
-                                className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
-                              />
-                            </label>
-                            <label className="block text-slate-600">
-                              المدة (د)
-                              <select
-                                value={schedDuration}
-                                onChange={(e) =>
-                                  setSchedDuration(Number(e.target.value))
-                                }
-                                className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
-                              >
-                                {[15, 30, 45, 60, 90, 120, 180].map((m) => (
-                                  <option key={m} value={m}>
-                                    {m} د
-                                  </option>
-                                ))}
-                              </select>
                             </label>
                             <label className="block text-slate-600">
                               الأولوية
@@ -833,13 +809,31 @@ export default function PathsView({
                                 onChange={(e) =>
                                   setSchedPriority(e.target.value as TaskPriority)
                                 }
-                                className="mt-0.5 w-full px-2 py-1 bg-white border border-slate-300 rounded"
+                                className="mt-1 w-full px-2 py-1.5 min-h-[36px] bg-white border border-slate-300 rounded-lg"
                               >
                                 <option value="high">عالية</option>
                                 <option value="medium">متوسطة</option>
                                 <option value="low">منخفضة</option>
                               </select>
                             </label>
+                            <div className="text-slate-600">
+                              <span className="block mb-1">الوقت</span>
+                              <TimePickerField
+                                compact
+                                value={schedTime}
+                                onChange={setSchedTime}
+                                ariaLabel="وقت المرحلة"
+                              />
+                            </div>
+                            <div className="text-slate-600">
+                              <span className="block mb-1">المدة (د)</span>
+                              <DurationPickerField
+                                compact
+                                value={schedDuration}
+                                onChange={setSchedDuration}
+                                ariaLabel="مدة المرحلة بالدقائق"
+                              />
+                            </div>
                           </div>
                           <div className="flex justify-end">
                             <button
@@ -1053,21 +1047,22 @@ export default function PathsView({
                   placeholder="أضف مهمة مرتبطة بهذا المسار وتظهر في المهام والتقويم..."
                   className="w-full sm:flex-1 min-w-0 px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
                 />
-                <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto">
+                <div className="grid grid-cols-1 sm:flex items-center gap-2 w-full sm:w-auto">
                   <input
                     type="date"
                     value={newPathTaskDate}
                     onChange={(e) => setNewPathTaskDate(e.target.value)}
                     title="تاريخ الجدولة (اختياري)"
-                    className="w-full sm:w-auto min-w-0 px-2.5 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                    className="w-full sm:w-auto min-w-0 px-2.5 py-2 min-h-[38px] text-xs bg-slate-50 border border-slate-300 rounded-lg"
                   />
-                  <input
-                    type="time"
-                    value={newPathTaskTime}
-                    onChange={(e) => setNewPathTaskTime(e.target.value)}
-                    title="الوقت (اختياري)"
-                    className="w-full sm:w-auto min-w-0 px-2.5 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
-                  />
+                  <div className="w-full sm:w-auto min-w-[175px]">
+                    <TimePickerField
+                      compact
+                      value={newPathTaskTime}
+                      onChange={setNewPathTaskTime}
+                      ariaLabel="وقت مهمة المسار"
+                    />
+                  </div>
                 </div>
                 <button
                   type="submit"

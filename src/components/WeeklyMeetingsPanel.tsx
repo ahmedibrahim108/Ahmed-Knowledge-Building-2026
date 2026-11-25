@@ -35,6 +35,7 @@ import {
 } from '../data/curriculumData';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
+import { DurationPickerField, TimePickerField } from './TimeAndDurationPickers';
 
 interface WeeklyMeetingsPanelProps {
   canEdit: boolean;
@@ -473,31 +474,24 @@ export default function WeeklyMeetingsPanel({
               />
             </label>
 
-            <label className="block text-xs font-medium text-slate-700">
-              وقت البدء
-              <input
-                type="time"
-                required
+            <div className="block text-xs font-medium text-slate-700">
+              <span className="block mb-1">وقت البدء</span>
+              <TimePickerField
                 value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-                className="mt-1 w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                onChange={setStartTime}
+                allowClear={false}
+                ariaLabel="وقت بداية الاجتماع"
               />
-            </label>
+            </div>
 
-            <label className="block text-xs font-medium text-slate-700">
-              المدة
-              <select
+            <div className="block text-xs font-medium text-slate-700 sm:col-span-2 lg:col-span-1">
+              <span className="block mb-1">المدة</span>
+              <DurationPickerField
                 value={durationMinutes}
-                onChange={(e) => setDurationMinutes(Number(e.target.value))}
-                className="mt-1 w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
-              >
-                <option value={30}>30 دقيقة</option>
-                <option value={45}>45 دقيقة</option>
-                <option value={60}>60 دقيقة (ساعة)</option>
-                <option value={90}>90 دقيقة</option>
-                <option value={120}>120 دقيقة (ساعتان)</option>
-              </select>
-            </label>
+                onChange={setDurationMinutes}
+                ariaLabel="مدة الاجتماع بالدقائق"
+              />
+            </div>
 
             <div className="flex flex-col justify-end gap-1.5">
               <span className="text-xs font-medium text-slate-700">التكرار الأسبوعي</span>
@@ -982,37 +976,33 @@ export default function WeeklyMeetingsPanel({
                   className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
                 />
               </label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block font-medium text-slate-700">
                   التاريخ
                   <input
                     type="date"
                     value={editDate}
                     onChange={(e) => setEditDate(e.target.value)}
-                    className="mt-1 w-full px-2 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                    className="mt-1 w-full px-2.5 py-2 min-h-[38px] bg-slate-50 border border-slate-300 rounded-lg"
                   />
                 </label>
-                <label className="block font-medium text-slate-700">
-                  الوقت
-                  <input
-                    type="time"
+                <div className="block font-medium text-slate-700">
+                  <span className="block mb-1">الوقت</span>
+                  <TimePickerField
                     value={editTime}
-                    onChange={(e) => setEditTime(e.target.value)}
-                    className="mt-1 w-full px-2 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                    onChange={setEditTime}
+                    allowClear={false}
+                    ariaLabel="تعديل وقت الاجتماع"
                   />
-                </label>
-                <label className="block font-medium text-slate-700">
-                  المدة (د)
-                  <input
-                    type="number"
-                    min={15}
-                    max={480}
-                    step={15}
+                </div>
+                <div className="block font-medium text-slate-700 sm:col-span-2">
+                  <span className="block mb-1">المدة (د)</span>
+                  <DurationPickerField
                     value={editDuration}
-                    onChange={(e) => setEditDuration(Number(e.target.value) || 60)}
-                    className="mt-1 w-full px-2 py-2 bg-slate-50 border border-slate-300 rounded-lg"
+                    onChange={setEditDuration}
+                    ariaLabel="تعديل مدة الاجتماع بالدقائق"
                   />
-                </label>
+                </div>
               </div>
               <label className="inline-flex items-center gap-2 cursor-pointer">
                 <input

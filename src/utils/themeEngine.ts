@@ -922,13 +922,24 @@ export function resolveThemeTokens(
   const glassHeader = hexToRgba(card, effectiveMode === 'dark' ? 0.88 : 0.94);
   const glassSubbar = hexToRgba(surface, effectiveMode === 'dark' ? 0.85 : 0.92);
 
+  const cardHover =
+    effectiveMode === 'dark'
+      ? mixHex(mixHex(card, primaryInk, 0.08), '#FFFFFF', 0.065)
+      : mixHex(card, primaryInk, 0.04);
+  const surfaceHover =
+    effectiveMode === 'dark'
+      ? mixHex(mixHex(surface2, primaryInk, 0.08), '#FFFFFF', 0.055)
+      : mixHex(surface2, '#000000', 0.03);
+
   const tokens: Record<string, string> = {
     '--kb-bg': bg,
     '--kb-canvas-bg': canvasCss,
     '--kb-surface': surface,
     '--kb-surface-2': surface2,
+    '--kb-surface-hover': surfaceHover,
     '--kb-elevated': elevated,
     '--kb-card': card,
+    '--kb-card-hover': cardHover,
     '--kb-popover': popover,
     '--kb-muted': muted,
     '--kb-fg': fg,

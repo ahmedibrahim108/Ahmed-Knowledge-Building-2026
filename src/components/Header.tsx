@@ -78,6 +78,7 @@ interface HeaderProps {
   reflectionsCount?: number;
   blogsCount?: number;
   pinnedNavTabs?: string[];
+  navTabOrder?: string[];
   publicPage?: PublicPageId;
   onSelectPublicPage?: (page: PublicPageId) => void;
   showPublicReflections?: boolean;
@@ -115,6 +116,7 @@ export default function Header({
   reflectionsCount = 0,
   blogsCount = 0,
   pinnedNavTabs,
+  navTabOrder,
   publicPage = 'home',
   onSelectPublicPage,
   showPublicReflections = true,
@@ -158,14 +160,27 @@ export default function Header({
       { id: 'overview', label: 'لوحة المتابعة' },
     ];
 
-    for (const meta of NAV_PINNABLE_TABS_META) {
+    const orderSource =
+      navTabOrder && navTabOrder.length > 0
+        ? navTabOrder
+        : NAV_PINNABLE_TABS_META.map((m) => m.id);
+    const orderRank = new Map<string, number>();
+    orderSource.forEach((id, idx) => orderRank.set(id, idx));
+
+    const orderedMeta = [...NAV_PINNABLE_TABS_META].sort((a, b) => {
+      const ra = orderRank.has(a.id) ? (orderRank.get(a.id) as number) : 999;
+      const rb = orderRank.has(b.id) ? (orderRank.get(b.id) as number) : 999;
+      return ra - rb;
+    });
+
+    for (const meta of orderedMeta) {
       if (!pinnedSet.has(meta.id)) continue;
       dynamicItems.push({ id: meta.id, label: meta.label });
     }
 
     dynamicItems.push({ id: 'account', label: 'الإدارة والحساب' });
     return dynamicItems;
-  }, [showAdminNav, pinnedNavTabs]);
+  }, [showAdminNav, pinnedNavTabs, navTabOrder]);
 
   const publicNavItems: Array<{ id: PublicPageId; label: string }> = useMemo(() => {
     const list: Array<{ id: PublicPageId; label: string }> = [

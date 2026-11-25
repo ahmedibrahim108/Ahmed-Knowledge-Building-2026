@@ -58,6 +58,7 @@ import {
   isTaskCompletedOnDate,
 } from '../utils/taskRecurrence';
 import TaskFormModal from './TaskFormModal';
+import { DurationPickerField, TimePickerField } from './TimeAndDurationPickers';
 
 interface CalendarViewProps {
   uid?: string;
@@ -2202,58 +2203,53 @@ export default function CalendarView({
 
                     {isQuickSchedOpen && canEdit && (
                       <div className="pt-2 border-t border-slate-100 space-y-2">
-                        <div className="grid grid-cols-3 gap-1.5">
+                        <div className="space-y-1.5">
                           <input
                             type="date"
                             value={quickSchedDate}
                             onChange={(e) => setQuickSchedDate(e.target.value)}
-                            className="col-span-2 px-2 py-1 text-[11px] bg-slate-50 border border-slate-300 rounded"
+                            className="w-full px-2 py-1.5 text-[11px] bg-slate-50 border border-slate-300 rounded-lg"
                           />
-                          <input
-                            type="time"
+                          <TimePickerField
+                            compact
                             value={quickSchedTime}
-                            onChange={(e) => setQuickSchedTime(e.target.value)}
-                            className="px-1.5 py-1 text-[11px] bg-slate-50 border border-slate-300 rounded"
+                            onChange={setQuickSchedTime}
+                            ariaLabel="وقت الجدولة السريعة"
                           />
                         </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <select
+                        <div className="space-y-1.5">
+                          <DurationPickerField
+                            compact
                             value={quickSchedDuration}
-                            onChange={(e) =>
-                              setQuickSchedDuration(Number(e.target.value))
-                            }
-                            className="px-2 py-1 text-[11px] bg-slate-50 border border-slate-300 rounded"
-                          >
-                            {DURATION_OPTIONS.map((m) => (
-                              <option key={m} value={m}>
-                                {m} دقيقة
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const end = quickSchedTime
-                                ? computeEndTimeFromMinutes(
-                                    quickSchedTime,
-                                    quickSchedDuration
-                                  )
-                                : '';
-                              onUpdateUnifiedTask(task.id, {
-                                scheduledDate: quickSchedDate,
-                                dueDate: quickSchedDate,
-                                startTime: quickSchedTime,
-                                durationMinutes: quickSchedDuration,
-                                endTime: end,
-                              });
-                              setSelectedDateKey(quickSchedDate);
-                              setQuickScheduleTargetId(null);
-                              setMobilePane('calendar');
-                            }}
-                            className="px-3 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] rounded cursor-pointer"
-                          >
-                            تثبيت في التقويم
-                          </button>
+                            onChange={setQuickSchedDuration}
+                            ariaLabel="مدة الجدولة السريعة"
+                          />
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const end = quickSchedTime
+                                  ? computeEndTimeFromMinutes(
+                                      quickSchedTime,
+                                      quickSchedDuration
+                                    )
+                                  : '';
+                                onUpdateUnifiedTask(task.id, {
+                                  scheduledDate: quickSchedDate,
+                                  dueDate: quickSchedDate,
+                                  startTime: quickSchedTime,
+                                  durationMinutes: quickSchedDuration,
+                                  endTime: end,
+                                });
+                                setSelectedDateKey(quickSchedDate);
+                                setQuickScheduleTargetId(null);
+                                setMobilePane('calendar');
+                              }}
+                              className="px-3 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] rounded cursor-pointer"
+                            >
+                              تثبيت في التقويم
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -3224,39 +3220,33 @@ export default function CalendarView({
               className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg"
             />
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <label className="block text-[11px] text-slate-600">
                 التاريخ
                 <input
                   type="date"
                   value={createDateKey}
                   onChange={(e) => setCreateDateKey(e.target.value)}
-                  className="mt-1 w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                  className="mt-1 w-full px-2.5 py-2 min-h-[38px] text-xs bg-slate-50 border border-slate-300 rounded-lg"
                 />
               </label>
-              <label className="block text-[11px] text-slate-600">
-                وقت البدء
-                <input
-                  type="time"
+              <div className="text-[11px] text-slate-600">
+                <span className="block mb-1">وقت البدء</span>
+                <TimePickerField
                   value={createStartTime}
-                  onChange={(e) => setCreateStartTime(e.target.value)}
-                  className="mt-1 w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                  onChange={setCreateStartTime}
+                  allowClear={false}
+                  ariaLabel="وقت البدء"
                 />
-              </label>
-              <label className="block text-[11px] text-slate-600">
-                المدة
-                <select
+              </div>
+              <div className="sm:col-span-2 text-[11px] text-slate-600">
+                <span className="block mb-1">المدة (دقيقة)</span>
+                <DurationPickerField
                   value={createDuration}
-                  onChange={(e) => setCreateDuration(Number(e.target.value))}
-                  className="mt-1 w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
-                >
-                  {DURATION_OPTIONS.map((m) => (
-                    <option key={m} value={m}>
-                      {m} د
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  onChange={setCreateDuration}
+                  ariaLabel="المدة بالدقائق"
+                />
+              </div>
             </div>
 
             {createType === 'task' ? (
@@ -3449,7 +3439,7 @@ export default function CalendarView({
               </div>
             )}
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <label className="block text-[11px] text-slate-600">
                 التاريخ
                 <input
@@ -3457,34 +3447,28 @@ export default function CalendarView({
                   disabled={!canEdit}
                   value={editDate}
                   onChange={(e) => setEditDate(e.target.value)}
-                  className="mt-1 w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                  className="mt-1 w-full px-2.5 py-2 min-h-[38px] text-xs bg-slate-50 border border-slate-300 rounded-lg"
                 />
               </label>
-              <label className="block text-[11px] text-slate-600">
-                وقت البدء
-                <input
-                  type="time"
+              <div className="text-[11px] text-slate-600">
+                <span className="block mb-1">وقت البدء</span>
+                <TimePickerField
                   disabled={!canEdit}
                   value={editTime}
-                  onChange={(e) => setEditTime(e.target.value)}
-                  className="mt-1 w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
+                  onChange={setEditTime}
+                  allowClear={false}
+                  ariaLabel="تعديل وقت البدء"
                 />
-              </label>
-              <label className="block text-[11px] text-slate-600">
-                المدة
-                <select
+              </div>
+              <div className="sm:col-span-2 text-[11px] text-slate-600">
+                <span className="block mb-1">المدة (دقيقة)</span>
+                <DurationPickerField
                   disabled={!canEdit}
                   value={editDuration}
-                  onChange={(e) => setEditDuration(Number(e.target.value))}
-                  className="mt-1 w-full px-2 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
-                >
-                  {DURATION_OPTIONS.map((m) => (
-                    <option key={m} value={m}>
-                      {m} دقيقة
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  onChange={setEditDuration}
+                  ariaLabel="تعديل المدة بالدقائق"
+                />
+              </div>
             </div>
 
             {activeItem.kind === 'task' && (

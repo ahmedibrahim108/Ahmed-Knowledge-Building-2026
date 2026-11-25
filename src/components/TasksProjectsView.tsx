@@ -57,6 +57,7 @@ import {
   isEntityInCollection,
 } from './PinCollectionsBar';
 import TaskFormModal from './TaskFormModal';
+import { DurationPickerField, TimePickerField } from './TimeAndDurationPickers';
 
 interface TasksProjectsViewProps {
   canEdit: boolean;
@@ -2661,31 +2662,23 @@ export default function TasksProjectsView({
                 />
               </label>
 
-              <label className="block font-medium text-slate-700">
-                وقت البدء (اختياري)
-                <input
-                  type="time"
+              <div className="block font-medium text-slate-700 sm:col-span-2">
+                <span className="block mb-1">وقت البدء (اختياري)</span>
+                <TimePickerField
                   value={quickSchedTime}
-                  onChange={(e) => setQuickSchedTime(e.target.value)}
-                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg tabular-nums"
+                  onChange={setQuickSchedTime}
+                  ariaLabel="وقت بدء المهمة"
                 />
-              </label>
+              </div>
 
-              <label className="block font-medium text-slate-700">
-                المدة التقديرية
-                <select
+              <div className="block font-medium text-slate-700 sm:col-span-2">
+                <span className="block mb-1">المدة التقديرية (15 / 30 / 60 أو مخصص)</span>
+                <DurationPickerField
                   value={quickSchedDuration}
-                  onChange={(e) => setQuickSchedDuration(Number(e.target.value))}
-                  className="mt-1 w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg"
-                >
-                  <option value={15}>15 دقيقة</option>
-                  <option value={30}>30 دقيقة</option>
-                  <option value={45}>45 دقيقة</option>
-                  <option value={60}>ساعة (60 د)</option>
-                  <option value={90}>ساعة ونصف</option>
-                  <option value={120}>ساعتان</option>
-                </select>
-              </label>
+                  onChange={setQuickSchedDuration}
+                  ariaLabel="المدة التقديرية للمهمة"
+                />
+              </div>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">

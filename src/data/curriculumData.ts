@@ -1014,7 +1014,7 @@ export function estimateReadingTimeMinutes(text: string): number {
   return Math.max(1, Math.round(words / 160));
 }
 
-export type PublicPageId = 'home' | 'reflections' | 'blogs';
+export type PublicPageId = 'home' | 'courses' | 'notes' | 'reflections' | 'blogs';
 
 export type CalendarCategory = 'شخصي' | 'دراسة' | 'موعد' | 'مراجعة' | 'قراءة';
 export type CalendarColor = 'navy' | 'emerald' | 'amber' | 'rose';
@@ -1315,6 +1315,7 @@ export interface PublicSiteVisibilityFlags {
   showBooks: boolean;
   showReflections?: boolean;
   showBlogs?: boolean;
+  showQuotes?: boolean;
 }
 
 export interface PublicSiteConfig {
@@ -1330,6 +1331,9 @@ export interface PublicSiteConfig {
   sections: PublicSiteSection[];
   visibilityFlags: PublicSiteVisibilityFlags;
   publicReflectionCategories?: string[];
+  publicQuotes?: UserQuoteItem[];
+  pinnedPublicQuoteId?: string | null;
+  publicQuotesHeading?: string;
   creatorName?: string;
   linkedinUrl?: string;
   contactEmail?: string;
@@ -1379,8 +1383,12 @@ export const DEFAULT_PUBLIC_SITE_CONFIG: PublicSiteConfig = {
     showBooks: true,
     showReflections: true,
     showBlogs: true,
+    showQuotes: true,
   },
   publicReflectionCategories: [],
+  publicQuotes: [],
+  pinnedPublicQuoteId: null,
+  publicQuotesHeading: 'اقتباس اليوم ومختارات ملهمة',
   creatorName: 'Ahmed Ibrahim',
   linkedinUrl: '',
   contactEmail: 'ahmedibrahim108@outlook.com',
@@ -1502,6 +1510,7 @@ export interface UserQuoteItem {
   colorKey?: string;
   reflection?: string;
   isDailyPinned?: boolean;
+  isPublic?: boolean;
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -1525,6 +1534,7 @@ export interface UserPreferences {
   reflectionCategories?: string[];
   customReadingModes?: ReadingModeMeta[];
   pinnedNavTabs?: string[];
+  navTabOrder?: string[];
   customHubs?: LearningHubMeta[];
   dashboardHeroImageUrl?: string;
   dashboardHeroImageStoragePath?: string;
@@ -1592,6 +1602,10 @@ export const DEFAULT_PINNED_NAV_TABS: string[] = [
   'tasks',
   'calendar',
 ];
+
+export const DEFAULT_NAV_TAB_ORDER: string[] = NAV_PINNABLE_TABS_META.map(
+  (t) => t.id
+);
 
 // ============================================================================
 // Daily Journal, Activity Log, Period Reviews, Weekly Planner & Saved Pins
@@ -2092,6 +2106,7 @@ export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   reflectionCategories: DEFAULT_REFLECTION_CATEGORIES,
   customReadingModes: READING_MODES_META,
   pinnedNavTabs: DEFAULT_PINNED_NAV_TABS,
+  navTabOrder: DEFAULT_NAV_TAB_ORDER,
   customHubs: DEFAULT_LEARNING_HUBS,
   taskStatusOrder: DEFAULT_TASK_STATUS_ORDER,
   themeConfig: DEFAULT_THEME_CONFIG,

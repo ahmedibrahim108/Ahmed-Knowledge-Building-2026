@@ -3830,6 +3830,7 @@ export default function App() {
         reflectionsCount={reflections.length}
         blogsCount={blogPosts.length}
         pinnedNavTabs={preferences.pinnedNavTabs}
+        navTabOrder={preferences.navTabOrder}
         publicPage={publicPage}
         onSelectPublicPage={(page) => {
           setPublicPage(page);

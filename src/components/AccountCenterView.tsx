@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
   ArrowUpLeft,
   BookOpen,
   BookOpenText,
@@ -39,6 +41,7 @@ import {
   ContentAccessGrant,
   CustomCategory,
   DEFAULT_HUB_CATEGORIES,
+  DEFAULT_NAV_TAB_ORDER,
   DEFAULT_PINNED_NAV_TABS,
   DEFAULT_REFLECTION_CATEGORIES,
   DomainId,
@@ -349,6 +352,41 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
     // Guarantee at least 1 tab stays pinned besides overview/account
     if (next.length === 0) return;
     props.onUpdatePreferences({ pinnedNavTabs: next });
+  };
+
+  const orderedNavTabs = (() => {
+    const orderSource =
+      props.preferences.navTabOrder && props.preferences.navTabOrder.length > 0
+        ? props.preferences.navTabOrder
+        : DEFAULT_NAV_TAB_ORDER;
+    const rank = new Map<string, number>();
+    orderSource.forEach((id, idx) => rank.set(id, idx));
+    return [...NAV_PINNABLE_TABS_META].sort((a, b) => {
+      const ra = rank.has(a.id) ? (rank.get(a.id) as number) : 999;
+      const rb = rank.has(b.id) ? (rank.get(b.id) as number) : 999;
+      return ra - rb;
+    });
+  })();
+
+  const handleMoveNavTab = (tabId: string, dir: 'up' | 'down') => {
+    if (!props.canEdit) return props.onRequireAuth();
+    const ids = orderedNavTabs.map((t) => t.id);
+    const idx = ids.indexOf(tabId);
+    if (idx === -1) return;
+    const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
+    if (targetIdx < 0 || targetIdx >= ids.length) return;
+    const next = [...ids];
+    const [moved] = next.splice(idx, 1);
+    next.splice(targetIdx, 0, moved);
+    props.onUpdatePreferences({ navTabOrder: next });
+  };
+
+  const handleResetNavOrder = () => {
+    if (!props.canEdit) return props.onRequireAuth();
+    props.onUpdatePreferences({
+      navTabOrder: DEFAULT_NAV_TAB_ORDER,
+      pinnedNavTabs: DEFAULT_PINNED_NAV_TABS,
+    });
   };
 
   const openHubForm = (hub?: LearningHubMeta) => {
@@ -862,19 +900,29 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
           {/* SECTION 1: Workspace Navigation Pins & Learning Hubs Customizer */}
           {subTab === 'workspace' && (
             <div className="space-y-6">
-              {/* Navbar Pinning & Quick Launcher */}
+              {/* Navbar Pinning, Ordering & Quick Launcher */}
               <section className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4">
-                <div className="space-y-1 pb-3 border-b border-slate-100">
-                  <h2 className="font-editorial text-xl font-bold text-slate-900">
-                    الأقسام المثبتة في الشريط العلوي ({pinnedSet.size})
-                  </h2>
-                  <p className="text-xs text-slate-500">
-                    اختر الأقسام التي تظهر دائمًا في الشريط العلوي لسهولة الوصول، بينما تبقى بقية الأقسام متاحة للفتح مباشرة من هنا في أي وقت.
-                  </p>
+                <div className="flex flex-wrap items-start justify-between gap-3 pb-3 border-b border-slate-100">
+                  <div className="space-y-1">
+                    <h2 className="font-editorial text-xl font-bold text-slate-900">
+                      تخصيص وترتيب الشريط العلوي ({pinnedSet.size})
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      اختر الأقسام الظاهرة في الشريط العلوي ورتّب أولويتها (مثلاً تقديم الكورسات أو التلخيص قبل غيرها) مع بقاء جميع الأقسام متاحة للفتح هنا.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleResetNavOrder}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold text-slate-700 bg-[#F7F8FA] hover:bg-slate-200 border border-slate-200 rounded-lg cursor-pointer shrink-0"
+                  >
+                    <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                    <span>استعادة الترتيب الافتراضي</span>
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                  {NAV_PINNABLE_TABS_META.map((item) => {
+                  {orderedNavTabs.map((item, idx) => {
                     const isPinned = pinnedSet.has(item.id);
                     return (
                       <div
@@ -887,11 +935,16 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                       >
                         <div className="space-y-1">
                           <div className="flex items-center justify-between gap-2">
-                            <p className="text-sm font-bold text-slate-900">
-                              {item.label}
-                            </p>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-slate-200/70 text-[10px] font-bold text-slate-700 tabular-nums shrink-0">
+                                {idx + 1}
+                              </span>
+                              <p className="text-sm font-bold text-slate-900 truncate">
+                                {item.label}
+                              </p>
+                            </div>
                             <span
-                              className={`text-[10px] font-semibold ${
+                              className={`text-[10px] font-semibold shrink-0 ${
                                 isPinned ? 'text-[#1E3A5F]' : 'text-slate-400'
                               }`}
                             >
@@ -903,18 +956,40 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                           </p>
                         </div>
 
-                        <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
-                          <button
-                            type="button"
-                            onClick={() => props.onNavigateTab(item.id)}
-                            className="inline-flex items-center gap-1 text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-                          >
-                            <span>فتح القسم</span>
-                            <ArrowUpLeft
-                              className="w-3.5 h-3.5"
-                              aria-hidden="true"
-                            />
-                          </button>
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => handleMoveNavTab(item.id, 'up')}
+                              title="تقديم التبويب خطوة للأول"
+                              aria-label={`تقديم تبويب ${item.label}`}
+                              className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:text-[#1E3A5F] hover:bg-slate-50 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === orderedNavTabs.length - 1}
+                              onClick={() => handleMoveNavTab(item.id, 'down')}
+                              title="تأخير التبويب خطوة للخلف"
+                              aria-label={`تأخير تبويب ${item.label}`}
+                              className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:text-[#1E3A5F] hover:bg-slate-50 disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => props.onNavigateTab(item.id)}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                            >
+                              <span>فتح</span>
+                              <ArrowUpLeft
+                                className="w-3.5 h-3.5"
+                                aria-hidden="true"
+                              />
+                            </button>
+                          </div>
 
                           <button
                             type="button"

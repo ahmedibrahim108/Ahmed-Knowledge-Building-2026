@@ -18,6 +18,7 @@ import {
   DEFAULT_HUB_CATEGORIES,
   DEFAULT_IMAGE_FRAME_SPEC,
   DEFAULT_LEARNING_HUBS,
+  DEFAULT_NAV_TAB_ORDER,
   DEFAULT_PINNED_NAV_TABS,
   DEFAULT_PUBLIC_SITE_CONFIG,
   DEFAULT_REFLECTION_CATEGORIES,
@@ -432,6 +433,38 @@ function sanitizeSafeHttpUrl(raw: unknown, maxLen = 500): string {
   return /^https?:\/\//i.test(trimmed) ? trimmed : '';
 }
 
+function sanitizePublicQuotesList(rawList: unknown): UserQuoteItem[] {
+  if (!Array.isArray(rawList)) return [];
+  return rawList
+    .filter(
+      (q): q is Record<string, unknown> =>
+        Boolean(q && typeof q === 'object' && typeof (q as Record<string, unknown>).text === 'string' && String((q as Record<string, unknown>).text).trim())
+    )
+    .slice(0, 60)
+    .map((q, idx) => ({
+      id: sanitizeId(typeof q.id === 'string' && q.id ? q.id : `pub_q_${idx + 1}`),
+      text: clip(String(q.text).trim(), 600),
+      author: clip(typeof q.author === 'string' ? q.author.trim() : '', 120),
+      theme: typeof q.theme === 'string' && q.theme.trim() ? clip(q.theme.trim(), 80) : undefined,
+      dateKey:
+        typeof q.dateKey === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(q.dateKey)
+          ? q.dateKey
+          : toLocalDateKey(),
+      colorKey:
+        typeof q.colorKey === 'string' && q.colorKey.trim()
+          ? clip(q.colorKey.trim(), 40)
+          : undefined,
+      reflection:
+        typeof q.reflection === 'string' && q.reflection.trim()
+          ? clip(q.reflection.trim(), 2000)
+          : undefined,
+      isDailyPinned: Boolean(q.isDailyPinned),
+      isPublic: true,
+      createdAtMs: Number(q.createdAtMs) || Date.now(),
+      updatedAtMs: Number(q.updatedAtMs) || Date.now(),
+    }));
+}
+
 function mapPublicSiteConfigRow(raw: Record<string, unknown> | null | undefined): PublicSiteConfig {
   if (!raw) return DEFAULT_PUBLIC_SITE_CONFIG;
   const rawFlags =
@@ -478,12 +511,22 @@ function mapPublicSiteConfigRow(raw: Record<string, unknown> | null | undefined)
       showBooks: rawFlags.showBooks !== false,
       showReflections: rawFlags.showReflections !== false,
       showBlogs: rawFlags.showBlogs !== false,
+      showQuotes: rawFlags.showQuotes !== false,
     },
     publicReflectionCategories: sanitizeStringList(
       raw.public_reflection_categories,
       40,
       80
     ),
+    publicQuotes: sanitizePublicQuotesList(rawFlags.publicQuotes),
+    pinnedPublicQuoteId:
+      typeof rawFlags.pinnedPublicQuoteId === 'string' && rawFlags.pinnedPublicQuoteId.trim()
+        ? clip(rawFlags.pinnedPublicQuoteId.trim(), 128)
+        : null,
+    publicQuotesHeading:
+      typeof rawFlags.publicQuotesHeading === 'string' && rawFlags.publicQuotesHeading.trim()
+        ? clip(rawFlags.publicQuotesHeading.trim(), 160)
+        : DEFAULT_PUBLIC_SITE_CONFIG.publicQuotesHeading,
     creatorName:
       typeof rawFlags.creatorName === 'string' && rawFlags.creatorName.trim()
         ? clip(rawFlags.creatorName.trim(), 120)
@@ -748,6 +791,10 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
   const sanitizedPins = Array.isArray(prefs.pinnedNavTabs)
     ? sanitizeStringList(prefs.pinnedNavTabs, 20, 40)
     : DEFAULT_PINNED_NAV_TABS;
+  const sanitizedTabOrder =
+    Array.isArray(prefs.navTabOrder) && prefs.navTabOrder.length > 0
+      ? sanitizeStringList(prefs.navTabOrder, 30, 40)
+      : DEFAULT_NAV_TAB_ORDER;
 
   const heroUrl = clip(prefs.dashboardHeroImageUrl || '', 2000);
   const heroStoragePath = clip(prefs.dashboardHeroImageStoragePath || '', 500);
@@ -789,6 +836,7 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
           colorKey: q.colorKey ? clip(q.colorKey, 40) : undefined,
           reflection: q.reflection ? clip(q.reflection, 4000) : undefined,
           isDailyPinned: Boolean(q.isDailyPinned),
+          isPublic: Boolean(q.isPublic),
           createdAtMs: Number(q.createdAtMs) || Date.now(),
           updatedAtMs: Number(q.updatedAtMs) || Date.now(),
         }))
@@ -827,6 +875,7 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
     calendar_prefs: {
       ...sanitizeCalendarPrefs(prefs.calendarPrefs),
       pinnedNavTabsMirror: sanitizedPins,
+      navTabOrderMirror: sanitizedTabOrder,
       customHubsMirror: sanitizedHubs,
       dashboardHeroMirror: dashboardHeroObj,
       taskStatusOrderMirror: sanitizeTaskStatusOrder(prefs.taskStatusOrder),
@@ -1416,6 +1465,16 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
         return sanitizeStringList(mirror, 20, 40);
       }
       return DEFAULT_PINNED_NAV_TABS;
+    })(),
+    navTabOrder: (() => {
+      const mirror =
+        raw.calendar_prefs && typeof raw.calendar_prefs === 'object'
+          ? (raw.calendar_prefs as Record<string, unknown>).navTabOrderMirror
+          : undefined;
+      if (Array.isArray(mirror) && mirror.length > 0) {
+        return sanitizeStringList(mirror, 30, 40);
+      }
+      return DEFAULT_NAV_TAB_ORDER;
     })(),
     customHubs: resolvedCustomHubs,
     ...(() => {
@@ -4037,6 +4096,17 @@ export async function savePublicSiteConfig(
       showBooks: cfg.visibilityFlags?.showBooks !== false,
       showReflections: cfg.visibilityFlags?.showReflections !== false,
       showBlogs: cfg.visibilityFlags?.showBlogs !== false,
+      showQuotes: cfg.visibilityFlags?.showQuotes !== false,
+      publicQuotes: sanitizePublicQuotesList(cfg.publicQuotes),
+      pinnedPublicQuoteId: cfg.pinnedPublicQuoteId
+        ? clip(String(cfg.pinnedPublicQuoteId), 128)
+        : null,
+      publicQuotesHeading: clip(
+        cfg.publicQuotesHeading ||
+          DEFAULT_PUBLIC_SITE_CONFIG.publicQuotesHeading ||
+          'اقتباس اليوم ومختارات ملهمة',
+        160
+      ),
       creatorName: clip(cfg.creatorName || 'Ahmed Ibrahim', 120),
       linkedinUrl: sanitizeSafeHttpUrl(cfg.linkedinUrl),
       contactEmail: clip(cfg.contactEmail || '', 160),
@@ -4614,13 +4684,21 @@ export async function fetchGrantedWorkspaceForUser(
       mapCourseRow(r as Record<string, unknown>)
     );
     const grantedCourseNumSet = new Set(courses.map((c) => c.id));
+    const grantedCourseTitleSet = new Set(
+      courses
+        .map((c) => (c.title || '').trim().toLowerCase())
+        .filter((t) => t.length > 0)
+    );
 
     const bookNotes = (notesRes.data || [])
       .map((r) => mapBookNoteRow(r as Record<string, unknown>))
       .filter(
         (n) =>
           grantedNoteSet.has(n.id) ||
-          (includeCourseNotesAny && n.courseId && grantedCourseNumSet.has(n.courseId))
+          (includeCourseNotesAny &&
+            ((n.courseId && grantedCourseNumSet.has(n.courseId)) ||
+              (n.courseTitle &&
+                grantedCourseTitleSet.has(n.courseTitle.trim().toLowerCase()))))
       );
 
     const learningPaths = (pathsRes.data || []).map((r) =>

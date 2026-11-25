@@ -22,6 +22,7 @@ import {
   normalizeRecurrenceRule,
 } from '../utils/taskRecurrence';
 import { useSpeechDictation } from '../hooks/useSpeechDictation';
+import { DurationPickerField, TimePickerField } from './TimeAndDurationPickers';
 
 interface TaskFormModalProps {
   open: boolean;
@@ -568,7 +569,7 @@ export default function TaskFormModal({
               )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] text-slate-600 mb-1">
                   تاريخ التنفيذ
@@ -577,41 +578,7 @@ export default function TaskFormModal({
                   type="date"
                   value={scheduledDate}
                   onChange={(e) => setScheduledDate(e.target.value)}
-                  className="w-full px-2.5 py-2 text-xs bg-white border border-slate-300 rounded-lg tabular-nums"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] text-slate-600 mb-1">
-                  وقت البداية
-                </label>
-                <div className="relative flex items-center">
-                  <Clock className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 pointer-events-none" />
-                  <input
-                    type="time"
-                    value={startTime}
-                    disabled={!scheduledDate}
-                    onChange={(e) => setStartTime(e.target.value)}
-                    className="w-full pr-8 pl-2 py-2 text-xs bg-white border border-slate-300 rounded-lg disabled:opacity-50 tabular-nums"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-[11px] text-slate-600 mb-1">
-                  المدة (دقيقة)
-                </label>
-                <input
-                  type="number"
-                  min={15}
-                  max={480}
-                  step={15}
-                  disabled={!scheduledDate}
-                  value={durationMinutes}
-                  onChange={(e) =>
-                    setDurationMinutes(Math.max(15, Number(e.target.value) || 45))
-                  }
-                  className="w-full px-2.5 py-2 text-xs bg-white border border-slate-300 rounded-lg disabled:opacity-50 tabular-nums"
+                  className="w-full px-2.5 py-2 min-h-[38px] text-xs bg-white border border-slate-300 rounded-lg tabular-nums"
                 />
               </div>
 
@@ -623,7 +590,31 @@ export default function TaskFormModal({
                   type="date"
                   value={deadline}
                   onChange={(e) => setDeadline(e.target.value)}
-                  className="w-full px-2.5 py-2 text-xs bg-white border border-slate-300 rounded-lg tabular-nums"
+                  className="w-full px-2.5 py-2 min-h-[38px] text-xs bg-white border border-slate-300 rounded-lg tabular-nums"
+                />
+              </div>
+
+              <div>
+                <span className="block text-[11px] text-slate-600 mb-1">
+                  وقت البداية
+                </span>
+                <TimePickerField
+                  value={startTime}
+                  disabled={!scheduledDate}
+                  onChange={setStartTime}
+                  ariaLabel="وقت بداية المهمة"
+                />
+              </div>
+
+              <div>
+                <span className="block text-[11px] text-slate-600 mb-1">
+                  المدة التقديرية (15 / 30 / 60 أو مخصص)
+                </span>
+                <DurationPickerField
+                  value={durationMinutes}
+                  disabled={!scheduledDate}
+                  onChange={setDurationMinutes}
+                  ariaLabel="مدة المهمة بالدقائق"
                 />
               </div>
             </div>
