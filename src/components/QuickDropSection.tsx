@@ -661,173 +661,192 @@ export default function QuickDropSection({
         </div>
       )}
 
-      {/* Compact Add New Item Form */}
+      {/* Two-Column Layout: Composer (Col 1) + Active Items (Col 2) */}
       {viewTab === 'active' && (
-        <form
-          onSubmit={(e) => void handleCreateItem(e)}
-          className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-3"
-        >
-          <div className="flex flex-col sm:flex-row gap-2">
-            <input
-              type="text"
-              value={titleInput}
-              onChange={(e) => setTitleInput(e.target.value)}
-              maxLength={140}
-              placeholder="عنوان قصير (اختياري)..."
-              className="flex-1 min-w-0 px-3 py-2 min-h-[40px] text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
-            />
-            <button
-              type="button"
-              onClick={() => void handlePasteFromClipboard()}
-              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 min-h-[40px] text-xs font-semibold text-[#1E3A5F] bg-white hover:bg-slate-100 border border-slate-200 rounded-xl cursor-pointer shrink-0 transition-colors"
-            >
-              <ClipboardPaste className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>لصق من الحافظة</span>
-            </button>
-          </div>
-
-          <AutoResizeTextarea
-            minRows={2}
-            value={contentInput}
-            onChange={(e) => {
-              setContentInput(e.target.value);
-              if (pasteError) setPasteError(null);
-            }}
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                e.preventDefault();
-                void handleCreateItem();
-              }
-            }}
-            placeholder="الصق رابط اجتماع أو مقال، أو اكتب نصًا ومعلومة سريعة لنقلها بين أجهزتك..."
-            className="w-full px-3 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl leading-relaxed focus:outline-none focus:border-[#1E3A5F]"
-          />
-
-          {pasteError && (
-            <p className="text-[11px] text-amber-800">{pasteError}</p>
-          )}
-
-          {/* Staged Attachments Preview */}
-          {composerAttachments.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-1">
-              {composerAttachments.map((att) => (
-                <div
-                  key={att.id}
-                  className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-xs max-w-full"
-                >
-                  {att.kind === 'image' && att.dataUrl ? (
-                    <img
-                      src={att.dataUrl}
-                      alt={att.name}
-                      className="w-7 h-7 rounded object-cover shrink-0 border border-slate-200"
-                    />
-                  ) : att.kind === 'image' ? (
-                    <ImageIcon className="w-4 h-4 text-[#1E3A5F] shrink-0" aria-hidden="true" />
-                  ) : (
-                    <FileText className="w-4 h-4 text-rose-700 shrink-0" aria-hidden="true" />
-                  )}
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-semibold text-slate-800 truncate max-w-[140px]">
-                      {att.name}
-                    </p>
-                    <p className="text-[10px] text-slate-500 tabular-nums">
-                      {formatBytesShort(att.sizeBytes)}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setComposerAttachments((prev) =>
-                        prev.filter((a) => a.id !== att.id)
-                      )
-                    }
-                    title="إزالة المرفق"
-                    aria-label="إزالة المرفق"
-                    className="p-1 text-slate-400 hover:text-rose-700 cursor-pointer"
-                  >
-                    <X className="w-3.5 h-3.5" aria-hidden="true" />
-                  </button>
-                </div>
-              ))}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+          {/* Column 1: Add / Send New Item */}
+          <form
+            onSubmit={(e) => void handleCreateItem(e)}
+            className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-3 min-w-0"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-xs font-bold text-slate-800">
+                إرسال عنصر جديد
+              </h3>
+              <span className="text-[11px] text-slate-500">
+                روابط، نصوص، صور أو PDF
+              </span>
             </div>
-          )}
 
-          <input
-            ref={composerFileRef}
-            type="file"
-            accept="image/*,application/pdf,.pdf"
-            multiple
-            className="hidden"
-            onChange={(e) => void handleComposerFilesSelected(e.target.files)}
-          />
-          <input
-            ref={replaceFileRef}
-            type="file"
-            accept="image/*,application/pdf,.pdf"
-            className="hidden"
-            onChange={(e) => void handleReplaceAttachmentPicked(e.target.files)}
-          />
-
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 min-w-0">
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                value={titleInput}
+                onChange={(e) => setTitleInput(e.target.value)}
+                maxLength={140}
+                placeholder="عنوان قصير (اختياري)..."
+                className="flex-1 min-w-0 px-3 py-2 min-h-[40px] text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
+              />
               <button
                 type="button"
-                disabled={uploadingFiles}
-                onClick={() => {
-                  if (!uid || !canEdit) return onRequireAuth();
-                  composerFileRef.current?.click();
-                }}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[34px] text-xs font-semibold text-[#1E3A5F] bg-white hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer disabled:opacity-50 transition-colors"
+                onClick={() => void handlePasteFromClipboard()}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 min-h-[40px] text-xs font-semibold text-[#1E3A5F] bg-white hover:bg-slate-100 border border-slate-200 rounded-xl cursor-pointer shrink-0 transition-colors"
               >
-                {uploadingFiles ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                ) : (
-                  <Paperclip className="w-3.5 h-3.5" aria-hidden="true" />
-                )}
-                <span>{uploadingFiles ? 'جاري الرفع...' : 'إرفاق صورة / PDF'}</span>
+                <ClipboardPaste className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>لصق من الحافظة</span>
               </button>
-
-              {detectedComposerUrls.length > 0 ? (
-                <span className="inline-flex items-center gap-1 text-[#1E3A5F] font-medium truncate max-w-full">
-                  <Link2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                  <span className="truncate">
-                    تم التعرف على {detectedComposerUrls.length} رابط تلقائيًا
-                  </span>
-                </span>
-              ) : (
-                <span className="hidden sm:inline">Ctrl+Enter للإضافة الفورية</span>
-              )}
             </div>
 
-            <button
-              type="submit"
-              disabled={(!contentInput.trim() && composerAttachments.length === 0) || submitting || uploadingFiles}
-              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
-            >
-              {submitting ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-              ) : (
-                <Send className="w-3.5 h-3.5" aria-hidden="true" />
-              )}
-              <span>{submitting ? 'جاري الإرسال...' : 'إضافة للنقل السريع'}</span>
-            </button>
-          </div>
-        </form>
-      )}
+            <AutoResizeTextarea
+              minRows={3}
+              value={contentInput}
+              onChange={(e) => {
+                setContentInput(e.target.value);
+                if (pasteError) setPasteError(null);
+              }}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                  e.preventDefault();
+                  void handleCreateItem();
+                }
+              }}
+              placeholder="الصق رابط اجتماع أو مقال، أو اكتب نصًا ومعلومة سريعة لنقلها بين أجهزتك..."
+              className="w-full px-3 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl leading-relaxed focus:outline-none focus:border-[#1E3A5F]"
+            />
 
-      {/* Active Inbox Items (capped height <= ~5 items + thin scrollbar) */}
-      {viewTab === 'active' && (
-        activeItems.length === 0 ? (
-          <div className="p-6 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center space-y-1.5">
-            <p className="text-xs sm:text-sm font-semibold text-slate-700">
-              صندوق النقل السريع فارغ حاليًا
-            </p>
-            <p className="text-xs text-slate-500">
-              أضف رابطًا أو نصًا أو صورة أو ملف PDF ليظهر فورًا على بقية أجهزتك لمدة 24 ساعة.
-            </p>
-          </div>
-        ) : (
-          <div className="max-h-[430px] overflow-y-auto thin-scrollbar pr-0.5 space-y-3">
+            {pasteError && (
+              <p className="text-[11px] text-amber-800">{pasteError}</p>
+            )}
+
+            {/* Staged Attachments Preview */}
+            {composerAttachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {composerAttachments.map((att) => (
+                  <div
+                    key={att.id}
+                    className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-xs max-w-full"
+                  >
+                    {att.kind === 'image' && att.dataUrl ? (
+                      <img
+                        src={att.dataUrl}
+                        alt={att.name}
+                        className="w-7 h-7 rounded object-cover shrink-0 border border-slate-200"
+                      />
+                    ) : att.kind === 'image' ? (
+                      <ImageIcon className="w-4 h-4 text-[#1E3A5F] shrink-0" aria-hidden="true" />
+                    ) : (
+                      <FileText className="w-4 h-4 text-rose-700 shrink-0" aria-hidden="true" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold text-slate-800 truncate max-w-[140px]">
+                        {att.name}
+                      </p>
+                      <p className="text-[10px] text-slate-500 tabular-nums">
+                        {formatBytesShort(att.sizeBytes)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setComposerAttachments((prev) =>
+                          prev.filter((a) => a.id !== att.id)
+                        )
+                      }
+                      title="إزالة المرفق"
+                      aria-label="إزالة المرفق"
+                      className="p-1 text-slate-400 hover:text-rose-700 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <input
+              ref={composerFileRef}
+              type="file"
+              accept="image/*,application/pdf,.pdf"
+              multiple
+              className="hidden"
+              onChange={(e) => void handleComposerFilesSelected(e.target.files)}
+            />
+            <input
+              ref={replaceFileRef}
+              type="file"
+              accept="image/*,application/pdf,.pdf"
+              className="hidden"
+              onChange={(e) => void handleReplaceAttachmentPicked(e.target.files)}
+            />
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 min-w-0">
+                <button
+                  type="button"
+                  disabled={uploadingFiles}
+                  onClick={() => {
+                    if (!uid || !canEdit) return onRequireAuth();
+                    composerFileRef.current?.click();
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[34px] text-xs font-semibold text-[#1E3A5F] bg-white hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer disabled:opacity-50 transition-colors"
+                >
+                  {uploadingFiles ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Paperclip className="w-3.5 h-3.5" aria-hidden="true" />
+                  )}
+                  <span>{uploadingFiles ? 'جاري الرفع...' : 'إرفاق صورة / PDF'}</span>
+                </button>
+
+                {detectedComposerUrls.length > 0 ? (
+                  <span className="inline-flex items-center gap-1 text-[#1E3A5F] font-medium truncate max-w-full">
+                    <Link2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                    <span className="truncate">
+                      تم التعرف على {detectedComposerUrls.length} رابط تلقائيًا
+                    </span>
+                  </span>
+                ) : (
+                  <span className="hidden sm:inline">Ctrl+Enter للإضافة الفورية</span>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={(!contentInput.trim() && composerAttachments.length === 0) || submitting || uploadingFiles}
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
+              >
+                {submitting ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Send className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+                <span>{submitting ? 'جاري الإرسال...' : 'إضافة للنقل السريع'}</span>
+              </button>
+            </div>
+          </form>
+
+          {/* Column 2: Active Items (capped height + thin scrollbar) */}
+          <div className="min-w-0 space-y-2.5">
+            <div className="flex items-center justify-between gap-2 px-1">
+              <h3 className="text-xs font-bold text-slate-800">
+                المهام والعناصر النشطة
+              </h3>
+              <span className="text-[11px] text-slate-500 tabular-nums">
+                {activeItems.length} عنصر
+              </span>
+            </div>
+
+            {activeItems.length === 0 ? (
+              <div className="p-6 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center space-y-1.5">
+                <p className="text-xs sm:text-sm font-semibold text-slate-700">
+                  صندوق النقل السريع فارغ حاليًا
+                </p>
+                <p className="text-xs text-slate-500">
+                  أضف رابطًا أو نصًا أو صورة أو ملف PDF ليظهر فورًا على بقية أجهزتك لمدة 24 ساعة.
+                </p>
+              </div>
+            ) : (
+              <div className="max-h-[430px] overflow-y-auto thin-scrollbar pr-0.5 space-y-3">
             {activeItems.map((item) => {
               const urls = extractSafeUrls(item.content);
               const primaryUrl = urls[0] || null;
@@ -1065,8 +1084,10 @@ export default function QuickDropSection({
                 </article>
               );
             })}
+              </div>
+            )}
           </div>
-        )
+        </div>
       )}
 
       {/* Trash / Archived View */}
