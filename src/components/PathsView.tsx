@@ -17,6 +17,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import {
+  ActivityLogEntry,
   LEARNING_HUBS,
   LearningHubId,
   LearningPath,
@@ -28,6 +29,7 @@ import {
   PracticalProject,
   ReadingLibraryItem,
   ReadingModeMeta,
+  RecoveryPathWorkspace,
   TaskPriority,
   UnifiedTask,
   computeEndTimeFromMinutes,
@@ -43,12 +45,17 @@ import {
   PinEntityButton,
   isEntityInCollection,
 } from './PinCollectionsBar';
+import RecoveryPathToolkit, {
+  RecoveryDailyLogPayload,
+} from './RecoveryPathToolkit';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
 import TaskFormModal from './TaskFormModal';
 import { DurationPickerField, TimePickerField } from './TimeAndDurationPickers';
+import { isRecoveryLearningPath } from '../utils/recoveryPathStorage';
 import { formatRecurrenceSummaryAr } from '../utils/taskRecurrence';
 
 interface PathsViewProps {
+  uid?: string;
   canEdit: boolean;
   onRequireAuth: () => void;
   paths: LearningPath[];
@@ -80,6 +87,11 @@ interface PathsViewProps {
   onDeletePinCollection?: (id: string) => void;
   onTogglePinEntity?: (collectionId: string, entityType: PinEntityType, entityId: string) => void;
   onQuickCreatePinCollection?: (title: string, entityType: PinEntityType, entityId: string) => void;
+  activityLogs?: ActivityLogEntry[];
+  recoveryWorkspaces?: Record<string, RecoveryPathWorkspace>;
+  onSaveRecoveryWorkspace?: (pathId: string, nextWorkspace: RecoveryPathWorkspace) => void;
+  onLogRecoveryActivity?: (payload: RecoveryDailyLogPayload) => boolean;
+  onOpenLibrary?: () => void;
 }
 
 const STATUS_LABELS: Record<LearningPathStatus, string> = {
@@ -89,6 +101,7 @@ const STATUS_LABELS: Record<LearningPathStatus, string> = {
 };
 
 export default function PathsView({
+  uid,
   canEdit,
   onRequireAuth,
   paths,
@@ -118,6 +131,11 @@ export default function PathsView({
   onDeletePinCollection,
   onTogglePinEntity,
   onQuickCreatePinCollection,
+  activityLogs = [],
+  recoveryWorkspaces,
+  onSaveRecoveryWorkspace,
+  onLogRecoveryActivity,
+  onOpenLibrary,
 }: PathsViewProps) {
   const [selectedPathId, setSelectedPathId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -658,6 +676,25 @@ export default function PathsView({
                 />
               </label>
             </div>
+          )}
+
+          {isRecoveryLearningPath(selectedPath) && (
+            <RecoveryPathToolkit
+              uid={uid}
+              canEdit={canEdit}
+              path={selectedPath}
+              cloudWorkspace={recoveryWorkspaces?.[selectedPath.id]}
+              onSaveWorkspace={onSaveRecoveryWorkspace}
+              activityLogs={activityLogs}
+              onLogRecoveryActivity={onLogRecoveryActivity}
+              courses={courses}
+              readingItems={readingItems}
+              onToggleLinkedCourse={(courseId) =>
+                handleToggleLinkedCourse(selectedPath, courseId)
+              }
+              onOpenCourse={onOpenCourse}
+              onOpenLibrary={onOpenLibrary}
+            />
           )}
 
           {/* Milestones / Stages */}

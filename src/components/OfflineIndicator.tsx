@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Check, CloudUpload, RefreshCw, WifiOff } from 'lucide-react';
 import {
   OfflineSyncState,
+  getOfflineSyncState,
   subscribeOfflineSyncState,
 } from '../utils/offlineQueue';
 import { syncAllPendingOfflineChanges } from '../utils/offlineSync';
@@ -11,18 +12,9 @@ interface OfflineIndicatorProps {
 }
 
 export default function OfflineIndicator({ onSynced }: OfflineIndicatorProps) {
-  const [syncState, setSyncState] = useState<OfflineSyncState>(() => ({
-    isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
-    activeUid: null,
-    pendingMutationsCount: 0,
-    pendingImagesCount: 0,
-    pendingAudioCount: 0,
-    totalPendingCount: 0,
-    isSyncing: false,
-    lastSyncedAtMs: null,
-    lastSyncMessage: null,
-    lastSyncError: null,
-  }));
+  const [syncState, setSyncState] = useState<OfflineSyncState>(() =>
+    getOfflineSyncState()
+  );
   const [justSynced, setJustSynced] = useState(false);
 
   useEffect(() => {

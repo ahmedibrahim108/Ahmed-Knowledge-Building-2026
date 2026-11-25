@@ -587,6 +587,114 @@ export interface LearningPath {
   listenCount?: number;
 }
 
+export type RecoveryMeetingType = 'حضوري' | 'أونلاين' | 'مختلط';
+
+export interface RecoveryMeeting {
+  id: string;
+  name: string;
+  schedule: string;
+  meetingType: RecoveryMeetingType;
+  locationOrLink?: string;
+  notes?: string;
+  createdAtMs: number;
+}
+
+export interface RecoveryMeetingAttendance {
+  id: string;
+  meetingId: string;
+  meetingName: string;
+  dateKey: string;
+  note?: string;
+  attendedAtMs: number;
+}
+
+export interface RecoveryToolItem {
+  id: string;
+  title: string;
+  category: string;
+  description?: string;
+  cadence?: string;
+  sortOrder: number;
+  createdAtMs: number;
+}
+
+export interface RecoveryPracticeLog {
+  id: string;
+  toolId: string;
+  toolTitle: string;
+  dateKey: string;
+  note?: string;
+  loggedToDailyJournal: boolean;
+  practicedAtMs: number;
+}
+
+export interface NightlyInventoryQuestion {
+  id: string;
+  prompt: string;
+  helperHint?: string;
+  sortOrder: number;
+}
+
+export interface NightlyInventoryEntry {
+  dateKey: string;
+  answers: Record<string, string>;
+  generalNote?: string;
+  updatedAtMs: number;
+}
+
+export type RecoveryServiceItemKind =
+  | 'space'
+  | 'commitment'
+  | 'task'
+  | 'note'
+  | 'resource';
+
+export interface RecoveryServiceItem {
+  id: string;
+  kind: RecoveryServiceItemKind;
+  title: string;
+  spaceName?: string;
+  scheduleOrDetail?: string;
+  linkUrl?: string;
+  notes?: string;
+  completed: boolean;
+  completedDateKey?: string;
+  completedAtMs?: number;
+  createdAtMs: number;
+}
+
+export type RecoveryResourceKind =
+  | 'workshop'
+  | 'book_article'
+  | 'media'
+  | 'link';
+
+export interface RecoveryResourceItem {
+  id: string;
+  kind: RecoveryResourceKind;
+  title: string;
+  url?: string;
+  notes?: string;
+  completed: boolean;
+  completedDateKey?: string;
+  completedAtMs?: number;
+  createdAtMs: number;
+}
+
+export interface RecoveryPathWorkspace {
+  pathId: string;
+  meetings: RecoveryMeeting[];
+  attendanceLogs: RecoveryMeetingAttendance[];
+  tools: RecoveryToolItem[];
+  practiceLogs: RecoveryPracticeLog[];
+  inventoryQuestions: NightlyInventoryQuestion[];
+  inventoryEntries: Record<string, NightlyInventoryEntry>;
+  serviceItems: RecoveryServiceItem[];
+  linkedReadingIds: string[];
+  customResources: RecoveryResourceItem[];
+  updatedAtMs: number;
+}
+
 export type ReadingItemType =
   | 'كتاب'
   | 'مقال'
@@ -1548,6 +1656,7 @@ export interface UserPreferences {
   hiddenActivityIds?: string[];
   hiddenActivityTypes?: ActivityEntityType[];
   minimalWritingMode?: boolean;
+  recoveryPathWorkspaces?: Record<string, RecoveryPathWorkspace>;
 }
 
 export interface PinnableNavTabMeta {

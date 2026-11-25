@@ -96,6 +96,7 @@ import {
   toLocalDateKey,
 } from '../data/curriculumData';
 import { sanitizeThemeConfig } from '../utils/themeEngine';
+import { sanitizeRecoveryWorkspacesMap } from '../utils/recoveryPathStorage';
 import { normalizeRecurrenceRule } from '../utils/taskRecurrence';
 import {
   QueuedSupabaseMutation,
@@ -854,6 +855,9 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
       ? sanitizeStringList(prefs.hiddenActivityTypes, 20, 40)
       : [],
     minimalWritingMode: Boolean(prefs.minimalWritingMode),
+    recoveryPathWorkspaces: sanitizeRecoveryWorkspacesMap(
+      prefs.recoveryPathWorkspaces
+    ),
   };
 
   return {
@@ -1580,6 +1584,14 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
           : {}),
         ...(typeof ex.minimalWritingMode === 'boolean'
           ? { minimalWritingMode: ex.minimalWritingMode }
+          : {}),
+        ...(ex.recoveryPathWorkspaces &&
+        typeof ex.recoveryPathWorkspaces === 'object'
+          ? {
+              recoveryPathWorkspaces: sanitizeRecoveryWorkspacesMap(
+                ex.recoveryPathWorkspaces
+              ),
+            }
           : {}),
       };
     })(),

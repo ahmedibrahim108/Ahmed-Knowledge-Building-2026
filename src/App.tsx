@@ -86,6 +86,7 @@ import {
   PublicSiteConfig,
   QuarterInfo,
   ReadingLibraryItem,
+  RecoveryPathWorkspace,
   ReflectionColorKey,
   ReflectionMood,
   SmallTask,
@@ -1528,6 +1529,75 @@ export default function App() {
       void saveUserPreferencesDoc(user.uid, nextPrefs);
       return nextPrefs;
     });
+  };
+
+  const handleSaveRecoveryWorkspace = (
+    pathId: string,
+    nextWorkspace: RecoveryPathWorkspace
+  ) => {
+    if (!user || !isAdmin) {
+      handleRequireAuth();
+      return;
+    }
+    setPreferences((prev) => {
+      const nextPrefs: UserPreferences = {
+        ...prev,
+        recoveryPathWorkspaces: {
+          ...(prev.recoveryPathWorkspaces || {}),
+          [pathId]: nextWorkspace,
+        },
+      };
+      void saveUserPreferencesDoc(user.uid, nextPrefs);
+      return nextPrefs;
+    });
+  };
+
+  const handleLogRecoveryActivity = (payload: {
+    entityType: ActivityLogEntry['entityType'];
+    entityId: string;
+    action: ActivityLogEntry['action'];
+    title: string;
+    subtitle?: string;
+    hubId?: LearningHubId;
+    dateKey?: string;
+  }): boolean => {
+    if (!user || !isAdmin) return false;
+    const targetDateKey = payload.dateKey || toLocalDateKey();
+    const alreadyExists = activityLogs.some(
+      (a) =>
+        a.dateKey === targetDateKey &&
+        a.entityType === payload.entityType &&
+        a.entityId === payload.entityId
+    );
+    if (alreadyExists) return false;
+
+    const now = Date.now();
+    const entry: ActivityLogEntry = {
+      id: `act-${now}-${Math.floor(Math.random() * 10000)}`,
+      dateKey: targetDateKey,
+      occurredAtMs: now,
+      entityType: payload.entityType,
+      entityId: payload.entityId,
+      action: payload.action,
+      title: payload.title,
+      hubId: payload.hubId,
+      subtitle: payload.subtitle,
+    };
+    setActivityLogs((prev) => {
+      if (
+        prev.some(
+          (a) =>
+            a.dateKey === targetDateKey &&
+            a.entityType === payload.entityType &&
+            a.entityId === payload.entityId
+        )
+      ) {
+        return prev;
+      }
+      void saveActivityLogDoc(user.uid, entry);
+      return [entry, ...prev].slice(0, 600);
+    });
+    return true;
   };
 
   // --- Quarter CRUD ---
@@ -4325,6 +4395,7 @@ export default function App() {
 
         {activeTab === 'paths' && (
           <PathsView
+            uid={user?.uid}
             canEdit={canEdit}
             onRequireAuth={handleRequireAuth}
             paths={learningPaths}
@@ -4345,6 +4416,7 @@ export default function App() {
             onOpenCourse={(courseId) => navigateToCourseRoute(courseId)}
             onOpenCalendar={() => navigateToTab('calendar')}
             onOpenTasks={() => navigateToTab('tasks')}
+            onOpenLibrary={() => navigateToTab('library')}
             customReadingModes={preferences.customReadingModes}
             onUpdateReadingModes={(nextModes) =>
               handleUpdatePreferences({ customReadingModes: nextModes })
@@ -4356,6 +4428,10 @@ export default function App() {
             onDeletePinCollection={handleDeletePinCollection}
             onTogglePinEntity={handleTogglePinEntity}
             onQuickCreatePinCollection={handleQuickCreatePinCollection}
+            activityLogs={activityLogs}
+            recoveryWorkspaces={preferences.recoveryPathWorkspaces}
+            onSaveRecoveryWorkspace={handleSaveRecoveryWorkspace}
+            onLogRecoveryActivity={handleLogRecoveryActivity}
           />
         )}
 

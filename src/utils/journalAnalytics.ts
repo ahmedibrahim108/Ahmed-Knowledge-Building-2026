@@ -303,6 +303,27 @@ function resolveEntityMeta(
   }
 
   if (entityType === 'learning_path') {
+    if (entityId.startsWith('recovery-')) {
+      const parts = entityId.split(':');
+      const targetPathId = parts[1] || '';
+      const path = data.learningPaths.find((p) => p.id === targetPathId);
+      const isTool = entityId.startsWith('recovery-tool:');
+      const isService = entityId.startsWith('recovery-service:');
+      return {
+        title: fallbackTitle,
+        subtitle: fallbackSubtitle || (path ? `مسار ${path.title}` : undefined),
+        hubId: path?.hubId || fallbackHubId || 'knowledge',
+        typeLabel: isTool
+          ? 'أداة تعافي'
+          : isService
+          ? 'خدمة تعافي'
+          : 'مورد تعافي',
+        navAction: { type: 'path', pathId: path?.id || targetPathId },
+        liveStatusLabel: isService ? 'تم إنجاز الخدمة' : 'تمت الممارسة',
+        liveCategory: 'completed',
+        liveTone: 'emerald',
+      };
+    }
     const path = data.learningPaths.find((p) => p.id === entityId);
     const done = path?.status === 'completed';
     return {
@@ -347,6 +368,23 @@ function resolveEntityMeta(
   }
 
   if (entityType === 'meeting') {
+    if (entityId.startsWith('recovery-meeting:')) {
+      const parts = entityId.split(':');
+      const targetPathId = parts[1] || '';
+      const path = data.learningPaths.find((p) => p.id === targetPathId);
+      return {
+        title: fallbackTitle,
+        subtitle: fallbackSubtitle || (path ? `مسار ${path.title}` : undefined),
+        hubId: path?.hubId || fallbackHubId || 'knowledge',
+        typeLabel: 'اجتماع تعافي',
+        navAction: targetPathId
+          ? { type: 'path', pathId: targetPathId }
+          : { type: 'calendar', dateKey: toLocalDateKey() },
+        liveStatusLabel: 'تم الحضور',
+        liveCategory: 'completed',
+        liveTone: 'emerald',
+      };
+    }
     const mtg = data.weeklyMeetings.find((m) => m.id === entityId);
     return {
       title: mtg?.title || fallbackTitle,
