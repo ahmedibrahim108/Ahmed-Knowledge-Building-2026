@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   ArrowLeft,
+  ArrowRight,
   BookOpen,
   Calendar,
   Camera,
   Check,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -17,14 +17,12 @@ import {
   Loader2,
   Mic,
   MicOff,
-  Minimize2,
   Palette,
   PenLine,
   Plus,
   Quote,
   RefreshCw,
   RotateCcw,
-  Save,
   StickyNote,
   Trash2,
   UploadCloud,
@@ -79,7 +77,7 @@ import { ImageFrameEditorModal } from './FramedImage';
 import JournalVoiceRecorder from './JournalVoiceRecorder';
 import RichTextNoteEditor from './RichTextNoteEditor';
 
-type DiaryTab =
+export type DiaryTab =
   | 'continuous'
   | 'writing'
   | 'photos'
@@ -110,6 +108,7 @@ interface JournalDayModalProps {
   onAudioClipSaved?: (clip: SavedAudioClipSummary) => void;
   onAudioClipDeleted?: (clipId: string) => void;
   initialShowCustomize?: boolean;
+  initialTab?: DiaryTab;
 }
 
 function buildInitialDraft(
@@ -160,6 +159,51 @@ function hasJournalDraftChanged(
   );
 }
 
+function getLocalResumeKey(uid: string | undefined, dateKey: string): string {
+  return `kb_journal_resume_v1:${uid || 'guest'}:${dateKey}`;
+}
+
+function readLocalResumeDraft(
+  uid: string | undefined,
+  dateKey: string,
+  baseline: DailyJournalRecord
+): DailyJournalRecord | null {
+  try {
+    const raw = window.localStorage.getItem(getLocalResumeKey(uid, dateKey));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as DailyJournalRecord;
+    if (!parsed || parsed.dateKey !== dateKey) return null;
+    if (
+      (parsed.updatedAtMs ?? 0) >= (baseline.updatedAtMs ?? 0) &&
+      hasJournalDraftChanged(parsed, baseline)
+    ) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalResumeDraft(uid: string | undefined, draft: DailyJournalRecord): void {
+  try {
+    window.localStorage.setItem(
+      getLocalResumeKey(uid, draft.dateKey),
+      JSON.stringify(draft)
+    );
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function clearLocalResumeDraft(uid: string | undefined, dateKey: string): void {
+  try {
+    window.localStorage.removeItem(getLocalResumeKey(uid, dateKey));
+  } catch {
+    // ignore
+  }
+}
+
 function activityStatusClass(tone: DailyJournalItem['statusTone']): string {
   switch (tone) {
     case 'emerald':
@@ -191,17 +235,35 @@ export default function JournalDayModal({
   onAudioClipSaved,
   onAudioClipDeleted,
   initialShowCustomize = false,
+  initialTab = 'writing',
 }: JournalDayModalProps) {
-  const [activeTab, setActiveTab] = useState<DiaryTab>('continuous');
+  const [activeTab, setActiveTab] = useState<DiaryTab>(initialTab);
   const [showCustomize, setShowCustomize] = useState(initialShowCustomize);
 
-  const [draft, setDraft] = useState<DailyJournalRecord>(() =>
-    buildInitialDraft(dateKey, journalRecord)
-  );
+  const [draft, setDraft] = useState<DailyJournalRecord>(() => {
+    const base = buildInitialDraft(dateKey, journalRecord);
+    return readLocalResumeDraft(uid, dateKey, base) || base;
+  });
   const [saveState, setSaveState] = useState<'idle' | 'dirty' | 'saving' | 'saved'>('idle');
   const lastSavedRef = useRef<DailyJournalRecord>(buildInitialDraft(dateKey, journalRecord));
   const draftRef = useRef<DailyJournalRecord>(draft);
   const autosaveTimerRef = useRef<number | null>(null);
+
+  // Mobile virtual keyboard / visualViewport tracking
+  const [mobileViewportBox, setMobileViewportBox] = useState<{
+    heightPx: number;
+    offsetTopPx: number;
+  } | null>(null);
+
+  // Calm minimal writing state & progressive disclosure toggles
+  const [isMinimalWriting, setIsMinimalWriting] = useState<boolean>(true);
+  const [showSubtitleField, setShowSubtitleField] = useState<boolean>(() =>
+    Boolean(draft.subtitle?.trim())
+  );
+  const [showReflectionExtras, setShowReflectionExtras] = useState<boolean>(() =>
+    Boolean(draft.highlightsText?.trim() || draft.reflectionText?.trim())
+  );
+  const [showDayQuote, setShowDayQuote] = useState<boolean>(false);
 
   // Photos state
   const [photos, setPhotos] = useState<ResolvedPhotoItem[]>([]);
@@ -230,8 +292,6 @@ export default function JournalDayModal({
   const replaceTargetRef = useRef<ResolvedPhotoItem | null>(null);
   const coverInputRef = useRef<HTMLInputElement | null>(null);
   const activeObjectUrlsRef = useRef<string[]>([]);
-
-  const isMinimalWriting = Boolean(preferences.minimalWritingMode);
   const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
 
   const highlightsMic = useSpeechDictation({
@@ -262,14 +322,56 @@ export default function JournalDayModal({
     setShowCustomize(initialShowCustomize);
   }, [initialShowCustomize, dateKey, open]);
 
+  useEffect(() => {
+    if (open) {
+      setActiveTab(initialTab);
+    }
+  }, [open, initialTab]);
+
+  // Track mobile virtual keyboard so top header and active line remain visible
+  useEffect(() => {
+    if (!open || typeof window === 'undefined') {
+      setMobileViewportBox(null);
+      return;
+    }
+    const updateViewport = () => {
+      const isNarrow = window.innerWidth < 640;
+      const vv = window.visualViewport;
+      if (!isNarrow || !vv) {
+        setMobileViewportBox(null);
+        return;
+      }
+      setMobileViewportBox({
+        heightPx: Math.round(vv.height),
+        offsetTopPx: Math.round(vv.offsetTop),
+      });
+    };
+    updateViewport();
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', updateViewport);
+    vv?.addEventListener('scroll', updateViewport);
+    window.addEventListener('resize', updateViewport);
+    return () => {
+      vv?.removeEventListener('resize', updateViewport);
+      vv?.removeEventListener('scroll', updateViewport);
+      window.removeEventListener('resize', updateViewport);
+    };
+  }, [open]);
+
   // Sync incoming journalRecord ONLY when dateKey changes OR remote record is newer than local un-dirty draft
   useEffect(() => {
     const fresh = buildInitialDraft(dateKey, journalRecord);
     if (draftRef.current.dateKey !== dateKey) {
-      setDraft(fresh);
-      draftRef.current = fresh;
+      const resumed = readLocalResumeDraft(uid, dateKey, fresh);
+      const nextDraft = resumed || fresh;
+      setDraft(nextDraft);
+      draftRef.current = nextDraft;
       lastSavedRef.current = fresh;
-      setSaveState('idle');
+      setSaveState(resumed ? 'dirty' : 'idle');
+      setShowSubtitleField(Boolean(nextDraft.subtitle?.trim()));
+      setShowReflectionExtras(
+        Boolean(nextDraft.highlightsText?.trim() || nextDraft.reflectionText?.trim())
+      );
       setPhotoError(null);
       setLightboxIndex(null);
       setEditingNoteId(null);
@@ -281,9 +383,13 @@ export default function JournalDayModal({
       setDraft(fresh);
       draftRef.current = fresh;
       lastSavedRef.current = fresh;
+      setShowSubtitleField(Boolean(fresh.subtitle?.trim()));
+      setShowReflectionExtras(
+        Boolean(fresh.highlightsText?.trim() || fresh.reflectionText?.trim())
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateKey, journalRecord]);
+  }, [dateKey, journalRecord, uid]);
 
   useEffect(() => {
     draftRef.current = draft;
@@ -298,6 +404,7 @@ export default function JournalDayModal({
       const target = explicitDraft || draftRef.current;
       if (!canEdit) return;
       if (!hasJournalDraftChanged(target, lastSavedRef.current)) {
+        clearLocalResumeDraft(uid, target.dateKey);
         return;
       }
       const stamped: DailyJournalRecord = {
@@ -306,6 +413,7 @@ export default function JournalDayModal({
       };
       setSaveState('saving');
       onSaveDailyJournal(stamped);
+      clearLocalResumeDraft(uid, stamped.dateKey);
       lastSavedRef.current = stamped;
       draftRef.current = stamped;
       setDraft(stamped);
@@ -314,35 +422,52 @@ export default function JournalDayModal({
         setSaveState((prev) => (prev === 'saved' ? 'idle' : prev));
       }, 2200);
     },
-    [canEdit, onSaveDailyJournal]
+    [canEdit, onSaveDailyJournal, uid]
   );
 
-  // Debounced autosave (~750ms after any draft change)
+  // Debounced autosave (~700ms) + synchronous local resume buffer
   useEffect(() => {
     if (!open || !canEdit) return;
     if (!hasJournalDraftChanged(draft, lastSavedRef.current)) return;
     setSaveState('dirty');
+    writeLocalResumeDraft(uid, { ...draft, updatedAtMs: Date.now() });
     if (autosaveTimerRef.current) {
       window.clearTimeout(autosaveTimerRef.current);
     }
     autosaveTimerRef.current = window.setTimeout(() => {
       flushSaveNow(draftRef.current);
-    }, 750);
+    }, 700);
     return () => {
       if (autosaveTimerRef.current) {
         window.clearTimeout(autosaveTimerRef.current);
       }
     };
-  }, [draft, open, canEdit, flushSaveNow]);
+  }, [draft, open, canEdit, uid, flushSaveNow]);
 
-  // Flush on unmount
+  // Flush synchronously on pagehide / visibility hidden / unmount so unfinished entries are never lost
   useEffect(() => {
+    if (!open || !canEdit) return;
+    const handleVisibilityOrHide = () => {
+      if (
+        document.visibilityState === 'hidden' &&
+        hasJournalDraftChanged(draftRef.current, lastSavedRef.current)
+      ) {
+        flushSaveNow(draftRef.current);
+      }
+    };
+    window.addEventListener('pagehide', handleVisibilityOrHide);
+    document.addEventListener('visibilitychange', handleVisibilityOrHide);
     return () => {
+      window.removeEventListener('pagehide', handleVisibilityOrHide);
+      document.removeEventListener('visibilitychange', handleVisibilityOrHide);
       if (autosaveTimerRef.current) {
         window.clearTimeout(autosaveTimerRef.current);
       }
+      if (hasJournalDraftChanged(draftRef.current, lastSavedRef.current)) {
+        flushSaveNow(draftRef.current);
+      }
     };
-  }, []);
+  }, [open, canEdit, flushSaveNow]);
 
   // Subscribe to photos for this dateKey
   useEffect(() => {
@@ -547,8 +672,7 @@ export default function JournalDayModal({
   };
 
   const handleToggleMinimalWriting = () => {
-    if (!canEdit) return onRequireAuth();
-    onUpdatePreferences?.({ minimalWritingMode: !isMinimalWriting });
+    setIsMinimalWriting((prev) => !prev);
   };
 
   const handleRotateQuote = () => {
@@ -737,45 +861,205 @@ export default function JournalDayModal({
     QUOTE_COLOR_THEMES.amber;
 
   const renderWrittenSection = () => (
-    <section className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <PenLine className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-          <h3 className="text-base font-bold text-slate-900">
-            التدوين اليومي والكتابة الحرة
-          </h3>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {canEdit && onUpdatePreferences && (
-            <button
-              type="button"
-              onClick={handleToggleMinimalWriting}
-              aria-pressed={isMinimalWriting}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                isMinimalWriting
-                  ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-              }`}
-            >
-              <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>كتابة هادئة</span>
-            </button>
-          )}
-          {canEdit && (
-            <button
-              type="button"
-              onClick={handleAddSection}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-[#F0F4F9] hover:bg-[#E3ECF6] border border-[#1E3A5F]/20 rounded-xl whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>إضافة قسم كتابة</span>
-            </button>
-          )}
-        </div>
+    <section className="max-w-2xl mx-auto space-y-4">
+      {/* Borderless Editorial Title */}
+      <div className="space-y-1.5">
+        <input
+          type="text"
+          value={draft.title || ''}
+          disabled={!canEdit}
+          onChange={(e) =>
+            updateDraft((prev) => ({ ...prev, title: e.target.value }))
+          }
+          placeholder="عنوان اليومية (اختياري)..."
+          className="font-editorial w-full px-0.5 py-1 text-xl sm:text-2xl font-bold text-slate-900 bg-transparent border-0 focus:outline-none placeholder:text-slate-400"
+        />
+
+        {(showSubtitleField || Boolean(draft.subtitle?.trim())) && (
+          <input
+            type="text"
+            value={draft.subtitle || ''}
+            disabled={!canEdit}
+            onChange={(e) =>
+              updateDraft((prev) => ({ ...prev, subtitle: e.target.value }))
+            }
+            placeholder="وصف قصير أو خلاصة سريعة..."
+            className="w-full px-0.5 py-0.5 text-sm text-slate-600 bg-transparent border-0 focus:outline-none placeholder:text-slate-400"
+          />
+        )}
       </div>
 
-      {/* Quote of the Day Strip (hidden in minimal writing mode) */}
-      {!isMinimalWriting && (
+      {/* Main Free-Form Distraction-Free Canvas */}
+      {canEdit ? (
+        <RichTextNoteEditor
+          noteKey={`journal_main_${dateKey}`}
+          value={draft.bodyHtml || ''}
+          onChange={(html) =>
+            updateDraft((prev) => ({ ...prev, bodyHtml: html }))
+          }
+          placeholder="اكتب بحرية عن يومك، أفكارك، أو ما تشعر به الآن..."
+          canEdit={canEdit}
+          onRequireAuth={onRequireAuth}
+          preferences={preferences}
+          onUpdatePreferences={onUpdatePreferences}
+          minimalMode={isMinimalWriting}
+          onToggleMinimalMode={handleToggleMinimalWriting}
+          voiceDialect={preferences.voiceDialect}
+          variant="journal"
+          autoFocusOnMount={activeTab === 'writing'}
+          minHeightClass="min-h-[240px] sm:min-h-[300px]"
+        />
+      ) : draft.bodyHtml ? (
+        <div
+          className="prose-bidi py-2 text-[15px] sm:text-base leading-[1.85] text-slate-800"
+          dangerouslySetInnerHTML={{
+            __html: renderSafeBidiHtml(draft.bodyHtml),
+          }}
+        />
+      ) : (
+        <p className="text-sm text-slate-500 py-4">
+          لا يوجد تدوين نصي لهذا اليوم بعد.
+        </p>
+      )}
+
+      {/* Multiple Custom Free-Form Sections */}
+      {(draft.sections || []).map((sec, idx) => {
+        const isRenaming = editingSectionId === sec.id || !sec.heading;
+        return (
+          <div
+            key={sec.id}
+            className="pt-4 border-t border-slate-200/80 space-y-2.5"
+          >
+            <div className="flex items-center justify-between gap-2">
+              {isRenaming && canEdit ? (
+                <input
+                  type="text"
+                  value={sec.heading}
+                  onChange={(e) =>
+                    handleUpdateSection(sec.id, { heading: e.target.value })
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && sec.heading.trim()) {
+                      e.preventDefault();
+                      setEditingSectionId(null);
+                    }
+                  }}
+                  placeholder={`عنوان القسم #${idx + 1}...`}
+                  className="flex-1 min-w-[160px] px-0.5 py-1 text-base font-bold text-slate-900 bg-transparent border-0 border-b border-slate-200 focus:outline-none focus:border-[#1E3A5F]"
+                />
+              ) : (
+                <h4 className="flex-1 text-base font-bold text-slate-900">
+                  {sec.heading || `قسم #${idx + 1}`}
+                </h4>
+              )}
+              {canEdit && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditingSectionId(isRenaming && sec.heading.trim() ? null : sec.id)
+                    }
+                    title={isRenaming ? 'اعتماد العنوان' : 'تعديل عنوان القسم'}
+                    aria-label={isRenaming ? 'اعتماد العنوان' : 'تعديل عنوان القسم'}
+                    className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center text-slate-500 hover:text-[#1E3A5F] hover:bg-black/5 rounded-lg cursor-pointer"
+                  >
+                    {isRenaming && sec.heading.trim() ? (
+                      <Check className="w-4 h-4 text-emerald-700" />
+                    ) : (
+                      <Edit3 className="w-4 h-4" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteSection(sec.id)}
+                    title="حذف القسم"
+                    aria-label="حذف القسم"
+                    className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+            {canEdit ? (
+              <RichTextNoteEditor
+                noteKey={`journal_sec_${dateKey}_${sec.id}`}
+                value={sec.bodyHtml}
+                onChange={(html) =>
+                  handleUpdateSection(sec.id, { bodyHtml: html })
+                }
+                placeholder="اكتب محتوى هذا القسم..."
+                canEdit={canEdit}
+                onRequireAuth={onRequireAuth}
+                preferences={preferences}
+                onUpdatePreferences={onUpdatePreferences}
+                minimalMode={isMinimalWriting}
+                onToggleMinimalMode={handleToggleMinimalWriting}
+                voiceDialect={preferences.voiceDialect}
+                variant="journal"
+                minHeightClass="min-h-[120px]"
+              />
+            ) : (
+              <div
+                className="prose-bidi text-sm leading-relaxed text-slate-800"
+                dangerouslySetInnerHTML={{
+                  __html: renderSafeBidiHtml(sec.bodyHtml),
+                }}
+              />
+            )}
+          </div>
+        );
+      })}
+
+      {/* Progressive Disclosure Controls for Optional Details (kept quiet until needed) */}
+      <div className="pt-3 border-t border-slate-200/60 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
+        {canEdit && !showSubtitleField && !draft.subtitle?.trim() && (
+          <button
+            type="button"
+            onClick={() => setShowSubtitleField(true)}
+            className="inline-flex items-center gap-1 py-1.5 hover:text-[#1E3A5F] transition-colors cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>وصف قصير</span>
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setShowReflectionExtras((v) => !v)}
+          className={`inline-flex items-center gap-1.5 py-1.5 transition-colors cursor-pointer ${
+            showReflectionExtras ? 'text-[#1E3A5F] font-semibold' : 'hover:text-[#1E3A5F]'
+          }`}
+        >
+          <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
+          <span>{showReflectionExtras ? 'إخفاء تأمل الختام' : 'تأمل الختام وأهم نقطة'}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowDayQuote((v) => !v)}
+          className={`inline-flex items-center gap-1.5 py-1.5 transition-colors cursor-pointer ${
+            showDayQuote ? 'text-[#1E3A5F] font-semibold' : 'hover:text-[#1E3A5F]'
+          }`}
+        >
+          <Quote className="w-3.5 h-3.5" aria-hidden="true" />
+          <span>حكمة اليوم</span>
+        </button>
+
+        {canEdit && (
+          <button
+            type="button"
+            onClick={handleAddSection}
+            className="inline-flex items-center gap-1 py-1.5 hover:text-[#1E3A5F] transition-colors cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>قسم كتابة جديد</span>
+          </button>
+        )}
+      </div>
+
+      {/* Optional Daily Quote (quiet on demand) */}
+      {showDayQuote && (
         <div
           data-custom-card-surface="light"
           className={`rounded-xl border px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 ${quoteTheme.cardClass}`}
@@ -802,249 +1086,93 @@ export default function JournalDayModal({
               className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold bg-white/85 hover:bg-white text-slate-700 border border-slate-200 rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
             >
               <RefreshCw className="w-3 h-3" aria-hidden="true" />
-              <span>تبديل الحكمة</span>
+              <span>تبديل</span>
             </button>
           )}
         </div>
       )}
 
-      {/* Title & Subtitle */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div>
-          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-            عنوان اليومية (اختياري)
-          </label>
-          <input
-            type="text"
-            value={draft.title || ''}
-            disabled={!canEdit}
-            onChange={(e) =>
-              updateDraft((prev) => ({ ...prev, title: e.target.value }))
-            }
-            placeholder="مثال: يوم هادئ ومثمر في المذاكرة"
-            className="w-full px-3.5 py-2 text-sm font-semibold bg-white/90 border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
-          />
-        </div>
-        <div>
-          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-            وصف قصير أو خلاصة سريعة (اختياري)
-          </label>
-          <input
-            type="text"
-            value={draft.subtitle || ''}
-            disabled={!canEdit}
-            onChange={(e) =>
-              updateDraft((prev) => ({ ...prev, subtitle: e.target.value }))
-            }
-            placeholder="جملة قصيرة تلخص شعور أو مسار اليوم..."
-            className="w-full px-3.5 py-2 text-sm bg-white/90 border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
-          />
-        </div>
-      </div>
-
-      {/* Main Free-Form Rich Text Canvas */}
-      <div className="space-y-1.5">
-        <label className="block text-xs font-semibold text-slate-700">
-          صفحة اليوم الحرة
-        </label>
-        {canEdit ? (
-          <RichTextNoteEditor
-            noteKey={`journal_main_${dateKey}`}
-            value={draft.bodyHtml || ''}
-            onChange={(html) =>
-              updateDraft((prev) => ({ ...prev, bodyHtml: html }))
-            }
-            placeholder="اكتب بحرية عن يومك، أفكارك، مشاعرك، أو ما حدث اليوم... يمكنك تنسيق العناوين والنقاط والتظليل بحرية."
-            canEdit={canEdit}
-            onRequireAuth={onRequireAuth}
-            preferences={preferences}
-            onUpdatePreferences={onUpdatePreferences}
-            minimalMode={isMinimalWriting}
-            onToggleMinimalMode={handleToggleMinimalWriting}
-            voiceDialect={preferences.voiceDialect}
-            minHeightClass="min-h-[200px]"
-          />
-        ) : draft.bodyHtml ? (
-          <div
-            className="prose-bidi p-4 rounded-xl bg-white border border-slate-200 text-sm text-slate-800"
-            dangerouslySetInnerHTML={{
-              __html: renderSafeBidiHtml(draft.bodyHtml),
-            }}
-          />
-        ) : (
-          <p className="text-xs text-slate-500 p-4 rounded-xl bg-white/70 border border-slate-200">
-            لا يوجد تدوين نصي لهذا اليوم بعد.
-          </p>
-        )}
-      </div>
-
-      {/* Multiple Custom Free-Form Sections with Edit/Rename/Delete CRUD */}
-      {(draft.sections || []).map((sec, idx) => {
-        const isRenaming = editingSectionId === sec.id || !sec.heading;
-        return (
-          <div
-            key={sec.id}
-            className="p-4 rounded-xl bg-white/90 border border-slate-200 space-y-3"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              {isRenaming && canEdit ? (
-                <input
-                  type="text"
-                  value={sec.heading}
-                  onChange={(e) =>
-                    handleUpdateSection(sec.id, { heading: e.target.value })
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && sec.heading.trim()) {
-                      e.preventDefault();
-                      setEditingSectionId(null);
-                    }
-                  }}
-                  placeholder={`عنوان القسم الإضافي #${idx + 1}...`}
-                  className="flex-1 min-w-[180px] px-3 py-1.5 text-sm font-bold bg-[#F7F8FA] border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
-                />
-              ) : (
-                <h4 className="flex-1 text-sm font-bold text-slate-900">
-                  {sec.heading || `قسم إضافي #${idx + 1}`}
-                </h4>
-              )}
-              {canEdit && (
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setEditingSectionId(isRenaming && sec.heading.trim() ? null : sec.id)
-                    }
-                    title={isRenaming ? 'اعتماد العنوان' : 'تعديل عنوان القسم'}
-                    aria-label={isRenaming ? 'اعتماد العنوان' : 'تعديل عنوان القسم'}
-                    className="p-2 text-slate-500 hover:text-[#1E3A5F] hover:bg-slate-100 rounded-lg cursor-pointer"
-                  >
-                    {isRenaming && sec.heading.trim() ? (
-                      <Check className="w-4 h-4 text-emerald-700" />
-                    ) : (
-                      <Edit3 className="w-4 h-4" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteSection(sec.id)}
-                    title="حذف القسم"
-                    aria-label="حذف القسم"
-                    className="p-2 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg cursor-pointer"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
+      {/* Optional Takeaways & Evening Reflection */}
+      {showReflectionExtras && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-xs font-semibold text-slate-600">
+                أهم نقطة تعلّمتها أو أنجزتها
+              </label>
+              {canEdit && highlightsMic.isSupported && (
+                <button
+                  type="button"
+                  onClick={() => highlightsMic.toggle()}
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+                    highlightsMic.isListening
+                      ? 'bg-rose-600 text-white'
+                      : 'text-slate-600 hover:bg-black/5'
+                  }`}
+                >
+                  {highlightsMic.isListening ? (
+                    <MicOff className="w-3 h-3" />
+                  ) : (
+                    <Mic className="w-3 h-3" />
+                  )}
+                  <span>{highlightsMic.isListening ? 'إيقاف' : 'إملاء'}</span>
+                </button>
               )}
             </div>
-            {canEdit ? (
-              <RichTextNoteEditor
-                noteKey={`journal_sec_${dateKey}_${sec.id}`}
-                value={sec.bodyHtml}
-                onChange={(html) =>
-                  handleUpdateSection(sec.id, { bodyHtml: html })
-                }
-                placeholder="اكتب محتوى هذا القسم..."
-                canEdit={canEdit}
-                onRequireAuth={onRequireAuth}
-                preferences={preferences}
-                onUpdatePreferences={onUpdatePreferences}
-                minimalMode={isMinimalWriting}
-                onToggleMinimalMode={handleToggleMinimalWriting}
-                voiceDialect={preferences.voiceDialect}
-                minHeightClass="min-h-[140px]"
-              />
-            ) : (
-              <div
-                className="prose-bidi text-sm text-slate-800"
-                dangerouslySetInnerHTML={{
-                  __html: renderSafeBidiHtml(sec.bodyHtml),
-                }}
-              />
-            )}
+            <AutoResizeTextarea
+              minRows={2}
+              disabled={!canEdit}
+              value={draft.highlightsText}
+              onChange={(e) =>
+                updateDraft((prev) => ({
+                  ...prev,
+                  highlightsText: e.target.value,
+                }))
+              }
+              placeholder="أبرز إنجاز أو نقطة تركيز اليوم..."
+              className="w-full px-3 py-2 text-sm bg-white/70 border border-slate-200/80 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
+            />
           </div>
-        );
-      })}
-
-      {/* Synced Dashboard Takeaways & Evening Reflection with Inline Mic */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <label className="text-xs font-semibold text-slate-700">
-              أهم نقطة تعلّمتها أو أنجزتها
-            </label>
-            {canEdit && highlightsMic.isSupported && (
-              <button
-                type="button"
-                onClick={() => highlightsMic.toggle()}
-                className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
-                  highlightsMic.isListening
-                    ? 'bg-rose-600 text-white'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                }`}
-              >
-                {highlightsMic.isListening ? (
-                  <MicOff className="w-3 h-3" />
-                ) : (
-                  <Mic className="w-3 h-3" />
-                )}
-                <span>{highlightsMic.isListening ? 'إيقاف' : 'إملاء'}</span>
-              </button>
-            )}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-xs font-semibold text-slate-600">
+                تأمل ختام اليوم
+              </label>
+              {canEdit && reflectionMic.isSupported && (
+                <button
+                  type="button"
+                  onClick={() => reflectionMic.toggle()}
+                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+                    reflectionMic.isListening
+                      ? 'bg-rose-600 text-white'
+                      : 'text-slate-600 hover:bg-black/5'
+                  }`}
+                >
+                  {reflectionMic.isListening ? (
+                    <MicOff className="w-3 h-3" />
+                  ) : (
+                    <Mic className="w-3 h-3" />
+                  )}
+                  <span>{reflectionMic.isListening ? 'إيقاف' : 'إملاء'}</span>
+                </button>
+              )}
+            </div>
+            <AutoResizeTextarea
+              minRows={2}
+              disabled={!canEdit}
+              value={draft.reflectionText}
+              onChange={(e) =>
+                updateDraft((prev) => ({
+                  ...prev,
+                  reflectionText: e.target.value,
+                }))
+              }
+              placeholder="كيف سار اليوم؟ وما الذي تريد البناء عليه غدًا؟"
+              className="w-full px-3 py-2 text-sm bg-white/70 border border-slate-200/80 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
+            />
           </div>
-          <AutoResizeTextarea
-            minRows={2}
-            disabled={!canEdit}
-            value={draft.highlightsText}
-            onChange={(e) =>
-              updateDraft((prev) => ({
-                ...prev,
-                highlightsText: e.target.value,
-              }))
-            }
-            placeholder="أبرز إنجاز أو نقطة تركيز اليوم..."
-            className="w-full px-3.5 py-2 text-xs bg-white/90 border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
-          />
         </div>
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <label className="text-xs font-semibold text-slate-700">
-              تأمل ختام اليوم
-            </label>
-            {canEdit && reflectionMic.isSupported && (
-              <button
-                type="button"
-                onClick={() => reflectionMic.toggle()}
-                className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
-                  reflectionMic.isListening
-                    ? 'bg-rose-600 text-white'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                }`}
-              >
-                {reflectionMic.isListening ? (
-                  <MicOff className="w-3 h-3" />
-                ) : (
-                  <Mic className="w-3 h-3" />
-                )}
-                <span>{reflectionMic.isListening ? 'إيقاف' : 'إملاء'}</span>
-              </button>
-            )}
-          </div>
-          <AutoResizeTextarea
-            minRows={2}
-            disabled={!canEdit}
-            value={draft.reflectionText}
-            onChange={(e) =>
-              updateDraft((prev) => ({
-                ...prev,
-                reflectionText: e.target.value,
-              }))
-            }
-            placeholder="كيف سار اليوم؟ وما الذي تريد البناء عليه غدًا؟"
-            className="w-full px-3.5 py-2 text-xs bg-white/90 border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
-          />
-        </div>
-      </div>
+      )}
     </section>
   );
 
@@ -1523,7 +1651,7 @@ export default function JournalDayModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-2 sm:p-4 lg:p-6"
+      className="fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-[2px] flex items-center justify-center p-0 sm:p-4 lg:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby="diary-modal-title"
@@ -1533,116 +1661,155 @@ export default function JournalDayModal({
         data-custom-card-surface={
           draft.cardColor && draft.cardColor !== 'default' ? 'light' : undefined
         }
-        className={`w-full max-h-[92dvh] h-[92dvh] sm:max-w-5xl rounded-2xl border shadow-2xl overflow-hidden flex flex-col ${theme.cardClass}`}
+        style={
+          mobileViewportBox
+            ? {
+                height: `${mobileViewportBox.heightPx}px`,
+                maxHeight: `${mobileViewportBox.heightPx}px`,
+                marginTop: `${mobileViewportBox.offsetTopPx}px`,
+              }
+            : undefined
+        }
+        className={`w-full h-[100dvh] sm:h-[88dvh] sm:max-h-[88dvh] sm:max-w-[760px] rounded-none sm:rounded-2xl border-0 sm:border sm:shadow-2xl overflow-hidden flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] sm:pt-0 sm:pb-0 ${theme.cardClass}`}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Top Modal Header */}
-        <header className="bg-white/95 backdrop-blur-sm border-b border-slate-200 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <div className="flex items-center gap-1">
+        {/* Minimal, Calm Top Navigation Bar */}
+        <header className="bg-white/95 backdrop-blur-sm border-b border-slate-200/80 px-3 sm:px-5 min-h-[52px] py-1.5 flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <button
+              type="button"
+              onClick={handleCloseSafely}
+              aria-label="رجوع وإغلاق اليومية"
+              className="inline-flex items-center gap-1 min-h-[40px] px-2 text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl cursor-pointer shrink-0"
+            >
+              <ArrowRight className="w-4 h-4 sm:hidden" aria-hidden="true" />
+              <X className="w-4 h-4 hidden sm:block" aria-hidden="true" />
+              <span className="sm:hidden">رجوع</span>
+            </button>
+
+            <span aria-hidden="true" className="w-px h-4 bg-slate-200 mx-0.5" />
+
+            <div className="flex items-center gap-0.5 shrink-0">
               <button
                 type="button"
                 onClick={() => handleShiftDay(-1)}
                 aria-label="اليوم السابق"
                 title="اليوم السابق"
-                className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl cursor-pointer"
+                className="min-h-[38px] min-w-[34px] inline-flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg cursor-pointer"
               >
                 <ChevronRight className="w-4 h-4" />
               </button>
+
+              <div className="relative inline-flex items-center">
+                <span
+                  id="diary-modal-title"
+                  className="inline-flex items-center gap-1.5 min-h-[38px] px-2 rounded-lg text-xs font-semibold text-slate-800 hover:bg-slate-100 transition-colors tabular-nums whitespace-nowrap pointer-events-none"
+                >
+                  <Calendar className="w-3.5 h-3.5 text-[#1E3A5F] hidden sm:inline" aria-hidden="true" />
+                  <span>{getDayArabicName(dateKey)}</span>
+                  <span aria-hidden="true" className="text-slate-400">·</span>
+                  <span>{formatShortArabicDate(dateKey)}</span>
+                </span>
+                <input
+                  type="date"
+                  value={dateKey}
+                  onClick={(e) => {
+                    const input = e.currentTarget as HTMLInputElement & {
+                      showPicker?: () => void;
+                    };
+                    if (typeof input.showPicker === 'function') {
+                      try {
+                        input.showPicker();
+                      } catch {
+                        // Fallback to native input click behavior
+                      }
+                    }
+                  }}
+                  onChange={(e) => {
+                    if (e.target.value && e.target.value !== dateKey) {
+                      flushSaveNow();
+                      onChangeDateKey(e.target.value);
+                    }
+                  }}
+                  aria-label="تغيير تاريخ اليومية"
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer rounded-lg"
+                />
+              </div>
+
               <button
                 type="button"
                 onClick={() => handleShiftDay(1)}
                 aria-label="اليوم التالي"
                 title="اليوم التالي"
-                className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl cursor-pointer"
+                className="min-h-[38px] min-w-[34px] inline-flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg cursor-pointer"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
             </div>
-
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-[11px] text-slate-500 tabular-nums">
-                <Calendar className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
-                <span>{getDayArabicName(dateKey)}</span>
-                <span aria-hidden="true">·</span>
-                <span>{formatShortArabicDate(dateKey)}</span>
-              </div>
-              <h2
-                id="diary-modal-title"
-                className="font-editorial text-lg sm:text-xl font-bold text-slate-900 truncate"
-              >
-                {draft.title?.trim() || `صفحة يوم ${formatShortArabicDate(dateKey)}`}
-              </h2>
-            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Autosave Status */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Discreet Autosave Status */}
             {canEdit && (
-              <span className="text-[11px] font-medium text-slate-500 flex items-center gap-1 px-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (saveState === 'dirty') flushSaveNow();
+                }}
+                title={saveState === 'dirty' ? 'اضغط للحفظ فورًا' : 'الحفظ التلقائي'}
+                className={`inline-flex items-center gap-1 px-2 min-h-[36px] text-[11px] font-medium rounded-lg transition-colors ${
+                  saveState === 'dirty'
+                    ? 'text-slate-700 hover:bg-slate-100 cursor-pointer'
+                    : saveState === 'saved'
+                    ? 'text-emerald-700 cursor-default'
+                    : 'text-slate-400 cursor-default'
+                }`}
+              >
                 {saveState === 'saving' ? (
                   <>
-                    <Loader2 className="w-3 h-3 animate-spin text-[#1E3A5F]" />
+                    <Loader2 className="w-3 h-3 animate-spin text-[#1E3A5F]" aria-hidden="true" />
                     <span>جاري الحفظ...</span>
                   </>
                 ) : saveState === 'dirty' ? (
-                  <span>تعديلات قيد الحفظ...</span>
+                  <span>يُحفظ تلقائيًا...</span>
                 ) : saveState === 'saved' ? (
                   <>
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
-                    <span className="text-emerald-800 font-semibold">تم الحفظ تلقائيًا</span>
+                    <Check className="w-3.5 h-3.5 text-emerald-700" aria-hidden="true" />
+                    <span>محفوظ</span>
                   </>
                 ) : (
-                  <span>حفظ تلقائي مفعّل</span>
+                  <span className="hidden sm:inline">محفوظ تلقائيًا</span>
                 )}
-              </span>
-            )}
-
-            {canEdit && saveState === 'dirty' && (
-              <button
-                type="button"
-                onClick={() => flushSaveNow()}
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
-              >
-                <Save className="w-3.5 h-3.5" />
-                <span>حفظ الآن</span>
               </button>
             )}
 
             <button
               type="button"
               onClick={() => setShowCustomize((s) => !s)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border cursor-pointer ${
+              aria-label="المظهر والغلاف"
+              title="تخصيص لون الورقة والغلاف"
+              className={`inline-flex items-center gap-1.5 min-h-[38px] px-2.5 text-xs font-semibold rounded-xl cursor-pointer transition-colors ${
                 showCustomize
-                  ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-                  : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
+                  ? 'bg-[#1E3A5F] text-white'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
-              <Palette className="w-3.5 h-3.5" />
-              <span>تخصيص المظهر</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleCloseSafely}
-              aria-label="إغلاق اليومية"
-              className="p-2 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-xl cursor-pointer"
-            >
-              <X className="w-5 h-5" />
+              <Palette className="w-4 h-4" aria-hidden="true" />
+              <span className="hidden sm:inline">المظهر</span>
             </button>
           </div>
         </header>
 
         {/* Optional Cover Banner + Customization Panel */}
         {(resolvedCoverUrl || showCustomize) && (
-          <div className="bg-white/80 border-b border-slate-200 px-4 sm:px-6 py-4 space-y-4 shrink-0 max-h-[42vh] overflow-y-auto thin-scrollbar">
+          <div className="bg-white/85 border-b border-slate-200 px-4 sm:px-6 py-3.5 space-y-4 shrink-0 max-h-[42vh] overflow-y-auto thin-scrollbar">
             {resolvedCoverUrl && (() => {
               const safeCoverFrame = sanitizeImageFrameSpec(
                 draft.coverFrame,
                 DEFAULT_IMAGE_FRAME_SPEC
               );
               return (
-                <div className="relative h-36 sm:h-48 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
+                <div className="relative h-32 sm:h-44 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
                   <img
                     src={resolvedCoverUrl}
                     alt={draft.title || 'غلاف اليومية'}
@@ -1694,7 +1861,7 @@ export default function JournalDayModal({
                 {/* Curated Color Swatches */}
                 <div className="space-y-1.5">
                   <span className="text-[11px] font-semibold text-slate-600 block">
-                    لون خلفية البطاقة والصفحة
+                    لون خلفية الورقة
                   </span>
                   <div className="flex flex-wrap items-center gap-2">
                     {(
@@ -1834,36 +2001,35 @@ export default function JournalDayModal({
           </div>
         )}
 
-        {/* Diary Section Navigation Bar */}
+        {/* Slim Underline Section Navigation Bar */}
         <nav
           aria-label="أقسام اليومية"
-          className="bg-white/90 border-b border-slate-200 px-4 sm:px-6 py-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0"
+          className="bg-white/80 border-b border-slate-200/80 px-3 sm:px-6 flex items-center gap-4 overflow-x-auto no-scrollbar shrink-0"
         >
           {(
             [
-              { id: 'continuous', label: 'العرض المتصل', icon: BookOpen },
-              { id: 'writing', label: 'الكتابة', icon: PenLine },
-              {
-                id: 'photos',
-                label: `الصور (${photos.length})`,
-                icon: Camera,
-              },
-              {
-                id: 'voice',
-                label: `الصوتيات (${dayVoiceCount})`,
-                icon: Mic,
-              },
+              { id: 'writing', label: 'الكتابة', icon: PenLine, count: 0 },
+              { id: 'continuous', label: 'الكل', icon: BookOpen, count: 0 },
+              { id: 'photos', label: 'الصور', icon: Camera, count: photos.length },
+              { id: 'voice', label: 'الصوت', icon: Mic, count: dayVoiceCount },
               {
                 id: 'notes',
-                label: `ملاحظات سريعة (${(draft.quickNotes || []).length})`,
+                label: 'ملاحظات',
                 icon: StickyNote,
+                count: (draft.quickNotes || []).length,
               },
               {
                 id: 'activities',
-                label: `الأنشطة (${summary.timelineItems.length})`,
+                label: 'الأنشطة',
                 icon: Layers,
+                count: summary.timelineItems.length,
               },
-            ] as Array<{ id: DiaryTab; label: string; icon: typeof BookOpen }>
+            ] as Array<{
+              id: DiaryTab;
+              label: string;
+              icon: typeof BookOpen;
+              count: number;
+            }>
           ).map((tab) => {
             const Icon = tab.icon;
             const active = activeTab === tab.id;
@@ -1872,21 +2038,26 @@ export default function JournalDayModal({
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                className={`inline-flex items-center gap-1.5 min-h-[42px] py-2 border-b-2 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
                   active
-                    ? 'bg-[#1E3A5F] text-white'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    ? 'border-[#1E3A5F] text-[#1E3A5F]'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>{tab.label}</span>
+                {tab.count > 0 && (
+                  <span className="text-[11px] font-medium opacity-75 tabular-nums">
+                    {tab.count}
+                  </span>
+                )}
               </button>
             );
           })}
         </nav>
 
         {/* Scrollable Diary Body */}
-        <div className="flex-1 overflow-y-auto thin-scrollbar p-4 sm:p-6 space-y-8">
+        <div className="flex-1 overflow-y-auto overscroll-contain thin-scrollbar px-4 py-4 sm:px-8 sm:py-6 space-y-8">
           {activeTab === 'continuous' && (
             <>
               {renderWrittenSection()}

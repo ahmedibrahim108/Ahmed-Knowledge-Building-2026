@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   BookOpen,
   Calendar,
+  Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -18,7 +19,7 @@ import {
   PenLine,
   Quote,
   RefreshCw,
-  Save,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
 } from 'lucide-react';
@@ -58,8 +59,9 @@ import {
   subscribeOfflineSyncState,
 } from '../utils/offlineQueue';
 import { syncAllPendingOfflineChanges } from '../utils/offlineSync';
+import { richHtmlToPlainText } from '../utils/richText';
 import AutoResizeTextarea from './AutoResizeTextarea';
-import JournalDayModal from './JournalDayModal';
+import JournalDayModal, { DiaryTab } from './JournalDayModal';
 import JournalGalleryView from './JournalGalleryView';
 
 type DailyJournalViewMode = 'timeline' | 'by_category' | 'overview';
@@ -129,6 +131,8 @@ export default function DailyJournalView({
 
   const [modalDayKey, setModalDayKey] = useState<string | null>(null);
   const [modalInitialCustomize, setModalInitialCustomize] = useState(false);
+  const [modalInitialTab, setModalInitialTab] = useState<DiaryTab>('writing');
+  const [showFilters, setShowFilters] = useState(false);
 
   const [journalImages, setJournalImages] = useState<StoredImageRecord[]>([]);
   const [savedAudioClips, setSavedAudioClips] = useState<SavedAudioClipSummary[]>([]);
@@ -140,6 +144,7 @@ export default function DailyJournalView({
     if (!externalOpenDayKey) return;
     setSelectedDateKey(externalOpenDayKey);
     setModalInitialCustomize(false);
+    setModalInitialTab('writing');
     setModalDayKey(externalOpenDayKey);
     onConsumeExternalOpenDayKey?.();
   }, [externalOpenDayKey, onConsumeExternalOpenDayKey]);
@@ -167,11 +172,47 @@ export default function DailyJournalView({
     existingRecord?.highlightsText || ''
   );
   const [savedToast, setSavedToast] = useState(false);
+  const inlineDirtyRef = useRef(false);
 
   useEffect(() => {
+    inlineDirtyRef.current = false;
     setReflectionDraft(existingRecord?.reflectionText || '');
     setHighlightsDraft(existingRecord?.highlightsText || '');
   }, [selectedDateKey, existingRecord?.reflectionText, existingRecord?.highlightsText]);
+
+  // Smooth debounced autosave for inline reflection notes
+  useEffect(() => {
+    if (!canEdit || !inlineDirtyRef.current) return;
+    const prevRef = existingRecord?.reflectionText || '';
+    const prevHigh = existingRecord?.highlightsText || '';
+    if (reflectionDraft === prevRef && highlightsDraft === prevHigh) {
+      inlineDirtyRef.current = false;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      inlineDirtyRef.current = false;
+      onSaveDailyJournal({
+        ...(existingRecord || {}),
+        dateKey: selectedDateKey,
+        reflectionText: reflectionDraft,
+        highlightsText: highlightsDraft,
+        moodLabel: existingRecord?.moodLabel,
+        energyScore: existingRecord?.energyScore,
+        dailyQuote: existingRecord?.dailyQuote,
+        updatedAtMs: Date.now(),
+      });
+      setSavedToast(true);
+      window.setTimeout(() => setSavedToast(false), 2000);
+    }, 750);
+    return () => window.clearTimeout(timer);
+  }, [
+    canEdit,
+    reflectionDraft,
+    highlightsDraft,
+    selectedDateKey,
+    existingRecord,
+    onSaveDailyJournal,
+  ]);
 
   const hiddenActivityIds = preferences?.hiddenActivityIds || [];
   const hiddenActivityTypes = preferences?.hiddenActivityTypes || [];
@@ -212,21 +253,16 @@ export default function DailyJournalView({
       .slice(0, 14);
   }, [todayKey, dailyJournals, analyticsInput.activityLogs]);
 
-  const handleSaveReflection = () => {
-    if (!canEdit) return onRequireAuth();
-    onSaveDailyJournal({
-      ...(existingRecord || {}),
-      dateKey: selectedDateKey,
-      reflectionText: reflectionDraft,
-      highlightsText: highlightsDraft,
-      moodLabel: existingRecord?.moodLabel,
-      energyScore: existingRecord?.energyScore,
-      dailyQuote: existingRecord?.dailyQuote || resolvedQuote.quote,
-      updatedAtMs: Date.now(),
-    });
-    setSavedToast(true);
-    window.setTimeout(() => setSavedToast(false), 2200);
+  const openWritingModal = (dayKey: string, tab: DiaryTab = 'writing', customize = false) => {
+    setModalInitialTab(tab);
+    setModalInitialCustomize(customize);
+    setModalDayKey(dayKey);
   };
+
+  const writtenPreviewText = useMemo(() => {
+    if (!existingRecord?.bodyHtml) return '';
+    return richHtmlToPlainText(existingRecord.bodyHtml).trim();
+  }, [existingRecord?.bodyHtml]);
 
   const handleRotateDayQuote = () => {
     if (!canEdit) return onRequireAuth();
@@ -405,8 +441,8 @@ export default function DailyJournalView({
           )}
         </div>
       )}
-      {/* Journal Mode Navigation: Dashboard vs Visual Gallery */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-white border border-slate-200 rounded-2xl p-2.5 sm:px-4">
+      {/* Journal Mode Navigation + Primary Write CTA */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5 bg-white border border-slate-200 rounded-2xl p-2 sm:px-4">
         <div
           role="tablist"
           aria-label="طرق عرض اليوميات"
@@ -417,41 +453,42 @@ export default function DailyJournalView({
             role="tab"
             aria-selected={surfaceTab === 'dashboard'}
             onClick={() => setSurfaceTab('dashboard')}
-            className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 px-3 sm:px-4 min-h-[38px] text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               surfaceTab === 'dashboard'
                 ? 'bg-white text-[#1E3A5F] shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <BookOpen className="w-4 h-4" aria-hidden="true" />
-            <span>لوحة اليوميات التلقائية</span>
+            <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>اليوم</span>
           </button>
           <button
             type="button"
             role="tab"
             aria-selected={surfaceTab === 'gallery'}
             onClick={() => setSurfaceTab('gallery')}
-            className={`inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 px-3 sm:px-4 min-h-[38px] text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               surfaceTab === 'gallery'
                 ? 'bg-white text-[#1E3A5F] shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <LayoutGrid className="w-4 h-4" aria-hidden="true" />
-            <span>معرض اليوميات (الدفتر المرئي)</span>
+            <LayoutGrid className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>دفتر اليوميات</span>
           </button>
         </div>
 
         <button
           type="button"
-          onClick={() => {
-            setModalInitialCustomize(false);
-            setModalDayKey(selectedDateKey);
-          }}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#1E3A5F] bg-[#F0F4F9] hover:bg-[#E3ECF6] border border-[#1E3A5F]/20 rounded-xl whitespace-nowrap shrink-0 cursor-pointer"
+          onClick={() => openWritingModal(selectedDateKey, 'writing', false)}
+          className="inline-flex items-center gap-1.5 px-3.5 sm:px-4 min-h-[42px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl whitespace-nowrap shrink-0 cursor-pointer"
         >
-          <Maximize2 className="w-3.5 h-3.5" aria-hidden="true" />
-          <span>فتح صفحة يوم {formatShortArabicDate(selectedDateKey)}</span>
+          <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
+          <span>
+            {selectedDateKey === todayKey
+              ? 'كتابة في يومية اليوم'
+              : `كتابة في ${formatShortArabicDate(selectedDateKey)}`}
+          </span>
         </button>
       </div>
 
@@ -467,74 +504,80 @@ export default function DailyJournalView({
           onSaveDailyJournal={onSaveDailyJournal}
           onOpenDay={(dk, openCustomize = false) => {
             setSelectedDateKey(dk);
-            setModalInitialCustomize(openCustomize);
-            setModalDayKey(dk);
+            openWritingModal(dk, 'writing', openCustomize);
           }}
         />
       ) : (
         <>
-      {/* Header & Date Navigator */}
-      <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 space-y-4">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-[#1E3A5F]" aria-hidden="true" />
-              <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900">
-                اليوميات التلقائية
-              </h1>
-            </div>
-            <p className="text-xs sm:text-sm text-slate-600">
-              صفحة يومية تتجدد تلقائيًا لكل يوم بالتاريخ المحلي وتجمع كل ما درسته ولخّصته وأنجزته أو أجّلته دون تكرار.
-            </p>
+      {/* Compact Header, Date Switcher & Scannable Metrics */}
+      <section className="bg-white border border-slate-200 rounded-2xl p-3.5 sm:p-5 space-y-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <BookOpen className="w-5 h-5 text-[#1E3A5F]" aria-hidden="true" />
+            <h1 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
+              يوميات {getDayArabicName(selectedDateKey)}
+            </h1>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSelectedDateKey(addDaysToDateKey(selectedDateKey, -1))}
-              className="p-2 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-700 cursor-pointer"
-              aria-label="اليوم السابق"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
+          <div className="flex items-center gap-1.5">
+            <div className="inline-flex items-center gap-0.5 bg-[#F7F8FA] border border-slate-200 rounded-xl p-1">
+              <button
+                type="button"
+                onClick={() => setSelectedDateKey(addDaysToDateKey(selectedDateKey, -1))}
+                className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center hover:bg-white rounded-lg text-slate-700 cursor-pointer"
+                aria-label="اليوم السابق"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
 
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-[#F7F8FA] border border-slate-200 rounded-xl">
-              <Calendar className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-              <div className="text-xs">
-                <span className="font-bold text-slate-900">
-                  {getDayArabicName(selectedDateKey)}
-                </span>{' '}
-                <span className="text-slate-600 tabular-nums">
-                  {formatShortArabicDate(selectedDateKey)}
+              <div className="relative inline-flex items-center">
+                <span
+                  aria-hidden="true"
+                  className="inline-flex items-center gap-1.5 min-h-[34px] px-2.5 text-xs font-semibold text-slate-800 hover:bg-white rounded-lg tabular-nums whitespace-nowrap pointer-events-none"
+                >
+                  <Calendar className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+                  <span>{formatShortArabicDate(selectedDateKey)}</span>
                 </span>
+                <input
+                  type="date"
+                  value={selectedDateKey}
+                  onClick={(e) => {
+                    const input = e.currentTarget as HTMLInputElement & {
+                      showPicker?: () => void;
+                    };
+                    if (typeof input.showPicker === 'function') {
+                      try {
+                        input.showPicker();
+                      } catch {
+                        // Fallback to native input click behavior
+                      }
+                    }
+                  }}
+                  onChange={(e) => {
+                    if (e.target.value) setSelectedDateKey(e.target.value);
+                  }}
+                  aria-label="اختيار تاريخ اليومية"
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer rounded-lg"
+                />
               </div>
-              <input
-                type="date"
-                value={selectedDateKey}
-                onChange={(e) => {
-                  if (e.target.value) setSelectedDateKey(e.target.value);
-                }}
-                aria-label="اختيار تاريخ اليومية"
-                className="text-xs bg-white border border-slate-200 rounded-lg px-2 py-0.5 text-slate-700"
-              />
-            </div>
 
-            <button
-              type="button"
-              onClick={() => setSelectedDateKey(addDaysToDateKey(selectedDateKey, 1))}
-              className="p-2 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-xl text-slate-700 cursor-pointer"
-              aria-label="اليوم التالي"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
+              <button
+                type="button"
+                onClick={() => setSelectedDateKey(addDaysToDateKey(selectedDateKey, 1))}
+                className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center hover:bg-white rounded-lg text-slate-700 cursor-pointer"
+                aria-label="اليوم التالي"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+            </div>
 
             {selectedDateKey !== todayKey && (
               <button
                 type="button"
                 onClick={() => setSelectedDateKey(todayKey)}
-                className="px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer"
+                className="px-3 min-h-[40px] text-xs font-semibold text-[#1E3A5F] bg-[#F0F4F9] hover:bg-[#E3ECF6] rounded-xl cursor-pointer whitespace-nowrap"
               >
-                العودة لليوم
+                اليوم
               </button>
             )}
           </div>
@@ -542,7 +585,7 @@ export default function DailyJournalView({
 
         {/* Recent active days quick strip */}
         {recentActiveDays.length > 1 && (
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-1">
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
             {recentActiveDays.map((dk) => {
               const active = dk === selectedDateKey;
               return (
@@ -550,7 +593,7 @@ export default function DailyJournalView({
                   key={dk}
                   type="button"
                   onClick={() => setSelectedDateKey(dk)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap border cursor-pointer tabular-nums ${
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold whitespace-nowrap border cursor-pointer tabular-nums shrink-0 ${
                     active
                       ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
                       : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
@@ -563,104 +606,111 @@ export default function DailyJournalView({
           </div>
         )}
 
-        {/* Daily Stats Summary Row */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-2">
-          <div className="p-3 rounded-xl bg-[#F7F8FA] border border-slate-200">
-            <p className="text-[11px] text-slate-500">إجمالي الأحداث</p>
-            <p className="text-xl font-bold text-slate-900 tabular-nums mt-0.5">
-              {summary.counts.total}
-            </p>
+        {/* Calm Unboxed Daily Metrics Strip */}
+        <div className="flex items-center justify-between sm:justify-start gap-5 sm:gap-8 overflow-x-auto no-scrollbar py-2 border-y border-slate-100 text-xs tabular-nums">
+          <div className="shrink-0">
+            <span className="text-slate-500">الإجمالي </span>
+            <span className="font-bold text-slate-900">{summary.counts.total}</span>
           </div>
-          <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/80">
-            <p className="text-[11px] text-emerald-800">تم إنجازه</p>
-            <p className="text-xl font-bold text-emerald-900 tabular-nums mt-0.5">
-              {summary.counts.completed}
-            </p>
+          <div className="shrink-0">
+            <span className="text-slate-500">تم إنجازه </span>
+            <span className="font-bold text-emerald-700">{summary.counts.completed}</span>
           </div>
-          <div className="p-3 rounded-xl bg-sky-50/70 border border-sky-200/80">
-            <p className="text-[11px] text-sky-800">قيد العمل والتعلّم</p>
-            <p className="text-xl font-bold text-sky-900 tabular-nums mt-0.5">
+          <div className="shrink-0">
+            <span className="text-slate-500">قيد العمل </span>
+            <span className="font-bold text-sky-700">
               {summary.counts.inProgress + summary.counts.learningActivities}
-            </p>
+            </span>
           </div>
-          <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/80">
-            <p className="text-[11px] text-amber-800">مؤجّل</p>
-            <p className="text-xl font-bold text-amber-900 tabular-nums mt-0.5">
-              {summary.counts.postponed}
-            </p>
+          <div className="shrink-0">
+            <span className="text-slate-500">مؤجّل </span>
+            <span className="font-bold text-amber-700">{summary.counts.postponed}</span>
           </div>
-          <div className="p-3 rounded-xl bg-[#F0F4F9] border border-[#1E3A5F]/15 col-span-2 sm:col-span-1">
-            <p className="text-[11px] text-[#1E3A5F]">تلخيصات وخواطر</p>
-            <p className="text-xl font-bold text-[#1E3A5F] tabular-nums mt-0.5">
+          <div className="shrink-0">
+            <span className="text-slate-500">تلخيصات وخواطر </span>
+            <span className="font-bold text-[#1E3A5F]">
               {summary.counts.summariesAndNotes + summary.counts.reflections}
-            </p>
+            </span>
           </div>
         </div>
 
-        {/* View Mode Switcher + Category Visibility Filter */}
-        <div className="space-y-3 pt-2 border-t border-slate-100">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-2">
+        {/* View Mode Switcher + Collapsible Category Filter */}
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
               <button
                 type="button"
                 onClick={() => setViewMode('timeline')}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 px-3 min-h-[36px] rounded-xl text-xs font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
                   viewMode === 'timeline'
                     ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
                     : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
                 }`}
               >
                 <Clock className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>التسلسل الزمني</span>
+                <span>التسلسل</span>
               </button>
               <button
                 type="button"
                 onClick={() => setViewMode('by_category')}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 px-3 min-h-[36px] rounded-xl text-xs font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
                   viewMode === 'by_category'
                     ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
                     : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>حسب المسار والتصنيف</span>
+                <span>حسب المسار</span>
               </button>
               <button
                 type="button"
                 onClick={() => setViewMode('overview')}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 px-3 min-h-[36px] rounded-xl text-xs font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
                   viewMode === 'overview'
                     ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
                     : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
                 }`}
               >
                 <ListTree className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>نظرة عامة لليوم</span>
+                <span>نظرة عامة</span>
               </button>
             </div>
 
-            {(hiddenActivityIds.length > 0 || hiddenActivityTypes.length > 0) &&
-              onUpdatePreferences && (
+            <div className="flex items-center gap-1.5 shrink-0">
+              {(hiddenActivityIds.length > 0 || hiddenActivityTypes.length > 0) &&
+                onUpdatePreferences && (
+                  <button
+                    type="button"
+                    onClick={handleResetHiddenFilters}
+                    className="inline-flex items-center gap-1 px-2.5 min-h-[36px] rounded-xl text-[11px] font-semibold text-[#1E3A5F] bg-[#F0F4F9] hover:bg-[#E3ECF6] whitespace-nowrap cursor-pointer"
+                  >
+                    <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span className="tabular-nums">
+                      إظهار الكل ({hiddenActivityIds.length + hiddenActivityTypes.length})
+                    </span>
+                  </button>
+                )}
+
+              {onUpdatePreferences && (
                 <button
                   type="button"
-                  onClick={handleResetHiddenFilters}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-semibold text-[#1E3A5F] bg-[#F0F4F9] hover:bg-[#E3ECF6] whitespace-nowrap shrink-0 cursor-pointer"
+                  onClick={() => setShowFilters((v) => !v)}
+                  aria-expanded={showFilters}
+                  className={`inline-flex items-center gap-1.5 px-2.5 min-h-[36px] rounded-xl text-xs font-semibold border whitespace-nowrap cursor-pointer ${
+                    showFilters
+                      ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                      : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
                 >
-                  <Eye className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>
-                    إظهار الكل (
-                    {hiddenActivityIds.length > 0
-                      ? `${hiddenActivityIds.length} مخفي`
-                      : `${hiddenActivityTypes.length} تصنيف`}
-                    )
-                  </span>
+                  <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span className="hidden sm:inline">تصفية</span>
                 </button>
               )}
+            </div>
           </div>
 
-          {onUpdatePreferences && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] text-slate-500 ml-1">تخصيص السجل:</span>
+          {showFilters && onUpdatePreferences && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
               {TIMELINE_CATEGORY_FILTERS.map((cat) => {
                 const active = !hiddenActivityTypes.includes(cat.type);
                 return (
@@ -804,12 +854,103 @@ export default function DailyJournalView({
           )}
         </div>
 
-        {/* Daily Quote + Reflection & Key Takeaways Panel */}
+        {/* Daily Written Preview + Quick Reflection & Quote */}
         <aside className="lg:col-span-4 space-y-4">
+          {/* Quick Journal Page Preview Card (1-tap resume/write) */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => openWritingModal(selectedDateKey, 'writing', false)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                openWritingModal(selectedDateKey, 'writing', false);
+              }
+            }}
+            className="bg-white border border-slate-200 hover:border-[#1E3A5F]/40 rounded-2xl p-4 space-y-2 cursor-pointer transition-colors group"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-[#1E3A5F]">
+                <PenLine className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>تدوين اليوم</span>
+              </div>
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 group-hover:text-[#1E3A5F]">
+                <Maximize2 className="w-3 h-3" aria-hidden="true" />
+                <span>فتح المحرر</span>
+              </span>
+            </div>
+            {existingRecord?.title?.trim() || writtenPreviewText ? (
+              <div className="space-y-1">
+                {existingRecord?.title?.trim() && (
+                  <p className="font-editorial text-base font-bold text-slate-900 line-clamp-1">
+                    {existingRecord.title}
+                  </p>
+                )}
+                {writtenPreviewText && (
+                  <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed">
+                    {writtenPreviewText}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500 leading-relaxed">
+                مساحة هادئة للكتابة الحرة، إضافة الصور، والمذكرات الصوتية لهذا اليوم — اضغط للبدء.
+              </p>
+            )}
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3.5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-bold text-slate-900">
+                تأمل سريع
+              </h2>
+              {savedToast && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700">
+                  <Check className="w-3 h-3" aria-hidden="true" />
+                  <span>محفوظ</span>
+                </span>
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-semibold text-slate-600 block">
+                أهم نقطة اليوم
+              </label>
+              <AutoResizeTextarea
+                minRows={2}
+                value={highlightsDraft}
+                onChange={(e) => {
+                  if (!canEdit) return onRequireAuth();
+                  inlineDirtyRef.current = true;
+                  setHighlightsDraft(e.target.value);
+                }}
+                placeholder="أبرز إنجاز أو فكرة تعلّمتها..."
+                className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[11px] font-semibold text-slate-600 block">
+                تأمل الختام
+              </label>
+              <AutoResizeTextarea
+                minRows={3}
+                value={reflectionDraft}
+                onChange={(e) => {
+                  if (!canEdit) return onRequireAuth();
+                  inlineDirtyRef.current = true;
+                  setReflectionDraft(e.target.value);
+                }}
+                placeholder="كيف كان يومك؟ (يُحفظ تلقائيًا)"
+                className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
+              />
+            </div>
+          </div>
+
           {/* Quote of the Day Card */}
           <div
             data-custom-card-surface="light"
-            className={`border rounded-2xl p-4 space-y-2.5 ${quoteColorTheme.cardClass}`}
+            className={`border rounded-2xl p-4 space-y-2 ${quoteColorTheme.cardClass}`}
           >
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
@@ -843,57 +984,6 @@ export default function DailyJournalView({
             {resolvedQuote.quote.author && (
               <p className="text-[11px] text-slate-600">— {resolvedQuote.quote.author}</p>
             )}
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <PenLine className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-                <h2 className="text-base font-bold text-slate-900">
-                  تأملات وخلاصة اليوم
-                </h2>
-              </div>
-              {savedToast && (
-                <span className="text-[11px] font-semibold text-emerald-700">
-                  تم الحفظ
-                </span>
-              )}
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-700 block">
-                أهم نقطة تعلّمتها أو أنجزتها اليوم
-              </label>
-              <AutoResizeTextarea
-                minRows={2}
-                value={highlightsDraft}
-                onChange={(e) => setHighlightsDraft(e.target.value)}
-                placeholder="مثال: أنهيت درس التسويق الثالث وطبّقت خطة العميل..."
-                className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-700 block">
-                تأملك الشخصي / ملاحظات ختام اليوم
-              </label>
-              <AutoResizeTextarea
-                minRows={5}
-                value={reflectionDraft}
-                onChange={(e) => setReflectionDraft(e.target.value)}
-                placeholder="كيف كان تركيزك؟ ما الذي ساعدك أو عطّلك اليوم؟"
-                className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={handleSaveReflection}
-              className="w-full inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer"
-            >
-              <Save className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>حفظ تأمل اليوم</span>
-            </button>
           </div>
         </aside>
       </div>
@@ -932,6 +1022,7 @@ export default function DailyJournalView({
             setSavedAudioClips((prev) => prev.filter((c) => c.id !== clipId))
           }
           initialShowCustomize={modalInitialCustomize}
+          initialTab={modalInitialTab}
         />
       )}
     </div>

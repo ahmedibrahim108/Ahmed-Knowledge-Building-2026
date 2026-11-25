@@ -70,6 +70,8 @@ interface RichTextNoteEditorProps {
   onToggleMinimalMode?: () => void;
   voiceDialect?: VoiceDialectMode;
   onLogVoiceNote?: () => void;
+  variant?: 'default' | 'journal';
+  autoFocusOnMount?: boolean;
 }
 
 const FONT_SIZE_CLASS: Record<UserPreferences['noteFontSize'], string> = {
@@ -151,7 +153,10 @@ export default function RichTextNoteEditor({
   onToggleMinimalMode,
   voiceDialect,
   onLogVoiceNote,
+  variant = 'default',
+  autoFocusOnMount = false,
 }: RichTextNoteEditorProps) {
+  const isJournalVariant = variant === 'journal';
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   // Tracks the exact string emitted by this editor so we NEVER overwrite innerHTML while user types/deletes
@@ -360,6 +365,24 @@ export default function RichTextNoteEditor({
       lastEmittedRef.current = value;
       lastNoteKeyRef.current = noteKey;
       setInsideTable(false);
+      if (autoFocusOnMount && canEdit) {
+        window.requestAnimationFrame(() => {
+          if (!editorRef.current) return;
+          editorRef.current.focus({ preventScroll: false });
+          try {
+            const sel = window.getSelection();
+            if (sel) {
+              const range = document.createRange();
+              range.selectNodeContents(editorRef.current);
+              range.collapse(false);
+              sel.removeAllRanges();
+              sel.addRange(range);
+            }
+          } catch {
+            // ignore
+          }
+        });
+      }
       return;
     }
 
@@ -1312,10 +1335,20 @@ export default function RichTextNoteEditor({
   return (
     <div
       ref={wrapperRef}
-      className={`${layout.widthClass} ${layout.borderClass} rounded-xl overflow-visible bg-white transition-all`}
+      className={
+        isJournalVariant
+          ? 'w-full overflow-visible bg-transparent transition-all'
+          : `${layout.widthClass} ${layout.borderClass} rounded-xl overflow-visible bg-white transition-all`
+      }
     >
       {/* Main Formatting Toolbar (touch-friendly & wraps cleanly on mobile) */}
-      <div className="px-2.5 sm:px-3 py-2 bg-slate-50 border-b border-slate-200 rounded-t-xl flex flex-wrap items-center justify-between gap-1.5 sm:gap-2">
+      <div
+        className={
+          isJournalVariant
+            ? 'px-0 py-1.5 bg-transparent border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-1.5'
+            : 'px-2.5 sm:px-3 py-2 bg-slate-50 border-b border-slate-200 rounded-t-xl flex flex-wrap items-center justify-between gap-1.5 sm:gap-2'
+        }
+      >
         <div className="flex flex-wrap items-center gap-1">
           <button
             type="button"
@@ -2167,8 +2200,14 @@ export default function RichTextNoteEditor({
 
       {/* Editable Rich Canvas */}
       <div
-        data-custom-card-surface={layout.paperTone !== 'clean' ? 'light' : undefined}
-        className={`relative rounded-b-xl overflow-x-auto transition-all ${layout.paperToneClass}`}
+        data-custom-card-surface={
+          !isJournalVariant && layout.paperTone !== 'clean' ? 'light' : undefined
+        }
+        className={
+          isJournalVariant
+            ? 'relative overflow-x-auto transition-all bg-transparent'
+            : `relative rounded-b-xl overflow-x-auto transition-all ${layout.paperToneClass}`
+        }
         onClick={() => {
           if (!canEdit) onRequireAuth?.();
         }}
@@ -2176,9 +2215,9 @@ export default function RichTextNoteEditor({
         {isEmpty && (
           <div
             aria-hidden="true"
-            className={`pointer-events-none absolute inset-0 ${layout.canvasPaddingClass} text-slate-400 ${
-              FONT_SIZE_CLASS[preferences.noteFontSize]
-            }`}
+            className={`pointer-events-none absolute inset-0 ${
+              isJournalVariant ? 'px-0.5 py-3 text-[15px] sm:text-base leading-[1.85]' : `${layout.canvasPaddingClass} ${FONT_SIZE_CLASS[preferences.noteFontSize]}`
+            } text-slate-400`}
           >
             {canEdit
               ? placeholder
@@ -2201,7 +2240,7 @@ export default function RichTextNoteEditor({
           role="textbox"
           aria-multiline="true"
           aria-label="محرر الملاحظات المنسّق ثنائي اللغة"
-          style={{ caretColor: '#1E3A5F' }}
+          style={{ caretColor: 'var(--kb-primary, #1E3A5F)' }}
           onFocus={ensureParagraphSeparator}
           onInput={() => {
             emitChange(false);
@@ -2236,11 +2275,13 @@ export default function RichTextNoteEditor({
             syncFormatState();
             updateFloatingBubblePosition();
           }}
-          className={`prose-bidi w-full ${layout.canvasPaddingClass} ${minHeightClass} ${
-            FONT_SIZE_CLASS[preferences.noteFontSize]
-          } ${
+          className={`prose-bidi w-full scroll-mb-28 ${
+            isJournalVariant
+              ? 'px-0.5 py-3 text-[15px] sm:text-base leading-[1.85]'
+              : `${layout.canvasPaddingClass} ${FONT_SIZE_CLASS[preferences.noteFontSize]} rounded-b-xl`
+          } ${minHeightClass} ${
             editorDir === 'ltr' ? 'text-left' : editorDir === 'rtl' ? 'text-right' : 'text-start'
-          } text-slate-800 break-words focus:outline-none rounded-b-xl touch-manipulation transition-all [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 ${
+          } text-slate-800 break-words focus:outline-none touch-manipulation transition-all [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 ${
             !canEdit ? 'cursor-not-allowed opacity-85' : ''
           }`}
         />
