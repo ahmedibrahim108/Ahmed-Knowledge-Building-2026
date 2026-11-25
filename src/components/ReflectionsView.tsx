@@ -663,6 +663,7 @@ export default function ReflectionsView({
           onClick={() => setComposerOpen(false)}
         >
           <div
+            data-custom-card-surface="light"
             onClick={(e) => e.stopPropagation()}
             className={`w-full max-w-2xl max-h-[90dvh] flex flex-col border rounded-2xl shadow-2xl overflow-hidden transition-colors ${composerStyle.cardBg} ${composerStyle.cardBorder}`}
           >
@@ -1004,6 +1005,7 @@ export default function ReflectionsView({
               <button
                 key={m}
                 type="button"
+                data-custom-card-surface={!active ? 'light' : undefined}
                 onClick={() => setMoodFilter(m)}
                 className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg border cursor-pointer transition-colors ${
                   active

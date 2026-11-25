@@ -872,7 +872,7 @@ export default function FocusNoteStudyModal({
 
                     {richHtmlToPlainText(note.content) ? (
                       <div
-                        className="prose-bidi text-[15px] sm:text-base leading-[1.85] text-slate-800 [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-4 [&_h1]:mb-2 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3.5 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900"
+                        className="prose-bidi text-[15px] sm:text-base leading-[1.85] text-slate-800 [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-[var(--kb-fg)] [&_h1]:mt-4 [&_h1]:mb-2 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-[var(--kb-fg)] [&_h2]:mt-3.5 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-[var(--kb-fg)] [&_h3]:mt-3 [&_h3]:mb-1.5 [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-[#0F172A] [&_strong]:font-bold [&_strong]:text-[var(--kb-fg)]"
                         dangerouslySetInnerHTML={{
                           __html: renderSafeBidiHtml(note.content),
                         }}

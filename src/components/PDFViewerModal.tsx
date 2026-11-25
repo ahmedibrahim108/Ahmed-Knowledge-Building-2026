@@ -820,6 +820,7 @@ export default function PDFViewerModal({
                         ref={(el) => {
                           pageRefs.current[pageNumber] = el;
                         }}
+                        data-custom-card-surface="light"
                         className="bg-white shadow-xl rounded-sm overflow-hidden"
                       >
                         <Page
@@ -847,7 +848,7 @@ export default function PDFViewerModal({
               )}
               <div
                 style={{ fontSize: `${Math.round(15 * zoom)}px` }}
-                className="prose-bidi p-5 sm:p-10 text-slate-800 leading-relaxed space-y-3 overflow-x-auto [&_h1]:text-xl [&_h1]:font-bold [&_h1]:text-[#1E3A5F] [&_h1]:mb-3 [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-[#1E3A5F] [&_h2]:mt-5 [&_h2]:mb-2 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-4 [&_blockquote]:not-italic [&_blockquote]:border-s-4 [&_blockquote]:bg-slate-50 [&_blockquote]:py-2 [&_mark]:px-1 [&_mark]:rounded"
+                className="prose-bidi p-5 sm:p-10 text-slate-800 leading-relaxed space-y-3 overflow-x-auto [&_h1]:text-xl [&_h1]:font-bold [&_h1]:text-[var(--kb-primary-ink)] [&_h1]:mb-3 [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-[var(--kb-primary-ink)] [&_h2]:mt-5 [&_h2]:mb-2 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-[var(--kb-fg)] [&_h3]:mt-4 [&_strong]:text-[var(--kb-fg)] [&_blockquote]:not-italic [&_blockquote]:border-s-4 [&_blockquote]:bg-[var(--kb-surface)] [&_blockquote]:py-2 [&_mark]:px-1 [&_mark]:rounded [&_mark]:text-[#0F172A]"
                 dangerouslySetInnerHTML={{ __html: docHtml }}
               />
             </div>

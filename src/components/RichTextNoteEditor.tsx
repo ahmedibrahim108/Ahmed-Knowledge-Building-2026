@@ -2281,7 +2281,7 @@ export default function RichTextNoteEditor({
               : `${layout.canvasPaddingClass} ${FONT_SIZE_CLASS[preferences.noteFontSize]} rounded-b-xl`
           } ${minHeightClass} ${
             editorDir === 'ltr' ? 'text-left' : editorDir === 'rtl' ? 'text-right' : 'text-start'
-          } text-slate-800 break-words focus:outline-none touch-manipulation transition-all [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-slate-900 [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-slate-900 [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-900 [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-slate-900 [&_strong]:font-bold [&_strong]:text-slate-900 ${
+          } text-slate-800 break-words focus:outline-none touch-manipulation transition-all [&_h1]:text-lg [&_h1]:font-bold [&_h1]:text-[var(--kb-fg)] [&_h1]:mt-3 [&_h1]:mb-1.5 [&_h2]:text-base [&_h2]:font-bold [&_h2]:text-[var(--kb-fg)] [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-[var(--kb-fg)] [&_h3]:mt-3 [&_h3]:mb-1.5 [&_blockquote]:italic [&_mark]:px-1 [&_mark]:py-0.5 [&_mark]:rounded-xs [&_mark]:text-[#0F172A] [&_strong]:font-bold [&_strong]:text-[var(--kb-fg)] ${
             !canEdit ? 'cursor-not-allowed opacity-85' : ''
           }`}
         />
@@ -2407,7 +2407,7 @@ export default function RichTextNoteEditor({
               }`}
             >
               <span>A</span>
-              <span className="w-2.5 h-1 rounded-full bg-[#1E3A5F]" />
+              <span className="w-2.5 h-1 rounded-full bg-[var(--kb-primary-ink)]" />
             </button>
             {floatingSubMenu === 'color' && (
               <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-lg shadow-lg p-2 flex items-center gap-1.5 z-20 max-w-[calc(100vw-32px)]">
@@ -2420,7 +2420,7 @@ export default function RichTextNoteEditor({
                       e.preventDefault();
                       applyInlineStyleToSelection({ color: sw.hex });
                     }}
-                    className={`w-5 h-5 rounded-full border border-white shadow-xs cursor-pointer ${sw.dotClass}`}
+                    className={`w-5 h-5 rounded-full border border-slate-300 shadow-xs cursor-pointer ${sw.dotClass}`}
                   />
                 ))}
               </div>
