@@ -25,6 +25,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  Quote,
   RefreshCw,
   RotateCcw,
   Save,
@@ -67,8 +68,10 @@ import {
   UnifiedTask,
   UserPreferences,
   UserProfileItem,
+  UserQuoteItem,
   VoiceDialectMode,
   WeeklyMeeting,
+  getTodayDateKey,
   resolveLearningHubs,
   setActiveLearningHubs,
 } from '../data/curriculumData';
@@ -289,6 +292,9 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
   const [editingInterestVal, setEditingInterestVal] = useState('');
   const [savingSite, setSavingSite] = useState(false);
   const [siteSavedNotice, setSiteSavedNotice] = useState<string | null>(null);
+  const [pubQuoteText, setPubQuoteText] = useState('');
+  const [pubQuoteAuthor, setPubQuoteAuthor] = useState('');
+  const [pubQuoteTheme, setPubQuoteTheme] = useState('');
 
   // Users RBAC & Content Grants state
   const [profiles, setProfiles] = useState<UserProfileItem[]>([]);
@@ -370,7 +376,7 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
 
   const handleMoveNavTab = (tabId: string, dir: 'up' | 'down') => {
     if (!props.canEdit) return props.onRequireAuth();
-    const ids = orderedNavTabs.map((t) => t.id);
+    const ids: string[] = orderedNavTabs.map((t) => t.id);
     const idx = ids.indexOf(tabId);
     if (idx === -1) return;
     const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
@@ -1680,6 +1686,7 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                         ['showPhilosophy', 'فلسفة التعلّم'],
                         ['showSkills', 'المهارات'],
                         ['showInterests', 'الاهتمامات'],
+                        ['showQuotes', 'قسم الاقتباسات اليومية'],
                         ['showCourses', 'الكورسات'],
                         ['showPaths', 'المسارات'],
                         ['showBooks', 'الكتب'],
@@ -1750,6 +1757,174 @@ export default function AccountCenterView(props: AccountCenterViewProps) {
                           );
                         })}
                       </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Public Daily Quotes Management */}
+                <div className="p-4 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Quote className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                      <p className="text-xs font-bold text-slate-800">
+                        الاقتباسات المنشورة في الموقع العام ({(siteDraft.publicQuotes ?? []).length})
+                      </p>
+                    </div>
+                    {(props.preferences.quotesLibrary?.length ?? 0) > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const existing = siteDraft.publicQuotes ?? [];
+                          const existingTexts = new Set(existing.map((q) => q.text.trim()));
+                          const imported = (props.preferences.quotesLibrary ?? []).filter(
+                            (q) => !existingTexts.has(q.text.trim())
+                          );
+                          if (imported.length === 0) return;
+                          setSiteDraft((p) => ({
+                            ...p,
+                            publicQuotes: [...existing, ...imported],
+                          }));
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer"
+                      >
+                        <Plus className="w-3 h-3" aria-hidden="true" />
+                        <span>
+                          استيراد من مكتبة اقتباساتي ({props.preferences.quotesLibrary?.length ?? 0})
+                        </span>
+                      </button>
+                    )}
+                  </div>
+
+                  <label className="block text-[11px] text-slate-600">
+                    عنوان قسم الاقتباسات في الصفحة العامة
+                    <input
+                      type="text"
+                      value={siteDraft.publicQuotesHeading ?? 'اقتباس اليوم ومختارات ملهمة'}
+                      onChange={(e) =>
+                        setSiteDraft((p) => ({
+                          ...p,
+                          publicQuotesHeading: e.target.value,
+                        }))
+                      }
+                      placeholder="اقتباس اليوم ومختارات ملهمة"
+                      className="mt-1 w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                    />
+                  </label>
+
+                  <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-2">
+                    <AutoResizeTextarea
+                      minRows={2}
+                      value={pubQuoteText}
+                      onChange={(e) => setPubQuoteText(e.target.value)}
+                      placeholder="أضف نص الاقتباس الذي يظهر للزوار..."
+                      className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-200 rounded-lg"
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        type="text"
+                        value={pubQuoteAuthor}
+                        onChange={(e) => setPubQuoteAuthor(e.target.value)}
+                        placeholder="القائل / المصدر"
+                        className="flex-1 min-w-[140px] px-2.5 py-1.5 text-xs bg-[#F7F8FA] border border-slate-200 rounded-lg"
+                      />
+                      <input
+                        type="text"
+                        value={pubQuoteTheme}
+                        onChange={(e) => setPubQuoteTheme(e.target.value)}
+                        placeholder="المحور (مثال: التعلّم)"
+                        className="flex-1 min-w-[120px] px-2.5 py-1.5 text-xs bg-[#F7F8FA] border border-slate-200 rounded-lg"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const txt = pubQuoteText.trim();
+                          if (!txt) return;
+                          const now = Date.now();
+                          const nextItem: UserQuoteItem = {
+                            id: `pubq_${now}`,
+                            text: txt,
+                            author: pubQuoteAuthor.trim() || 'مقتبس مختار',
+                            theme: pubQuoteTheme.trim() || 'إلهام',
+                            dateKey: getTodayDateKey(),
+                            colorKey: 'amber',
+                            createdAtMs: now,
+                            updatedAtMs: now,
+                          };
+                          setSiteDraft((p) => ({
+                            ...p,
+                            publicQuotes: [nextItem, ...(p.publicQuotes ?? [])],
+                          }));
+                          setPubQuoteText('');
+                          setPubQuoteAuthor('');
+                          setPubQuoteTheme('');
+                        }}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>إضافة اقتباس عام</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {(siteDraft.publicQuotes ?? []).length > 0 && (
+                    <div className="max-h-[240px] overflow-y-auto thin-scrollbar space-y-2">
+                      {(siteDraft.publicQuotes ?? []).map((pq) => {
+                        const isPinned = siteDraft.pinnedPublicQuoteId === pq.id;
+                        return (
+                          <div
+                            key={pq.id}
+                            className="p-2.5 bg-white border border-slate-200 rounded-lg flex items-start justify-between gap-2 text-xs"
+                          >
+                            <div className="min-w-0 flex-1 space-y-0.5">
+                              <p className="font-semibold text-slate-900 line-clamp-2">
+                                «{pq.text}»
+                              </p>
+                              <p className="text-[11px] text-slate-500">
+                                — {pq.author}
+                                {pq.theme ? ` · ${pq.theme}` : ''}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSiteDraft((p) => ({
+                                    ...p,
+                                    pinnedPublicQuoteId: isPinned ? null : pq.id,
+                                  }))
+                                }
+                                title={isPinned ? 'إلغاء التثبيت' : 'تثبيت كاقتباس رئيسي'}
+                                className={`px-2 py-1 text-[10px] font-semibold rounded border cursor-pointer ${
+                                  isPinned
+                                    ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                                }`}
+                              >
+                                {isPinned ? 'مثبّت' : 'تثبيت'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setSiteDraft((p) => ({
+                                    ...p,
+                                    publicQuotes: (p.publicQuotes ?? []).filter(
+                                      (x) => x.id !== pq.id
+                                    ),
+                                    pinnedPublicQuoteId:
+                                      p.pinnedPublicQuoteId === pq.id
+                                        ? null
+                                        : p.pinnedPublicQuoteId,
+                                  }))
+                                }
+                                title="حذف الاقتباس"
+                                className="p-1 text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

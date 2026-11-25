@@ -1086,7 +1086,17 @@ export default function CoursesView({
                         <div className="flex items-center justify-between text-[11px] text-slate-500 tabular-nums">
                           <span>
                             {tasksDone}/{course.tasks.length} مهام ·{' '}
-                            {course.resources.length} مصادر · {notesCount} نوتس
+                            {course.resources.length} مصادر ·{' '}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenCourseNote(course);
+                              }}
+                              className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                            >
+                              {notesCount} نوتس
+                            </button>
                           </span>
                           <span className="font-semibold text-slate-800">
                             {pct}%

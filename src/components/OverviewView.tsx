@@ -406,6 +406,37 @@ export default function OverviewView({
       .slice(0, 30);
   }, [unifiedTasks, agendaFilter, today, activeFocusCollection]);
 
+  const todayTasksList = useMemo(() => {
+    const priOrder = { high: 0, medium: 1, low: 2 };
+    const isTaskDoneToday = (t: UnifiedTask) =>
+      t.status === 'done' ||
+      (Array.isArray(t.completedOccurrenceDates) &&
+        t.completedOccurrenceDates.includes(today));
+    return unifiedTasks
+      .filter((t) => {
+        if (!doesTaskOccurOnDate(t, today)) return false;
+        if (
+          activeFocusCollection &&
+          !isEntityInCollection(activeFocusCollection, 'task', t.id)
+        ) {
+          return false;
+        }
+        return true;
+      })
+      .slice()
+      .sort((a, b) => {
+        const da = isTaskDoneToday(a) ? 1 : 0;
+        const db = isTaskDoneToday(b) ? 1 : 0;
+        if (da !== db) return da - db;
+        if ((a.startTime || '') !== (b.startTime || '')) {
+          if (!a.startTime) return 1;
+          if (!b.startTime) return -1;
+          return a.startTime.localeCompare(b.startTime);
+        }
+        return priOrder[a.priority] - priOrder[b.priority];
+      });
+  }, [unifiedTasks, today, activeFocusCollection]);
+
   const latestReflections = useMemo(() => {
     const filtered =
       homeReflTagFilter === 'all'
@@ -1069,102 +1100,152 @@ export default function OverviewView({
         </div>
       </section>
 
-      {/* Balanced Row: Focus & Pinned Clarity + Daily Quotes & Reflection */}
+      {/* Balanced Row: Today's Tasks + Daily Quotes & Reflection */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-        {/* Focus & Pinned Items Card */}
+        {/* Today's Tasks Card (right beside Daily Quote) */}
         <div className="lg:col-span-6 bg-white border border-slate-200 rounded-2xl p-5 space-y-3.5 flex flex-col justify-between">
           <div className="space-y-1">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Target className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <CalendarCheck2 className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
                 <h2 className="font-editorial text-lg font-bold text-slate-900">
-                  عناصر التركيز والمثبتة ({focusShowcaseItems.length})
+                  مهامي اليوم ({todayProgressStats.todayTasksDone}/{todayProgressStats.todayTasksTotal})
                 </h2>
               </div>
-              {activeFocusCollection ? (
+              <div className="flex items-center gap-2">
+                {onAddUnifiedTask && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!canEdit) return onRequireAuth();
+                      setEditingTask(null);
+                      setTaskModalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" aria-hidden="true" />
+                    <span>مهمة</span>
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => onSelectFocusPinCollection?.(null)}
-                  className="text-[11px] font-semibold text-rose-700 hover:underline cursor-pointer"
-                >
-                  إلغاء فلتر «{activeFocusCollection.title}»
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => onNavigateTab('focus')}
+                  onClick={() => onNavigateTab('tasks')}
                   className="text-[11px] font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
                 >
-                  إدارة التركيز ←
+                  كل المهام ←
                 </button>
-              )}
+              </div>
             </div>
             <p className="text-[11px] text-slate-500 leading-relaxed">
-              تظهر هنا العناصر المثبتة في قائمة التركيز النشطة والكورسات المحددة كـ «قيد التركيز الآن». اضغط لفتح أي عنصر فورًا.
+              مهامك المجدولة أو المتكررة ليوم {today} لتركيز سريع ومنظّم.
             </p>
           </div>
 
-          {focusShowcaseItems.length === 0 ? (
-            <div className="p-4 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center space-y-1.5">
+          {todayTasksList.length === 0 ? (
+            <div className="p-5 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center space-y-2 my-auto">
               <p className="text-xs font-semibold text-slate-700">
-                لا توجد عناصر تركيز أو تثبيت نشطة حاليًا
+                لا توجد مهام مجدولة لهذا اليوم بعد
               </p>
-              <p className="text-[11px] text-slate-500">
-                يمكنك اختيار قائمة تثبيت من الأعلى أو تحويل أي كورس لمرحلة «قيد التركيز الآن».
-              </p>
+              {onAddUnifiedTask && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!canEdit) return onRequireAuth();
+                    setEditingTask(null);
+                    setTaskModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>أضف مهمة لليوم</span>
+                </button>
+              )}
             </div>
           ) : (
-            <div className="max-h-[265px] overflow-y-auto thin-scrollbar pr-0.5 space-y-2">
-              {focusShowcaseItems.map((item) => (
-                <div
-                  key={item.key}
-                  role="button"
-                  tabIndex={0}
-                  onClick={item.onOpen}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      item.onOpen();
-                    }
-                  }}
-                  className="w-full text-right p-3 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 flex items-center justify-between gap-2.5 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F]"
-                >
-                  <div className="min-w-0 flex-1 space-y-0.5">
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                      <span className="font-bold text-[#1E3A5F]">Focus</span>
-                      <span aria-hidden="true" className="text-slate-400">·</span>
-                      <span className="font-medium text-slate-600">{item.kindLabel}</span>
+            <div className="max-h-[260px] overflow-y-auto thin-scrollbar pl-0.5 space-y-2">
+              {todayTasksList.map((t) => {
+                const isRecurring = Boolean(
+                  t.recurrence && t.recurrence.frequency && t.recurrence.frequency !== 'none'
+                );
+                const doneToday =
+                  t.status === 'done' ||
+                  (Array.isArray(t.completedOccurrenceDates) &&
+                    t.completedOccurrenceDates.includes(today));
+                return (
+                  <div
+                    key={t.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      if (!canEdit) return onRequireAuth();
+                      if (onOpenTaskModal) onOpenTaskModal(t);
+                      else {
+                        setEditingTask(t);
+                        setTaskModalOpen(true);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        if (!canEdit) return onRequireAuth();
+                        if (onOpenTaskModal) onOpenTaskModal(t);
+                        else {
+                          setEditingTask(t);
+                          setTaskModalOpen(true);
+                        }
+                      }
+                    }}
+                    className="w-full text-right p-2.5 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 flex items-center justify-between gap-2.5 cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!canEdit) return onRequireAuth();
+                          if (isRecurring) {
+                            const prevDates = Array.isArray(t.completedOccurrenceDates)
+                              ? t.completedOccurrenceDates
+                              : [];
+                            const nextDates = doneToday
+                              ? prevDates.filter((d) => d !== today)
+                              : Array.from(new Set([...prevDates, today]));
+                            onUpdateUnifiedTask?.(t.id, {
+                              completedOccurrenceDates: nextDates,
+                            });
+                          } else {
+                            onUpdateUnifiedTask?.(t.id, {
+                              status: doneToday ? 'todo' : 'done',
+                            });
+                          }
+                        }}
+                        aria-label={doneToday ? 'إلغاء الإكمال' : 'تحديد كمكتملة'}
+                        className="mt-0.5 shrink-0 cursor-pointer p-0.5 rounded hover:bg-slate-200/70"
+                      >
+                        {doneToday ? (
+                          <CheckSquare className="w-4 h-4 text-emerald-700" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-400" />
+                        )}
+                      </button>
+                      <div className="min-w-0 flex-1">
+                        <p
+                          className={`text-xs sm:text-sm font-bold truncate ${
+                            doneToday ? 'line-through text-slate-400' : 'text-slate-900'
+                          }`}
+                        >
+                          <BidiText text={t.title} />
+                        </p>
+                        <p className="text-[11px] text-slate-500 tabular-nums truncate">
+                          {t.startTime ? `الساعة ${t.startTime}` : 'مجدولة لليوم'}
+                          {t.durationMinutes ? ` · ${t.durationMinutes} د` : ''}
+                          {t.priority === 'high' ? ' · أولوية عالية' : ''}
+                        </p>
+                      </div>
                     </div>
-                    <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">
-                      <BidiText text={item.title} />
-                    </p>
-                    <p className="text-[11px] text-slate-500 truncate">{item.reason}</p>
                   </div>
-
-                  {item.pinCol && item.entityType && item.entityId && canEdit && onSavePinCollection ? (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const nextItems = item.pinCol!.items.filter(
-                          (x) => !(x.entityType === item.entityType && x.entityId === item.entityId)
-                        );
-                        onSavePinCollection({
-                          ...item.pinCol!,
-                          items: nextItems,
-                          updatedAtMs: Date.now(),
-                        });
-                      }}
-                      title="إزالة من قائمة التركيز"
-                      className="px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer shrink-0"
-                    >
-                      إزالة
-                    </button>
-                  ) : (
-                    <ArrowLeft className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -1281,6 +1362,104 @@ export default function OverviewView({
             )}
           </div>
         </div>
+      </section>
+
+      {/* Focus & Pinned Items Showcase */}
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <Target className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+              <h2 className="font-editorial text-lg font-bold text-slate-900">
+                عناصر التركيز والمثبتة ({focusShowcaseItems.length})
+              </h2>
+            </div>
+            <p className="text-[11px] text-slate-500">
+              العناصر المثبتة في قائمة التركيز النشطة والكورسات المحددة كـ «قيد التركيز الآن».
+            </p>
+          </div>
+          {activeFocusCollection ? (
+            <button
+              type="button"
+              onClick={() => onSelectFocusPinCollection?.(null)}
+              className="text-[11px] font-semibold text-rose-700 hover:underline cursor-pointer"
+            >
+              إلغاء فلتر «{activeFocusCollection.title}»
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onNavigateTab('focus')}
+              className="text-[11px] font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+            >
+              إدارة التركيز ←
+            </button>
+          )}
+        </div>
+
+        {focusShowcaseItems.length === 0 ? (
+          <div className="p-4 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center space-y-1">
+            <p className="text-xs font-semibold text-slate-700">
+              لا توجد عناصر تركيز أو تثبيت نشطة حاليًا
+            </p>
+            <p className="text-[11px] text-slate-500">
+              يمكنك اختيار قائمة تثبيت من الأعلى أو تحويل أي كورس لمرحلة «قيد التركيز الآن».
+            </p>
+          </div>
+        ) : (
+          <div className="max-h-[265px] overflow-y-auto thin-scrollbar pl-0.5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {focusShowcaseItems.map((item) => (
+              <div
+                key={item.key}
+                role="button"
+                tabIndex={0}
+                onClick={item.onOpen}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    item.onOpen();
+                  }
+                }}
+                className="w-full text-right p-3 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 flex items-center justify-between gap-2.5 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F]"
+              >
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className="font-bold text-[#1E3A5F]">Focus</span>
+                    <span aria-hidden="true" className="text-slate-400">·</span>
+                    <span className="font-medium text-slate-600">{item.kindLabel}</span>
+                  </div>
+                  <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">
+                    <BidiText text={item.title} />
+                  </p>
+                  <p className="text-[11px] text-slate-500 truncate">{item.reason}</p>
+                </div>
+
+                {item.pinCol && item.entityType && item.entityId && canEdit && onSavePinCollection ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const nextItems = item.pinCol!.items.filter(
+                        (x) => !(x.entityType === item.entityType && x.entityId === item.entityId)
+                      );
+                      onSavePinCollection({
+                        ...item.pinCol!,
+                        items: nextItems,
+                        updatedAtMs: Date.now(),
+                      });
+                    }}
+                    title="إزالة من قائمة التركيز"
+                    className="px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer shrink-0"
+                  >
+                    إزالة
+                  </button>
+                ) : (
+                  <ArrowLeft className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Editable & Extensible Hubs Strip */}
@@ -2093,24 +2272,12 @@ export default function OverviewView({
         </section>
       </div>
 
-      {/* Balanced Side-by-Side Row: Weekly Rhythm + Quick Drop */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div className="lg:col-span-5">
-          <WeeklyRhythmSection
-            items={preferences.weeklyRhythm}
-            canEdit={canEdit}
-            onSaveRhythm={handleSaveRhythm}
-          />
-        </div>
-        <div className="lg:col-span-7">
-          <QuickDropSection
-            uid={user?.uid}
-            canEdit={canEdit}
-            onRequireAuth={onRequireAuth}
-            onOpenPdf={onOpenPdf}
-          />
-        </div>
-      </div>
+      {/* Weekly Rhythm Schedule */}
+      <WeeklyRhythmSection
+        items={preferences.weeklyRhythm}
+        canEdit={canEdit}
+        onSaveRhythm={handleSaveRhythm}
+      />
 
       {/* Spaced Repetition Tracker */}
       {dueItems.length > 0 && (
@@ -2216,6 +2383,14 @@ export default function OverviewView({
           }}
         />
       </section>
+
+      {/* Quick Drop — LAST Section at Bottom of Dashboard */}
+      <QuickDropSection
+        uid={user?.uid}
+        canEdit={canEdit}
+        onRequireAuth={onRequireAuth}
+        onOpenPdf={onOpenPdf}
+      />
 
       {/* Add / Edit Custom Quote Modal */}
       {quoteModalOpen && (

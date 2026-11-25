@@ -125,7 +125,7 @@ export default function ProgressCharts({
     } else {
       list.sort((a, b) => b.progressPct - a.progressPct);
     }
-    return list.slice(0, 6);
+    return list;
   }, [courseStats, courseFilter]);
 
   // 2) Learning Paths analytics
@@ -228,183 +228,183 @@ export default function ProgressCharts({
 
   return (
     <div className="space-y-6">
-      {/* Top Row: Composite Multi-Ring Overview + Key Study Indicators */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
-        <div className="lg:col-span-5 p-5 bg-[#F7F8FA] border border-slate-200 rounded-xl flex flex-col justify-between gap-4">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <PieChart className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-              <h3 className="text-sm font-bold text-slate-900">
-                المؤشر العام للمسارات والكورسات والمهام
-              </h3>
+      {/* Full-Width Row: 4 Interactive Focus & Study KPIs */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+        <button
+          type="button"
+          onClick={() => onOpenPaths?.()}
+          className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-[#1E3A5F]/40 border border-slate-200 rounded-xl flex flex-col justify-between gap-2.5 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
+        >
+          <div className="flex items-center justify-between text-slate-500">
+            <span className="text-xs font-medium group-hover:text-[#1E3A5F] transition-colors">
+              مسارات نشطة
+            </span>
+            <Compass className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-slate-900 tabular-nums">
+              {learningPaths.length}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
+              <span>متوسط الإنجاز {avgPathsPct}%</span>
+              <ArrowLeft className="w-3 h-3 text-[#1E3A5F] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
+            </p>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onOpenFocus?.()}
+          className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-[#1E3A5F]/40 border border-slate-200 rounded-xl flex flex-col justify-between gap-2.5 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
+        >
+          <div className="flex items-center justify-between text-slate-500">
+            <span className="text-xs font-medium group-hover:text-[#1E3A5F] transition-colors">
+              في دائرة التركيز
+            </span>
+            <GraduationCap className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-slate-900 tabular-nums">
+              {activeFocusCount}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
+              <span>من أصل {courses.length} كورس</span>
+              <ArrowLeft className="w-3 h-3 text-[#1E3A5F] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
+            </p>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onOpenJournal?.()}
+          className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-[#1E3A5F]/40 border border-slate-200 rounded-xl flex flex-col justify-between gap-2.5 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
+        >
+          <div className="flex items-center justify-between text-slate-500">
+            <span className="text-xs font-medium group-hover:text-[#1E3A5F] transition-colors">
+              ملاحظات الكورسات
+            </span>
+            <NotebookPen className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-slate-900 tabular-nums">
+              {courseLinkedNotesTotal}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
+              <span>إجمالي التلخيصات {bookNotes.length}</span>
+              <ArrowLeft className="w-3 h-3 text-[#1E3A5F] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
+            </p>
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => (onOpenReviews ? onOpenReviews() : onOpenJournal?.())}
+          className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-emerald-700/35 border border-slate-200 rounded-xl flex flex-col justify-between gap-2.5 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
+        >
+          <div className="flex items-center justify-between text-slate-500">
+            <span className="text-xs font-medium group-hover:text-emerald-800 transition-colors">
+              مراجعات واستماع
+            </span>
+            <Repeat className="w-4 h-4 text-[#059669]" aria-hidden="true" />
+          </div>
+          <div>
+            <p className="text-2xl font-bold text-slate-900 tabular-nums">
+              {totalStudySessions}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
+              <span>تكرار وسماع مسجّل</span>
+              <ArrowLeft className="w-3 h-3 text-[#059669] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
+            </p>
+          </div>
+        </button>
+      </div>
+
+      {/* Composite Multi-Ring Overview Bar */}
+      <div className="p-5 bg-[#F7F8FA] border border-slate-200 rounded-xl space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <PieChart className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+            <h3 className="text-sm font-bold text-slate-900">
+              المؤشر العام للمسارات والكورسات والمهام
+            </h3>
+          </div>
+        </div>
+
+        <div className="flex flex-col md:flex-row items-center gap-6">
+          <div className="relative w-36 h-36 shrink-0 flex items-center justify-center">
+            <svg
+              viewBox="0 0 144 144"
+              className="w-36 h-36 -rotate-90"
+              role="img"
+              aria-label={`معدل التقدّم العام ${compositePct}%`}
+            >
+              {rings.map((ring) => {
+                const circumference = 2 * Math.PI * ring.radius;
+                const dashOffset =
+                  circumference - (circumference * Math.min(100, ring.pct)) / 100;
+                return (
+                  <g key={ring.id}>
+                    <circle
+                      cx="72"
+                      cy="72"
+                      r={ring.radius}
+                      fill="none"
+                      stroke={ring.track}
+                      strokeWidth="8.5"
+                    />
+                    <circle
+                      cx="72"
+                      cy="72"
+                      r={ring.radius}
+                      fill="none"
+                      stroke={ring.color}
+                      strokeWidth="8.5"
+                      strokeLinecap="round"
+                      strokeDasharray={circumference}
+                      strokeDashoffset={dashOffset}
+                      className="transition-all duration-500"
+                    />
+                  </g>
+                );
+              })}
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
+              <span className="text-xl font-bold text-slate-900 tabular-nums leading-none">
+                {compositePct}%
+              </span>
+              <span className="text-[10px] font-medium text-slate-500 mt-1">
+                المتوسط العام
+              </span>
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center gap-5">
-            <div className="relative w-36 h-36 shrink-0 flex items-center justify-center">
-              <svg
-                viewBox="0 0 144 144"
-                className="w-36 h-36 -rotate-90"
-                role="img"
-                aria-label={`معدل التقدّم العام ${compositePct}%`}
+          <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            {rings.map((ring) => (
+              <div
+                key={ring.id}
+                className="flex flex-col justify-between gap-2 px-3.5 py-3 rounded-xl bg-white border border-slate-200/80"
               >
-                {rings.map((ring) => {
-                  const circumference = 2 * Math.PI * ring.radius;
-                  const dashOffset =
-                    circumference - (circumference * Math.min(100, ring.pct)) / 100;
-                  return (
-                    <g key={ring.id}>
-                      <circle
-                        cx="72"
-                        cy="72"
-                        r={ring.radius}
-                        fill="none"
-                        stroke={ring.track}
-                        strokeWidth="8.5"
-                      />
-                      <circle
-                        cx="72"
-                        cy="72"
-                        r={ring.radius}
-                        fill="none"
-                        stroke={ring.color}
-                        strokeWidth="8.5"
-                        strokeLinecap="round"
-                        strokeDasharray={circumference}
-                        strokeDashoffset={dashOffset}
-                        className="transition-all duration-500"
-                      />
-                    </g>
-                  );
-                })}
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none">
-                <span className="text-xl font-bold text-slate-900 tabular-nums leading-none">
-                  {compositePct}%
-                </span>
-                <span className="text-[10px] font-medium text-slate-500 mt-1">
-                  المتوسط العام
-                </span>
-              </div>
-            </div>
-
-            <div className="flex-1 w-full space-y-2">
-              {rings.map((ring) => (
-                <div
-                  key={ring.id}
-                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-white border border-slate-200/80"
-                >
+                <div className="flex items-center justify-between gap-2 min-w-0">
                   <div className="flex items-center gap-2 min-w-0">
                     <span
                       className="w-2.5 h-2.5 rounded-full shrink-0"
                       style={{ backgroundColor: ring.color }}
                       aria-hidden="true"
                     />
-                    <span className="text-xs font-medium text-slate-800 truncate">
+                    <span className="text-xs font-semibold text-slate-800 truncate">
                       {ring.label}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0 text-xs tabular-nums">
-                    <span className="text-slate-500 text-[11px]">{ring.detail}</span>
-                    <span className="font-bold text-slate-900 w-9 text-left">
-                      {ring.pct}%
-                    </span>
-                  </div>
+                  <span className="font-bold text-sm text-slate-900 tabular-nums shrink-0">
+                    {ring.pct}%
+                  </span>
                 </div>
-              ))}
-            </div>
+                <span className="text-slate-500 text-[11px] tabular-nums">
+                  {ring.detail}
+                </span>
+              </div>
+            ))}
           </div>
-        </div>
-
-        {/* 4 Interactive Focus & Study KPIs */}
-        <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <button
-            type="button"
-            onClick={() => onOpenPaths?.()}
-            className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-[#1E3A5F]/40 border border-slate-200 rounded-xl flex flex-col justify-between gap-2 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
-          >
-            <div className="flex items-center justify-between text-slate-500">
-              <span className="text-xs font-medium group-hover:text-[#1E3A5F] transition-colors">
-                مسارات نشطة
-              </span>
-              <Compass className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-slate-900 tabular-nums">
-                {learningPaths.length}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
-                <span>متوسط الإنجاز {avgPathsPct}%</span>
-                <ArrowLeft className="w-3 h-3 text-[#1E3A5F] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
-              </p>
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onOpenFocus?.()}
-            className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-[#1E3A5F]/40 border border-slate-200 rounded-xl flex flex-col justify-between gap-2 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
-          >
-            <div className="flex items-center justify-between text-slate-500">
-              <span className="text-xs font-medium group-hover:text-[#1E3A5F] transition-colors">
-                في دائرة التركيز
-              </span>
-              <GraduationCap className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-slate-900 tabular-nums">
-                {activeFocusCount}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
-                <span>من أصل {courses.length} كورس</span>
-                <ArrowLeft className="w-3 h-3 text-[#1E3A5F] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
-              </p>
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onOpenJournal?.()}
-            className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-[#1E3A5F]/40 border border-slate-200 rounded-xl flex flex-col justify-between gap-2 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
-          >
-            <div className="flex items-center justify-between text-slate-500">
-              <span className="text-xs font-medium group-hover:text-[#1E3A5F] transition-colors">
-                ملاحظات الكورسات
-              </span>
-              <NotebookPen className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-slate-900 tabular-nums">
-                {courseLinkedNotesTotal}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
-                <span>إجمالي التلخيصات {bookNotes.length}</span>
-                <ArrowLeft className="w-3 h-3 text-[#1E3A5F] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
-              </p>
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => (onOpenReviews ? onOpenReviews() : onOpenJournal?.())}
-            className="group p-4 bg-[#F7F8FA] hover:bg-slate-100 hover:border-emerald-700/35 border border-slate-200 rounded-xl flex flex-col justify-between gap-2 text-right transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1E3A5F]"
-          >
-            <div className="flex items-center justify-between text-slate-500">
-              <span className="text-xs font-medium group-hover:text-emerald-800 transition-colors">
-                مراجعات واستماع
-              </span>
-              <Repeat className="w-4 h-4 text-[#059669]" aria-hidden="true" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-slate-900 tabular-nums">
-                {totalStudySessions}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums flex items-center justify-between gap-1">
-                <span>تكرار وسماع مسجّل</span>
-                <ArrowLeft className="w-3 h-3 text-[#059669] opacity-60 group-hover:opacity-100 shrink-0" aria-hidden="true" />
-              </p>
-            </div>
-          </button>
         </div>
       </div>
 
@@ -416,7 +416,7 @@ export default function ProgressCharts({
             <div className="flex items-center gap-2">
               <Layers className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
               <h3 className="text-sm font-bold text-slate-900">
-                تمثيل مرئي لمسارات التعلّم
+                تمثيل مرئي لمسارات التعلّم ({pathStats.length})
               </h3>
             </div>
             {onOpenPaths && (
@@ -447,7 +447,7 @@ export default function ProgressCharts({
               )}
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="max-h-[420px] overflow-y-auto thin-scrollbar pl-0.5 space-y-3">
               {pathStats.map(({ path, hubMeta, totalStages, doneStages, pct }) => (
                 <button
                   key={path.id}
@@ -506,7 +506,7 @@ export default function ProgressCharts({
             <div className="flex items-center gap-2">
               <BookOpenCheck className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
               <h3 className="text-sm font-bold text-slate-900">
-                الكورسات والتركيز ونشاط المذاكرة والملاحظات
+                الكورسات والتركيز ونشاط المذاكرة والملاحظات ({displayedCourses.length})
               </h3>
             </div>
 
@@ -539,7 +539,7 @@ export default function ProgressCharts({
               لا توجد كورسات مسجّلة لعرضها هنا حاليًا.
             </div>
           ) : (
-            <div className="space-y-2.5">
+            <div className="max-h-[420px] overflow-y-auto thin-scrollbar pl-0.5 space-y-2.5">
               {displayedCourses.map((item) => {
                 const studyLoad =
                   item.notesCount + item.totalReviews + item.totalListens;

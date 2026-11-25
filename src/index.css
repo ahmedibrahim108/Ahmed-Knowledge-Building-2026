@@ -516,6 +516,23 @@ html[data-kb-themed="true"] .focus\:bg-white:focus {
   background-color: var(--kb-input) !important;
 }
 
+/* Dark mode card & nested surface elevation parity (prevents washed-out flat gray cards at rest) */
+html[data-theme-mode="dark"] .bg-white.rounded-2xl,
+html[data-theme-mode="dark"] .bg-white.rounded-xl {
+  box-shadow: var(--kb-shadow-card);
+}
+
+html[data-theme-mode="dark"] .bg-white :is(button, article, a, div[role="button"]).bg-\[\#F7F8FA\],
+html[data-theme-mode="dark"] .bg-white :is(button, article, a, div[role="button"]).bg-slate-50,
+html[data-theme-mode="dark"] .bg-white :is(button, article, a, div[role="button"]).bg-slate-50\/70 {
+  background-color: var(--kb-surface-2) !important;
+}
+
+html[data-theme-mode="dark"] .bg-white :is(input, select, textarea).bg-slate-50,
+html[data-theme-mode="dark"] .bg-white :is(input, select, textarea).bg-\[\#F7F8FA\] {
+  background-color: var(--kb-input) !important;
+}
+
 /* Text color tokens */
 html[data-kb-themed="true"] .text-slate-900,
 html[data-kb-themed="true"] .text-slate-950,

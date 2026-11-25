@@ -11,6 +11,7 @@ import {
   GraduationCap,
   KeyRound,
   Layers,
+  Library,
   Loader2,
   LogIn,
   LogOut,
@@ -18,6 +19,8 @@ import {
   MessageSquarePlus,
   NotebookPen,
   Palette,
+  Quote,
+  RefreshCw,
   Search,
   Send,
   ShieldCheck,
@@ -43,9 +46,16 @@ import {
   estimateReadingTimeMinutes,
   getHubMeta,
   getReflectionCardStyle,
+  getTodayDateKey,
   sortBookNotesList,
 } from '../data/curriculumData';
 import type { UserProfileRecord } from '../services/supabaseSync';
+import {
+  PERSONAL_GROWTH_QUOTES,
+  QUOTE_COLOR_THEMES,
+  resolveEffectiveDailyQuote,
+  rotateDailyQuoteFromLibrary,
+} from '../utils/dailyQuotes';
 import { ensureRichHtml, renderSafeBidiHtml } from '../utils/richText';
 import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
@@ -153,8 +163,15 @@ export default function PublicHomeView({
 
   // Granted workspace dedicated sub-tabs & filters (preserved across tab switches)
   const [grantedTab, setGrantedTab] = useState<'overview' | 'courses' | 'notes'>('overview');
+  const [grantedCoursesSearch, setGrantedCoursesSearch] = useState('');
+  const [grantedCoursesHubFilter, setGrantedCoursesHubFilter] = useState<string>('all');
   const [grantedNotesSearch, setGrantedNotesSearch] = useState('');
   const [grantedNotesCourseFilter, setGrantedNotesCourseFilter] = useState<string>('all');
+
+  // Public Daily Quote showcase state
+  const todayKey = useMemo(() => getTodayDateKey(), []);
+  const [rotatedPublicQuoteText, setRotatedPublicQuoteText] = useState<string | null>(null);
+  const [publicQuotesArchiveOpen, setPublicQuotesArchiveOpen] = useState(false);
 
   const flags = siteConfig.visibilityFlags;
   const visibleSections = siteConfig.sections.filter((s) => s.visible);
@@ -215,6 +232,74 @@ export default function PublicHomeView({
     }
     return Array.from(map.entries());
   }, [grantedNotes, grantedCourses]);
+
+  const filteredGrantedCourses = useMemo(() => {
+    const q = grantedCoursesSearch.trim().toLowerCase();
+    return grantedCourses.filter((c) => {
+      if (grantedCoursesHubFilter !== 'all' && (c.hubId || 'knowledge') !== grantedCoursesHubFilter) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        c.title.toLowerCase().includes(q) ||
+        (c.category || '').toLowerCase().includes(q) ||
+        (c.instructor || '').toLowerCase().includes(q) ||
+        (c.platform || '').toLowerCase().includes(q)
+      );
+    });
+  }, [grantedCourses, grantedCoursesSearch, grantedCoursesHubFilter]);
+
+  const grantedCourseHubOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const c of grantedCourses) {
+      const hid = c.hubId || 'knowledge';
+      if (!seen.has(hid)) seen.set(hid, getHubMeta(hid).shortTitle);
+    }
+    return Array.from(seen.entries());
+  }, [grantedCourses]);
+
+  const showTopCoursesTab = Boolean(user && !isAdmin && grantedCourses.length > 0);
+  const showTopNotesTab = Boolean(user && !isAdmin && grantedNotes.length > 0);
+
+  const publicQuotesPool = siteConfig.publicQuotes ?? [];
+  const effectivePublicQuote = useMemo(() => {
+    const resolved = resolveEffectiveDailyQuote({
+      dateKey: todayKey,
+      quotesLibrary: publicQuotesPool,
+      pinnedDailyQuoteId: siteConfig.pinnedPublicQuoteId ?? undefined,
+    });
+    if (rotatedPublicQuoteText) {
+      const fromCustom = publicQuotesPool.find((q) => q.text === rotatedPublicQuoteText);
+      if (fromCustom) {
+        return {
+          quote: {
+            text: fromCustom.text,
+            author: fromCustom.author,
+            theme: fromCustom.theme || 'مختارات',
+            dateKey: todayKey,
+          },
+          customQuote: fromCustom,
+        };
+      }
+      const fromBuiltIn = PERSONAL_GROWTH_QUOTES.find((q) => q.text === rotatedPublicQuoteText);
+      if (fromBuiltIn) {
+        return {
+          quote: {
+            text: fromBuiltIn.text,
+            author: fromBuiltIn.author,
+            theme: fromBuiltIn.theme,
+            dateKey: todayKey,
+          },
+          customQuote: undefined,
+        };
+      }
+    }
+    return resolved;
+  }, [todayKey, publicQuotesPool, siteConfig.pinnedPublicQuoteId, rotatedPublicQuoteText]);
+
+  const publicQuoteTheme =
+    QUOTE_COLOR_THEMES[effectivePublicQuote.customQuote?.colorKey || 'amber'] ||
+    QUOTE_COLOR_THEMES.amber;
 
   const adminNotesForUser = (grantedWorkspace?.grants ?? [])
     .map((g) => g.notesForUser.trim())
@@ -310,7 +395,17 @@ export default function PublicHomeView({
           <div className="flex items-center gap-2 text-xs sm:text-sm font-medium">
             <Eye className="w-4 h-4 shrink-0" aria-hidden="true" />
             <span>
-              أنت تشاهد الآن معاينة الموقع العام ({publicPage === 'home' ? 'الرئيسية' : publicPage === 'reflections' ? 'الخواطر' : 'المدونة'}) كما يراها الزوار.
+              أنت تشاهد الآن معاينة الموقع العام (
+              {publicPage === 'home'
+                ? 'الرئيسية'
+                : publicPage === 'courses'
+                ? 'الكورسات'
+                : publicPage === 'notes'
+                ? 'الملخصات'
+                : publicPage === 'reflections'
+                ? 'الخواطر'
+                : 'المدونة'}
+              ) كما يراها الزوار.
             </span>
           </div>
           <button
@@ -338,6 +433,32 @@ export default function PublicHomeView({
           >
             الرئيسية والسيرة
           </button>
+          {showTopCoursesTab && (
+            <button
+              type="button"
+              onClick={() => goPage('courses')}
+              className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer transition-colors ${
+                publicPage === 'courses'
+                  ? 'bg-[#1E3A5F] text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              الكورسات ({grantedCourses.length})
+            </button>
+          )}
+          {showTopNotesTab && (
+            <button
+              type="button"
+              onClick={() => goPage('notes')}
+              className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer transition-colors ${
+                publicPage === 'notes'
+                  ? 'bg-[#1E3A5F] text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              الملخصات ({grantedNotes.length})
+            </button>
+          )}
           {flags.showReflections !== false && (
             <button
               type="button"
@@ -498,6 +619,91 @@ export default function PublicHomeView({
             </section>
           )}
 
+          {/* Public Daily Quote & Wisdom Showcase */}
+          {flags.showQuotes !== false && (
+            <section
+              data-custom-card-surface="light"
+              className={`border rounded-2xl p-5 sm:p-6 space-y-4 ${publicQuoteTheme.cardClass}`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Quote
+                    className={`w-4 h-4 ${publicQuoteTheme.accentTextClass}`}
+                    aria-hidden="true"
+                  />
+                  <h2 className="font-editorial text-lg font-bold text-slate-900">
+                    {siteConfig.publicQuotesHeading || 'اقتباس اليوم ومختارات ملهمة'}
+                  </h2>
+                  {effectivePublicQuote.quote.theme && (
+                    <span
+                      className={`text-[11px] font-semibold ${publicQuoteTheme.accentTextClass}`}
+                    >
+                      · {effectivePublicQuote.quote.theme}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = rotateDailyQuoteFromLibrary(
+                        todayKey,
+                        effectivePublicQuote.quote.text,
+                        publicQuotesPool
+                      );
+                      setRotatedPublicQuoteText(next.quote.text);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 bg-white/85 hover:bg-white border border-slate-200 rounded-lg font-semibold text-slate-700 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                    <span>اقتباس آخر</span>
+                  </button>
+                  {publicQuotesPool.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setPublicQuotesArchiveOpen((v) => !v)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 bg-white/85 hover:bg-white border border-slate-200 rounded-lg font-medium text-slate-700 cursor-pointer"
+                    >
+                      <Library className="w-3 h-3" aria-hidden="true" />
+                      <span>المختارات ({publicQuotesPool.length})</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <blockquote className="space-y-1.5">
+                <p className="font-editorial text-base sm:text-xl font-bold text-slate-900 leading-relaxed">
+                  «<BidiText text={effectivePublicQuote.quote.text} />»
+                </p>
+                <footer className="text-xs sm:text-sm font-medium text-slate-600">
+                  — {effectivePublicQuote.quote.author}
+                </footer>
+              </blockquote>
+
+              {publicQuotesArchiveOpen && publicQuotesPool.length > 1 && (
+                <div className="pt-3 border-t border-black/10 max-h-[240px] overflow-y-auto thin-scrollbar grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  {publicQuotesPool.map((pq) => (
+                    <button
+                      key={pq.id}
+                      type="button"
+                      onClick={() => setRotatedPublicQuoteText(pq.text)}
+                      className="text-right p-3 rounded-xl bg-white/80 hover:bg-white border border-black/10 space-y-1 cursor-pointer transition-colors"
+                    >
+                      <p className="text-xs font-bold text-slate-900 line-clamp-2">
+                        «<BidiText text={pq.text} />»
+                      </p>
+                      <p className="text-[11px] text-slate-600">
+                        — {pq.author}
+                        {pq.theme ? ` · ${pq.theme}` : ''}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
           {/* Granular Granted Workspace Content for Signed-In Non-Admin Accounts */}
           {user && !isAdmin && (loadingGranted || totalGrantedCount > 0) && (
             <section className="bg-white border border-[#1E3A5F]/25 rounded-2xl p-4 sm:p-6 space-y-5">
@@ -604,13 +810,13 @@ export default function PublicHomeView({
                         />
                         <span>كورسات مخصّصة لك ({grantedCourses.length})</span>
                       </h3>
-                      {grantedTab === 'overview' && grantedCourses.length > 3 && (
+                      {grantedTab === 'overview' && grantedCourses.length > 0 && (
                         <button
                           type="button"
-                          onClick={() => setGrantedTab('courses')}
+                          onClick={() => goPage('courses')}
                           className="text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
                         >
-                          عرض الكل في تبويب الكورسات ←
+                          فتح صفحة الكورسات الكاملة ({grantedCourses.length}) ←
                         </button>
                       )}
                     </div>
@@ -673,13 +879,13 @@ export default function PublicHomeView({
                         />
                         <span>تلخيصات وملاحظات مخصّصة لك ({grantedNotes.length})</span>
                       </h3>
-                      {grantedTab === 'overview' && grantedNotes.length > 6 && (
+                      {grantedTab === 'overview' && grantedNotes.length > 0 && (
                         <button
                           type="button"
-                          onClick={() => setGrantedTab('notes')}
+                          onClick={() => goPage('notes')}
                           className="text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
                         >
-                          تصفح كل التلخيصات مرتبة ({grantedNotes.length}) ←
+                          تصفح كل الملخصات في صفحتها ({grantedNotes.length}) ←
                         </button>
                       )}
                     </div>
@@ -1321,6 +1527,299 @@ export default function PublicHomeView({
         </>
       )}
 
+      {/* ================= PAGE 1B: DEDICATED COURSES PAGE FOR REGULAR ACCOUNTS ================= */}
+      {publicPage === 'courses' && (
+        <div className="space-y-6">
+          <section className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1.5 max-w-2xl">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs font-semibold text-[#1E3A5F]">
+                    المحتوى التعلّمي المخصّص لحسابك
+                  </p>
+                  {user && !isAdmin && (
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-semibold rounded-md border ${
+                        canAnnotateGranted
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-[#F7F8FA] border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {canAnnotateGranted ? 'عرض + السماح بالإضافة' : 'قراءة فقط'}
+                    </span>
+                  )}
+                </div>
+                <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900">
+                  الكورسات المتاحة لك ({grantedCourses.length})
+                </h1>
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  اضغط على أي كورس لعرض أهدافه، وحداته الدراسية، والتلخيصات والمرفقات المرتبطة به.
+                </p>
+              </div>
+              {loadingGranted && (
+                <Loader2 className="w-5 h-5 animate-spin text-[#1E3A5F]" aria-hidden="true" />
+              )}
+            </div>
+
+            {!user ? (
+              <div className="p-6 rounded-xl bg-[#F7F8FA] border border-slate-200 text-center space-y-3">
+                <p className="text-sm font-semibold text-slate-800">
+                  يرجى تسجيل الدخول لعرض الكورسات المخصّصة لحسابك.
+                </p>
+                <button
+                  type="button"
+                  onClick={onGoogleSignIn}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer"
+                >
+                  <LogIn className="w-4 h-4" aria-hidden="true" />
+                  <span>تسجيل الدخول</span>
+                </button>
+              </div>
+            ) : grantedCourses.length === 0 ? (
+              <div className="p-6 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center space-y-2">
+                <p className="text-sm text-slate-600">
+                  لا توجد كورسات مخصّصة لحسابك حاليًا.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center gap-3 pt-1">
+                  <div className="relative flex-1 min-w-[220px]">
+                    <Search
+                      className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                      aria-hidden="true"
+                    />
+                    <input
+                      type="text"
+                      value={grantedCoursesSearch}
+                      onChange={(e) => setGrantedCoursesSearch(e.target.value)}
+                      placeholder="ابحث باسم الكورس أو المحاضر أو المجال..."
+                      className="w-full pr-9 pl-3 py-2 text-xs sm:text-sm bg-[#F7F8FA] border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+                    />
+                  </div>
+                  {grantedCourseHubOptions.length > 1 && (
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setGrantedCoursesHubFilter('all')}
+                        className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer ${
+                          grantedCoursesHubFilter === 'all'
+                            ? 'bg-[#1E3A5F] text-white'
+                            : 'bg-[#F7F8FA] text-slate-700 border border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        الكل
+                      </button>
+                      {grantedCourseHubOptions.map(([hid, label]) => (
+                        <button
+                          key={hid}
+                          type="button"
+                          onClick={() => setGrantedCoursesHubFilter(hid)}
+                          className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer ${
+                            grantedCoursesHubFilter === hid
+                              ? 'bg-[#1E3A5F] text-white'
+                              : 'bg-[#F7F8FA] text-slate-700 border border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {filteredGrantedCourses.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-6 text-center">
+                    لا توجد كورسات مطابقة لبحثك.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
+                    {filteredGrantedCourses.map((course) => {
+                      const hub = getHubMeta(course.hubId);
+                      const linkedCount = grantedNotes.filter(
+                        (n) =>
+                          n.courseId === course.id ||
+                          (Boolean(n.courseTitle) &&
+                            n.courseTitle!.trim().toLowerCase() ===
+                              course.title.trim().toLowerCase())
+                      ).length;
+                      return (
+                        <article
+                          key={course.docId || course.id}
+                          onClick={() => openCourseModal(course)}
+                          className="p-5 rounded-2xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 hover:border-[#1E3A5F]/45 flex flex-col justify-between gap-3 cursor-pointer transition-colors"
+                        >
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between gap-2 text-[11px]">
+                              <span className="font-semibold text-[#1E3A5F]">
+                                {hub.shortTitle} · {course.category}
+                              </span>
+                              <span className="text-slate-500 tabular-nums">
+                                {course.progressPct ?? 0}%
+                              </span>
+                            </div>
+                            <h3 className="font-editorial text-lg font-bold text-slate-900">
+                              <BidiText text={course.title} />
+                            </h3>
+                            {(course.instructor || course.platform) && (
+                              <p className="text-xs text-slate-500">
+                                {[course.instructor, course.platform]
+                                  .filter(Boolean)
+                                  .join(' · ')}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-200/70 flex items-center justify-between text-xs">
+                            <span className="text-slate-500 tabular-nums">
+                              {linkedCount > 0 ? `${linkedCount} ملخص مرتبط` : 'تفاصيل الكورس'}
+                            </span>
+                            <span className="inline-flex items-center gap-1 font-semibold text-[#1E3A5F]">
+                              <span>فتح الكورس</span>
+                              <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                            </span>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </div>
+      )}
+
+      {/* ================= PAGE 1C: DEDICATED NOTES PAGE FOR REGULAR ACCOUNTS ================= */}
+      {publicPage === 'notes' && (
+        <div className="space-y-6">
+          <section className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1.5 max-w-2xl">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs font-semibold text-[#1E3A5F]">
+                    دفتر التلخيصات والملاحظات المخصّصة لك
+                  </p>
+                  {user && !isAdmin && (
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-semibold rounded-md border ${
+                        canAnnotateGranted
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-[#F7F8FA] border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {canAnnotateGranted ? 'عرض + السماح بالإضافة' : 'قراءة فقط'}
+                    </span>
+                  )}
+                </div>
+                <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900">
+                  الملخصات والملاحظات ({grantedNotes.length})
+                </h1>
+                <p className="text-sm text-slate-600 leading-relaxed">
+                  تصفح جميع تلخيصات المحاضرات والكتب المخصّصة لحسابك مرتبة حسب الكورس والدرس.
+                </p>
+              </div>
+              {loadingGranted && (
+                <Loader2 className="w-5 h-5 animate-spin text-[#1E3A5F]" aria-hidden="true" />
+              )}
+            </div>
+
+            {!user ? (
+              <div className="p-6 rounded-xl bg-[#F7F8FA] border border-slate-200 text-center space-y-3">
+                <p className="text-sm font-semibold text-slate-800">
+                  يرجى تسجيل الدخول لعرض الملخصات المخصّصة لحسابك.
+                </p>
+                <button
+                  type="button"
+                  onClick={onGoogleSignIn}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer"
+                >
+                  <LogIn className="w-4 h-4" aria-hidden="true" />
+                  <span>تسجيل الدخول</span>
+                </button>
+              </div>
+            ) : grantedNotes.length === 0 ? (
+              <div className="p-6 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center">
+                <p className="text-sm text-slate-600">
+                  لا توجد ملخصات أو ملاحظات مخصّصة لحسابك حاليًا.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center gap-3 pt-1">
+                  <div className="relative flex-1 min-w-[220px]">
+                    <Search
+                      className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                      aria-hidden="true"
+                    />
+                    <input
+                      type="text"
+                      value={grantedNotesSearch}
+                      onChange={(e) => setGrantedNotesSearch(e.target.value)}
+                      placeholder="ابحث داخل الملخصات والعناوين..."
+                      className="w-full pr-9 pl-3 py-2 text-xs sm:text-sm bg-[#F7F8FA] border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F] focus:bg-white"
+                    />
+                  </div>
+                  {grantedNotesCourseOptions.length > 1 && (
+                    <select
+                      value={grantedNotesCourseFilter}
+                      onChange={(e) => setGrantedNotesCourseFilter(e.target.value)}
+                      className="px-3 py-2 text-xs sm:text-sm bg-[#F7F8FA] border border-slate-200 rounded-xl"
+                    >
+                      <option value="all">كل الكورسات والمصادر ({grantedNotes.length})</option>
+                      {grantedNotesCourseOptions.map(([val, lbl]) => (
+                        <option key={val} value={val}>
+                          {lbl}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {filteredGrantedNotes.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-6 text-center">
+                    لا توجد ملخصات مطابقة لبحثك.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
+                    {filteredGrantedNotes.map((bn) => (
+                      <article
+                        key={bn.id}
+                        onClick={() => {
+                          setGrantedNoteDraft('');
+                          setGrantedNoteError(null);
+                          setDetailModal({ type: 'note', item: bn });
+                        }}
+                        className="p-5 rounded-2xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 hover:border-[#1E3A5F]/45 flex flex-col justify-between gap-3 cursor-pointer transition-colors"
+                      >
+                        <div className="space-y-1.5">
+                          <p className="text-[11px] font-semibold text-[#1E3A5F] truncate">
+                            {bn.courseTitle || bn.author || 'تلخيص وملاحظة'}
+                            {bn.lectureTitle ? ` · ${bn.lectureTitle}` : ''}
+                          </p>
+                          <h3 className="font-editorial text-lg font-bold text-slate-900 line-clamp-2">
+                            <BidiText text={bn.bookTitle} />
+                          </h3>
+                        </div>
+                        <div className="pt-2 border-t border-slate-200/70 flex items-center justify-between text-xs">
+                          <span className="text-slate-500 tabular-nums">
+                            {bn.updatedAt || 'ملخص منسّق'}
+                          </span>
+                          <span className="inline-flex items-center gap-1 font-semibold text-[#1E3A5F]">
+                            <span>قراءة الملخص</span>
+                            <ArrowLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                          </span>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </div>
+      )}
+
       {/* ================= PAGE 2: PUBLIC REFLECTIONS SHOWCASE ================= */}
       {publicPage === 'reflections' && (
         <div className="space-y-6">
@@ -1724,15 +2223,19 @@ export default function PublicHomeView({
                       <h3 className="font-editorial text-xl sm:text-2xl font-bold text-slate-900">
                         {detailModal.item.title}
                       </h3>
-                      <p className="text-xs text-slate-500">
-                        {[
-                          detailModal.item.instructor,
-                          detailModal.item.platform,
-                          detailModal.item.durationLabel,
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')}
-                      </p>
+                      {(detailModal.item.instructor ||
+                        detailModal.item.platform ||
+                        detailModal.item.durationLabel) && (
+                        <p className="text-xs text-slate-500">
+                          {[
+                            detailModal.item.instructor,
+                            detailModal.item.platform,
+                            detailModal.item.durationLabel,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </p>
+                      )}
                     </div>
                     {detailModal.item.complementaryBook && (
                       <div className="p-3.5 bg-[#F7F8FA] border border-slate-200 rounded-xl text-xs text-slate-700">
@@ -1760,33 +2263,53 @@ export default function PublicHomeView({
                               key={res.id}
                               className="p-3 bg-[#F7F8FA] border border-slate-200 rounded-lg flex flex-wrap items-center justify-between gap-2"
                             >
-                              <span className="text-xs font-medium text-slate-800">
-                                {res.title || res.attachmentName}
-                              </span>
-                              {(res.storagePath || res.downloadUrl) && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    onOpenPdf({
-                                      title:
-                                        res.title ||
-                                        res.attachmentName ||
-                                        'ملف مرفق',
-                                      fileName:
-                                        res.attachmentName || 'document.pdf',
-                                      resourceId: res.id,
-                                      storagePath: res.storagePath,
-                                      downloadUrl: res.downloadUrl,
-                                      mimeType: res.mimeType,
-                                      contextLabel: detailModal.item.title,
-                                      uid: effectiveOwnerUid,
-                                    })
-                                  }
-                                  className="px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
-                                >
-                                  عرض الملف
-                                </button>
-                              )}
+                              <div className="min-w-0 flex-1">
+                                <span className="text-xs font-medium text-slate-800 block truncate">
+                                  {res.title || res.attachmentName}
+                                </span>
+                                {res.note && (
+                                  <span className="text-[11px] text-slate-500 block">
+                                    {res.note}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                {res.externalUrl &&
+                                  /^https?:\/\//i.test(res.externalUrl.trim()) && (
+                                    <a
+                                      href={res.externalUrl.trim()}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-100 rounded-lg"
+                                    >
+                                      فتح الرابط
+                                    </a>
+                                  )}
+                                {(res.storagePath || res.downloadUrl) && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onOpenPdf({
+                                        title:
+                                          res.title ||
+                                          res.attachmentName ||
+                                          'ملف مرفق',
+                                        fileName:
+                                          res.attachmentName || 'document.pdf',
+                                        resourceId: res.id,
+                                        storagePath: res.storagePath,
+                                        downloadUrl: res.downloadUrl,
+                                        mimeType: res.mimeType,
+                                        contextLabel: detailModal.item.title,
+                                        uid: effectiveOwnerUid,
+                                      })
+                                    }
+                                    className="px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                                  >
+                                    عرض الملف
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           ))}
                         </div>

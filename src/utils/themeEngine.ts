@@ -873,6 +873,17 @@ export function resolveThemeTokens(
     4.6
   );
 
+  // Ensure dark-mode resting cards and nested surfaces carry balanced preset depth & crisp separation at rest
+  if (effectiveMode === 'dark') {
+    if (!config.surfaceOverride && config.surfaceStyle !== 'crisp') {
+      card = mixHex(card, primaryInk, 0.045);
+      card = mixHex(card, '#FFFFFF', 0.02);
+    }
+    surface = mixHex(mixHex(bg, card, 0.62), primaryInk, 0.03);
+    surface2 = mixHex(mixHex(card, '#FFFFFF', 0.055), primaryInk, 0.035);
+    elevated = mixHex(elevated, '#FFFFFF', 0.025);
+  }
+
   const primaryHover =
     !config.primaryAccentOverride && base.primaryHover
       ? base.primaryHover
@@ -924,11 +935,11 @@ export function resolveThemeTokens(
 
   const cardHover =
     effectiveMode === 'dark'
-      ? mixHex(mixHex(card, primaryInk, 0.08), '#FFFFFF', 0.065)
+      ? mixHex(mixHex(card, '#FFFFFF', 0.045), primaryInk, 0.03)
       : mixHex(card, primaryInk, 0.04);
   const surfaceHover =
     effectiveMode === 'dark'
-      ? mixHex(mixHex(surface2, primaryInk, 0.08), '#FFFFFF', 0.055)
+      ? mixHex(mixHex(surface2, '#FFFFFF', 0.045), primaryInk, 0.03)
       : mixHex(surface2, '#000000', 0.03);
 
   const tokens: Record<string, string> = {

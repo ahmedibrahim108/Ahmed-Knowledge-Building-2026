@@ -81,6 +81,8 @@ interface HeaderProps {
   navTabOrder?: string[];
   publicPage?: PublicPageId;
   onSelectPublicPage?: (page: PublicPageId) => void;
+  showPublicCourses?: boolean;
+  showPublicNotes?: boolean;
   showPublicReflections?: boolean;
   showPublicBlogs?: boolean;
   canGoBack?: boolean;
@@ -119,6 +121,8 @@ export default function Header({
   navTabOrder,
   publicPage = 'home',
   onSelectPublicPage,
+  showPublicCourses = false,
+  showPublicNotes = false,
   showPublicReflections = true,
   showPublicBlogs = true,
   canGoBack = false,
@@ -186,6 +190,12 @@ export default function Header({
     const list: Array<{ id: PublicPageId; label: string }> = [
       { id: 'home', label: 'الرئيسية' },
     ];
+    if (showPublicCourses) {
+      list.push({ id: 'courses', label: 'الكورسات' });
+    }
+    if (showPublicNotes) {
+      list.push({ id: 'notes', label: 'الملخصات' });
+    }
     if (showPublicReflections) {
       list.push({ id: 'reflections', label: 'خواطري وتأملاتي' });
     }
@@ -193,7 +203,7 @@ export default function Header({
       list.push({ id: 'blogs', label: 'المدونة والمقالات' });
     }
     return list;
-  }, [showPublicReflections, showPublicBlogs]);
+  }, [showPublicCourses, showPublicNotes, showPublicReflections, showPublicBlogs]);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);

@@ -307,7 +307,7 @@ function parseAppRouteFromLocation(): {
   const rawPath = window.location.pathname.replace(/^\/+/, '').trim();
   const source = rawHash || rawPath;
 
-  const publicSubMatch = source.match(/^public\/(reflections|blogs)\/?$/i);
+  const publicSubMatch = source.match(/^public\/(courses|notes|reflections|blogs)\/?$/i);
   if (publicSubMatch) {
     return {
       tab: 'public',
@@ -3842,6 +3842,12 @@ export default function App() {
           syncLocationHash('public', null, null, page);
           safeScrollToTop();
         }}
+        showPublicCourses={Boolean(
+          user && !isAdmin && (grantedWorkspace?.courses?.length ?? 0) > 0
+        )}
+        showPublicNotes={Boolean(
+          user && !isAdmin && (grantedWorkspace?.bookNotes?.length ?? 0) > 0
+        )}
         showPublicReflections={
           publicSiteConfig.visibilityFlags?.showReflections !== false
         }
@@ -4214,6 +4220,7 @@ export default function App() {
           <CourseDetailPage
             uid={user?.uid}
             canEdit={canEdit}
+            syncingCloud={syncingCloud}
             onRequireAuth={handleRequireAuth}
             course={courses.find((c) => c.id === selectedCourseId) ?? null}
             requestedCourseId={selectedCourseId}

@@ -95,6 +95,7 @@ import ReadAloudButton from './ReadAloudButton';
 import RichTextNoteEditor from './RichTextNoteEditor';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
 import TaskFormModal from './TaskFormModal';
+import { DurationPickerField, TimePickerField } from './TimeAndDurationPickers';
 import VoiceRecorderButton from './VoiceRecorderButton';
 
 type CourseSectionFocus = 'all' | 'info' | 'tasks' | 'resources' | 'notes';
@@ -102,6 +103,7 @@ type CourseSectionFocus = 'all' | 'info' | 'tasks' | 'resources' | 'notes';
 interface CourseDetailPageProps {
   uid?: string;
   canEdit: boolean;
+  syncingCloud?: boolean;
   onRequireAuth: () => void;
   course: PersonalCourse | null;
   requestedCourseId: number;
@@ -176,6 +178,7 @@ interface CourseDetailPageProps {
 export default function CourseDetailPage({
   uid,
   canEdit,
+  syncingCloud = false,
   onRequireAuth,
   course,
   requestedCourseId,
@@ -357,8 +360,26 @@ export default function CourseDetailPage({
     [sortedCourseNotes, activeNoteId]
   );
 
-  // Missing / deleted course route state
+  const [compiledNotesOpen, setCompiledNotesOpen] = useState(false);
+
+  // Missing / syncing / deleted course route state
   if (!course) {
+    if (syncingCloud) {
+      return (
+        <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-3">
+          <Loader2
+            className="w-6 h-6 animate-spin text-[#1E3A5F] mx-auto"
+            aria-hidden="true"
+          />
+          <p className="text-sm font-semibold text-slate-800">
+            جاري تحميل بيانات الكورس ومزامنتها...
+          </p>
+          <p className="text-xs text-slate-500 tabular-nums">
+            مسار الكورس #{requestedCourseId}
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="bg-white border border-slate-200 rounded-xl p-8 sm:p-12 text-center space-y-4">
         <p className="text-xs text-slate-500 tabular-nums">
@@ -2146,31 +2167,27 @@ export default function CourseDetailPage({
                                     className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
                                   />
                                 </label>
-                                <label className="block text-[11px] text-slate-600">
-                                  وقت البدء
-                                  <input
-                                    type="time"
+                                <div>
+                                  <span className="block text-[11px] text-slate-600 mb-1">
+                                    وقت البدء
+                                  </span>
+                                  <TimePickerField
                                     value={schedTime}
-                                    onChange={(e) => setSchedTime(e.target.value)}
-                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                    onChange={setSchedTime}
+                                    compact
                                   />
-                                </label>
-                                <label className="block text-[11px] text-slate-600">
-                                  المدة
-                                  <select
+                                </div>
+                                <div>
+                                  <span className="block text-[11px] text-slate-600 mb-1">
+                                    المدة
+                                  </span>
+                                  <DurationPickerField
                                     value={schedDuration}
-                                    onChange={(e) =>
-                                      setSchedDuration(Number(e.target.value))
-                                    }
-                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
-                                  >
-                                    {COURSE_DURATION_OPTIONS.map((m) => (
-                                      <option key={m} value={m}>
-                                        {m} دقيقة
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
+                                    onChange={setSchedDuration}
+                                    compact
+                                    presets={COURSE_DURATION_OPTIONS}
+                                  />
+                                </div>
                                 <label className="block text-[11px] text-slate-600">
                                   الأولوية
                                   <select
@@ -2535,31 +2552,27 @@ export default function CourseDetailPage({
                                     className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
                                   />
                                 </label>
-                                <label className="block text-[11px] text-slate-600">
-                                  وقت البدء
-                                  <input
-                                    type="time"
+                                <div>
+                                  <span className="block text-[11px] text-slate-600 mb-1">
+                                    وقت البدء
+                                  </span>
+                                  <TimePickerField
                                     value={schedTime}
-                                    onChange={(e) => setSchedTime(e.target.value)}
-                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                                    onChange={setSchedTime}
+                                    compact
                                   />
-                                </label>
-                                <label className="block text-[11px] text-slate-600">
-                                  المدة
-                                  <select
+                                </div>
+                                <div>
+                                  <span className="block text-[11px] text-slate-600 mb-1">
+                                    المدة
+                                  </span>
+                                  <DurationPickerField
                                     value={schedDuration}
-                                    onChange={(e) =>
-                                      setSchedDuration(Number(e.target.value))
-                                    }
-                                    className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
-                                  >
-                                    {COURSE_DURATION_OPTIONS.map((m) => (
-                                      <option key={m} value={m}>
-                                        {m} دقيقة
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
+                                    onChange={setSchedDuration}
+                                    compact
+                                    presets={COURSE_DURATION_OPTIONS}
+                                  />
+                                </div>
                                 <label className="block text-[11px] text-slate-600">
                                   الأولوية
                                   <select
@@ -2691,31 +2704,27 @@ export default function CourseDetailPage({
                             className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
                           />
                         </label>
-                        <label className="block text-[11px] text-slate-600">
-                          وقت البدء
-                          <input
-                            type="time"
+                        <div>
+                          <span className="block text-[11px] text-slate-600 mb-1">
+                            وقت البدء
+                          </span>
+                          <TimePickerField
                             value={newUnifiedTime}
-                            onChange={(e) => setNewUnifiedTime(e.target.value)}
-                            className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
+                            onChange={setNewUnifiedTime}
+                            compact
                           />
-                        </label>
-                        <label className="block text-[11px] text-slate-600">
-                          المدة
-                          <select
+                        </div>
+                        <div>
+                          <span className="block text-[11px] text-slate-600 mb-1">
+                            المدة
+                          </span>
+                          <DurationPickerField
                             value={newUnifiedDuration}
-                            onChange={(e) =>
-                              setNewUnifiedDuration(Number(e.target.value))
-                            }
-                            className="mt-1 w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg"
-                          >
-                            {COURSE_DURATION_OPTIONS.map((m) => (
-                              <option key={m} value={m}>
-                                {m} دقيقة
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                            onChange={setNewUnifiedDuration}
+                            compact
+                            presets={COURSE_DURATION_OPTIONS}
+                          />
+                        </div>
                         <label className="block text-[11px] text-slate-600">
                           الأولوية
                           <select
@@ -2760,6 +2769,17 @@ export default function CourseDetailPage({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {sortedCourseNotes.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setCompiledNotesOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>قراءة كل التلخيصات مجمّعة</span>
+                </button>
+              )}
+
               <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
                 <ArrowUpDown className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
                 <select
@@ -3320,6 +3340,81 @@ export default function CourseDetailPage({
         }}
         onDelete={onDeleteUnifiedTask}
       />
+
+      {compiledNotesOpen && (
+        <div
+          className="fixed inset-0 z-[75] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-2.5 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setCompiledNotesOpen(false)}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[90dvh] flex flex-col bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold text-[#1E3A5F]">
+                  ملف تلخيصات الكورس المجمّع ({sortedCourseNotes.length})
+                </p>
+                <h3 className="font-editorial text-base sm:text-lg font-bold text-slate-900 truncate">
+                  <BidiText text={course.title} />
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCompiledNotesOpen(false)}
+                className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 sm:p-6 overflow-y-auto thin-scrollbar space-y-6">
+              {sortedCourseNotes.map((bn, index) => (
+                <article
+                  key={bn.id}
+                  className="p-4 sm:p-5 bg-[#F7F8FA] border border-slate-200 rounded-xl space-y-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200">
+                    <div className="min-w-0">
+                      <span className="text-[11px] font-semibold text-[#1E3A5F]">
+                        {index + 1}. {bn.lectureTitle || 'محاضرة'} · {bn.updatedAt}
+                      </span>
+                      <h4 className="font-editorial text-base font-bold text-slate-900">
+                        <BidiText text={bn.bookTitle} />
+                      </h4>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCompiledNotesOpen(false);
+                        setActiveNoteId(bn.id);
+                        onOpenNoteById(bn.id);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:border-[#1E3A5F] rounded-lg cursor-pointer shrink-0"
+                    >
+                      <span>فتح للتعديل</span>
+                      <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </div>
+                  {richHtmlToPlainText(bn.content) ? (
+                    <div
+                      className="rich-note-content text-sm text-slate-800 leading-loose"
+                      dangerouslySetInnerHTML={{
+                        __html: renderSafeBidiHtml(bn.content),
+                      }}
+                    />
+                  ) : (
+                    <p className="text-xs text-slate-500 italic">
+                      لا يوجد محتوى نصي مسجّل في هذه المحاضرة بعد.
+                    </p>
+                  )}
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
