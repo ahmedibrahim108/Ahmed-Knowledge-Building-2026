@@ -619,7 +619,7 @@ function PhotoGalleryViewInner({
                       <span>في الهوم بيج</span>
                     </span>
                   )}
-                  <span className="absolute bottom-2 right-2 px-1.5 py-0.5 text-[10px] font-semibold rounded bg-slate-900/65 text-white tabular-nums opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span className="absolute bottom-2 right-2 px-1.5 py-0.5 text-[10px] font-semibold rounded bg-slate-900/75 text-white tabular-nums">
                     {Math.round(safeFrame.zoom * 100)}%
                   </span>
                 </FramedImage>

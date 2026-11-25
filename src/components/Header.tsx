@@ -9,6 +9,7 @@ import {
   CalendarHeart,
   ChevronDown,
   Cloud,
+  CloudUpload,
   Eye,
   Feather,
   Images,
@@ -20,12 +21,18 @@ import {
   RefreshCw,
   Search,
   Settings2,
+  WifiOff,
 } from 'lucide-react';
 import {
   DEFAULT_PINNED_NAV_TABS,
   NAV_PINNABLE_TABS_META,
   PublicPageId,
 } from '../data/curriculumData';
+import {
+  OfflineSyncState,
+  subscribeOfflineSyncState,
+} from '../utils/offlineQueue';
+import { syncAllPendingOfflineChanges } from '../utils/offlineSync';
 import BrandMark from './BrandMark';
 import PWAInstallButton from './PWAInstallButton';
 
@@ -83,6 +90,7 @@ interface HeaderProps {
   onGoForward?: () => void;
   onOpenAdvancedSearch?: () => void;
   onOpenThemeSettings?: () => void;
+  onOfflineSyncCompleted?: () => void;
 }
 
 export default function Header({
@@ -119,9 +127,22 @@ export default function Header({
   onGoForward,
   onOpenAdvancedSearch,
   onOpenThemeSettings,
+  onOfflineSyncCompleted,
 }: HeaderProps) {
   const showAdminNav = isAdmin && !isPreviewingPublic;
   const [reloading, setReloading] = useState(false);
+  const [syncState, setSyncState] = useState<OfflineSyncState | null>(null);
+
+  useEffect(() => {
+    return subscribeOfflineSyncState(setSyncState);
+  }, []);
+
+  const handleManualOfflineSync = async () => {
+    const res = await syncAllPendingOfflineChanges(user?.uid);
+    if (res.syncedCount > 0 || res.remainingCount === 0) {
+      onOfflineSyncCompleted?.();
+    }
+  };
 
   const navItems: Array<{ id: ActiveTab; label: string }> = useMemo(() => {
     if (!showAdminNav) {
@@ -240,6 +261,37 @@ export default function Header({
             <span className="text-slate-300 select-none" aria-hidden="true">
               |
             </span>
+
+            {syncState && (!syncState.isOnline || syncState.totalPendingCount > 0 || syncState.isSyncing) && (
+              <>
+                {!syncState.isOnline ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 h-6 text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded whitespace-nowrap shrink-0">
+                    <WifiOff className="w-3 h-3" aria-hidden="true" />
+                    <span>
+                      غير متصل
+                      {syncState.totalPendingCount > 0 ? ` (${syncState.totalPendingCount})` : ''}
+                    </span>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={syncState.isSyncing}
+                    onClick={() => void handleManualOfflineSync()}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 h-6 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
+                  >
+                    <CloudUpload className={`w-3 h-3 ${syncState.isSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                    <span>
+                      {syncState.isSyncing
+                        ? 'جاري المزامنة...'
+                        : `مزامنة الآن (${syncState.totalPendingCount})`}
+                    </span>
+                  </button>
+                )}
+                <span className="text-slate-300 select-none" aria-hidden="true">
+                  |
+                </span>
+              </>
+            )}
 
             <PWAInstallButton variant="utility-mobile" />
             <PWAInstallButton variant="utility-desktop" />
@@ -377,11 +429,23 @@ export default function Header({
                   <span className="text-xs font-semibold text-slate-900 truncate w-full">
                     {user.displayName || 'حسابي'}
                   </span>
-                  <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700">
-                    <Cloud className="w-2.5 h-2.5" aria-hidden="true" />
+                  <span
+                    className={`inline-flex items-center gap-1 text-[10px] ${
+                      syncState && !syncState.isOnline
+                        ? 'text-amber-700'
+                        : 'text-emerald-700'
+                    }`}
+                  >
+                    {syncState && !syncState.isOnline ? (
+                      <WifiOff className="w-2.5 h-2.5" aria-hidden="true" />
+                    ) : (
+                      <Cloud className="w-2.5 h-2.5" aria-hidden="true" />
+                    )}
                     <span>
-                      {isAdmin
-                        ? syncingCloud
+                      {syncState && !syncState.isOnline
+                        ? 'وضع أوفلاين'
+                        : isAdmin
+                        ? syncingCloud || syncState?.isSyncing
                           ? 'جاري المزامنة...'
                           : 'مسؤول'
                         : 'حساب عضو'}

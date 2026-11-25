@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *, [data-theme-mode="dark"], [data-theme-mode="dark"] *));
 
 @layer base {
   :root {
@@ -437,27 +438,34 @@ html[data-kb-themed="true"] .bg-white\/70 {
   background-color: color-mix(in srgb, var(--kb-card) 80%, transparent) !important;
 }
 
-html[data-kb-themed="true"] .bg-white\/60 {
-  background-color: color-mix(in srgb, var(--kb-card) 70%, transparent) !important;
+html[data-kb-themed="true"] .bg-white\/60,
+html[data-kb-themed="true"] .bg-white\/50 {
+  background-color: color-mix(in srgb, var(--kb-card) 68%, transparent) !important;
 }
 
 html[data-kb-themed="true"] .bg-slate-50,
 html[data-kb-themed="true"] .bg-slate-50\/90,
 html[data-kb-themed="true"] .bg-slate-50\/80,
 html[data-kb-themed="true"] .bg-slate-50\/70,
-html[data-kb-themed="true"] .bg-slate-50\/50 {
+html[data-kb-themed="true"] .bg-slate-50\/50,
+html[data-kb-themed="true"] .bg-gray-50 {
   background-color: var(--kb-surface) !important;
 }
 
 html[data-kb-themed="true"] .bg-slate-100,
 html[data-kb-themed="true"] .bg-slate-100\/80,
-html[data-kb-themed="true"] .bg-slate-100\/70 {
+html[data-kb-themed="true"] .bg-slate-100\/70,
+html[data-kb-themed="true"] .bg-gray-100 {
   background-color: var(--kb-surface-2) !important;
 }
 
 html[data-kb-themed="true"] .bg-slate-200,
+html[data-kb-themed="true"] .bg-slate-200\/80,
 html[data-kb-themed="true"] .bg-slate-200\/70,
-html[data-kb-themed="true"] .bg-slate-200\/60 {
+html[data-kb-themed="true"] .bg-slate-200\/60,
+html[data-kb-themed="true"] .bg-slate-200\/50,
+html[data-kb-themed="true"] .bg-slate-200\/40,
+html[data-kb-themed="true"] .bg-gray-200 {
   background-color: var(--kb-border) !important;
 }
 
@@ -467,10 +475,13 @@ html[data-kb-themed="true"] .hover\:bg-white:hover {
 
 html[data-kb-themed="true"] .hover\:bg-slate-50:hover,
 html[data-kb-themed="true"] .hover\:bg-slate-100:hover,
+html[data-kb-themed="true"] .hover\:bg-slate-100\/80:hover,
 html[data-kb-themed="true"] .hover\:bg-slate-200:hover,
 html[data-kb-themed="true"] .hover\:bg-slate-200\/60:hover,
 html[data-kb-themed="true"] .hover\:bg-slate-200\/70:hover,
 html[data-kb-themed="true"] .hover\:bg-slate-200\/80:hover,
+html[data-kb-themed="true"] .hover\:bg-gray-50:hover,
+html[data-kb-themed="true"] .hover\:bg-gray-100:hover,
 html[data-kb-themed="true"] .hover\:bg-\[\#F7F8FA\]:hover,
 html[data-kb-themed="true"] .hover\:bg-\[\#F1F5F9\]:hover,
 html[data-kb-themed="true"] .hover\:bg-\[\#F0F4F9\]:hover {
@@ -487,52 +498,65 @@ html[data-kb-themed="true"] .focus\:bg-white:focus {
 
 /* Text color tokens */
 html[data-kb-themed="true"] .text-slate-900,
-html[data-kb-themed="true"] .text-slate-950 {
+html[data-kb-themed="true"] .text-slate-950,
+html[data-kb-themed="true"] .text-gray-900,
+html[data-kb-themed="true"] .text-gray-950 {
   color: var(--kb-fg) !important;
 }
 
-html[data-kb-themed="true"] .text-slate-800 {
+html[data-kb-themed="true"] .text-slate-800,
+html[data-kb-themed="true"] .text-gray-800 {
   color: var(--kb-fg-800) !important;
 }
 
-html[data-kb-themed="true"] .text-slate-700 {
+html[data-kb-themed="true"] .text-slate-700,
+html[data-kb-themed="true"] .text-gray-700 {
   color: var(--kb-fg-700) !important;
 }
 
-html[data-kb-themed="true"] .text-slate-600 {
+html[data-kb-themed="true"] .text-slate-600,
+html[data-kb-themed="true"] .text-gray-600 {
   color: var(--kb-fg-600) !important;
 }
 
-html[data-kb-themed="true"] .text-slate-500 {
+html[data-kb-themed="true"] .text-slate-500,
+html[data-kb-themed="true"] .text-gray-500 {
   color: var(--kb-fg-500) !important;
 }
 
 html[data-kb-themed="true"] .text-slate-400,
-html[data-kb-themed="true"] .text-slate-300 {
+html[data-kb-themed="true"] .text-slate-300,
+html[data-kb-themed="true"] .text-gray-400,
+html[data-kb-themed="true"] .text-gray-300 {
   color: var(--kb-fg-400) !important;
 }
 
 html[data-kb-themed="true"] .hover\:text-slate-900:hover,
-html[data-kb-themed="true"] .hover\:text-slate-800:hover {
+html[data-kb-themed="true"] .hover\:text-slate-800:hover,
+html[data-kb-themed="true"] .hover\:text-gray-900:hover {
   color: var(--kb-fg) !important;
 }
 
-html[data-kb-themed="true"] .placeholder\:text-slate-400::placeholder {
+html[data-kb-themed="true"] .placeholder\:text-slate-400::placeholder,
+html[data-kb-themed="true"] .placeholder\:text-gray-400::placeholder {
   color: var(--kb-fg-400) !important;
 }
 
 /* Borders & dividers */
 html[data-kb-themed="true"] .border-slate-100,
 html[data-kb-themed="true"] .border-slate-200\/60,
-html[data-kb-themed="true"] .border-slate-200\/80 {
+html[data-kb-themed="true"] .border-slate-200\/80,
+html[data-kb-themed="true"] .border-gray-100 {
   border-color: var(--kb-border-subtle) !important;
 }
 
-html[data-kb-themed="true"] .border-slate-200 {
+html[data-kb-themed="true"] .border-slate-200,
+html[data-kb-themed="true"] .border-gray-200 {
   border-color: var(--kb-border) !important;
 }
 
-html[data-kb-themed="true"] .border-slate-300 {
+html[data-kb-themed="true"] .border-slate-300,
+html[data-kb-themed="true"] .border-gray-300 {
   border-color: var(--kb-border-strong) !important;
 }
 
@@ -617,6 +641,12 @@ html[data-kb-themed="true"] .from-white {
 html[data-kb-themed="true"] .to-\[\#F0F4F9\],
 html[data-kb-themed="true"] .to-slate-50 {
   --tw-gradient-to: var(--kb-surface-2) !important;
+}
+
+/* Ensure dark solid CTA buttons remain clearly distinguishable on dark surfaces */
+html[data-theme-mode="dark"] .bg-slate-900.text-white {
+  background-color: var(--kb-primary) !important;
+  color: var(--kb-primary-fg) !important;
 }
 
 /* Dark mode semantic status badge & subtle tint contrast harmonization */

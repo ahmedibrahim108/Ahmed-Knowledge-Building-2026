@@ -15,12 +15,15 @@ import {
   GraduationCap,
   Images,
   KeyRound,
+  Library,
   ListTodo,
   LogIn,
   Mic,
   NotebookPen,
   Pin,
   Plus,
+  Quote,
+  RefreshCw,
   Repeat,
   SlidersHorizontal,
   Sparkles,
@@ -57,6 +60,7 @@ import {
   StudyHistoryEntry,
   UnifiedTask,
   UserPreferences,
+  UserQuoteItem,
   VoiceDialectMode,
   WeeklyMeeting,
   WeeklyPlanRecord,
@@ -75,6 +79,16 @@ import {
   SavedAudioClipSummary,
   subscribeUserAudioClips,
 } from '../utils/audioCache';
+import {
+  PERSONAL_GROWTH_QUOTES,
+  QUOTE_COLOR_THEMES,
+  resolveEffectiveDailyQuote,
+  rotateDailyQuoteFromLibrary,
+} from '../utils/dailyQuotes';
+import {
+  doesTaskOccurOnDate,
+  formatRecurrenceSummaryAr,
+} from '../utils/taskRecurrence';
 import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
 import { FramedImage } from './FramedImage';
@@ -120,6 +134,7 @@ interface OverviewViewProps {
   onOpenNoteById: (noteId: string) => void;
   onOpenDentalCases?: () => void;
   onOpenPdf?: (target: ActivePdfTarget) => void;
+  onOpenTaskModal?: (task: UnifiedTask) => void;
   onAddUnifiedTask?: (task: Omit<UnifiedTask, 'id'>) => string | void;
   onUpdateUnifiedTask?: (id: string, updates: Partial<UnifiedTask>) => void;
   onDeleteUnifiedTask?: (id: string) => void;
@@ -181,6 +196,8 @@ export default function OverviewView({
   onJumpToMonth,
   onOpenNoteById,
   onOpenDentalCases,
+  onOpenPdf,
+  onOpenTaskModal,
   onAddUnifiedTask,
   onUpdateUnifiedTask,
   onDeleteUnifiedTask,
@@ -197,6 +214,17 @@ export default function OverviewView({
   const [agendaFilter, setAgendaFilter] = useState<'all' | 'today_overdue'>('all');
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<UnifiedTask | null>(null);
+
+  // Daily Quotes & Reflection state
+  const [rotatedQuoteText, setRotatedQuoteText] = useState<string | null>(null);
+  const [quoteModalOpen, setQuoteModalOpen] = useState(false);
+  const [quoteArchiveOpen, setQuoteArchiveOpen] = useState(false);
+  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
+  const [quoteTextDraft, setQuoteTextDraft] = useState('');
+  const [quoteAuthorDraft, setQuoteAuthorDraft] = useState('');
+  const [quoteThemeDraft, setQuoteThemeDraft] = useState('');
+  const [quoteDateDraft, setQuoteDateDraft] = useState(() => getTodayDateKey());
+  const [quoteColorDraft, setQuoteColorDraft] = useState<string>('amber');
 
   // Quick Home Reflection Composer & Tag Manager state
   const [quickReflOpen, setQuickReflOpen] = useState(false);
@@ -324,11 +352,13 @@ export default function OverviewView({
   );
 
   const todayProgressStats = useMemo(() => {
-    const todayTasks = unifiedTasks.filter((t) => {
-      const dt = t.scheduledDate || t.dueDate || '';
-      return dt === today;
-    });
-    const doneToday = todayTasks.filter((t) => t.status === 'done').length;
+    const todayTasks = unifiedTasks.filter((t) => doesTaskOccurOnDate(t, today));
+    const doneToday = todayTasks.filter(
+      (t) =>
+        t.status === 'done' ||
+        (Array.isArray(t.completedOccurrenceDates) &&
+          t.completedOccurrenceDates.includes(today))
+    ).length;
     const activeWeekTasksCount = activeWeeklyPlan
       ? activeWeeklyPlan.linkedTaskIds.length
       : 0;
@@ -359,6 +389,7 @@ export default function OverviewView({
         if (agendaFilter === 'today_overdue') {
           const targetDate = t.scheduledDate || t.dueDate || '';
           return (
+            doesTaskOccurOnDate(t, today) ||
             (Boolean(targetDate) && targetDate <= today) ||
             (Boolean(t.deadline) && (t.deadline ?? '') <= today)
           );
@@ -372,7 +403,7 @@ export default function OverviewView({
         if (da !== db) return da.localeCompare(db);
         return priOrder[a.priority] - priOrder[b.priority];
       })
-      .slice(0, 25);
+      .slice(0, 30);
   }, [unifiedTasks, agendaFilter, today, activeFocusCollection]);
 
   const latestReflections = useMemo(() => {
@@ -385,8 +416,271 @@ export default function OverviewView({
         if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
         return (b.createdAtMs || 0) - (a.createdAtMs || 0);
       })
-      .slice(0, 3);
+      .slice(0, 20);
   }, [reflections, homeReflTagFilter]);
+
+  // Focus & Pinned Items summary for clear visibility & 1-click unfocus/open
+  const focusShowcaseItems = useMemo(() => {
+    const result: Array<{
+      key: string;
+      title: string;
+      kindLabel: string;
+      reason: string;
+      pinCol?: PinCollection;
+      entityType?: 'course' | 'task' | 'note' | 'path' | 'book' | 'project';
+      entityId?: string;
+      onOpen: () => void;
+    }> = [];
+
+    if (activeFocusCollection) {
+      for (const item of activeFocusCollection.items) {
+        if (item.entityType === 'course') {
+          const c = courses.find((x) => String(x.id) === item.entityId);
+          if (c) {
+            result.push({
+              key: `pin-course-${c.id}`,
+              title: c.title,
+              kindLabel: 'كورس',
+              reason: `مثبت في «${activeFocusCollection.title}»`,
+              pinCol: activeFocusCollection,
+              entityType: 'course',
+              entityId: item.entityId,
+              onOpen: () => onSelectCourse(c.id),
+            });
+          }
+        } else if (item.entityType === 'task') {
+          const t = unifiedTasks.find((x) => x.id === item.entityId);
+          if (t) {
+            result.push({
+              key: `pin-task-${t.id}`,
+              title: t.title,
+              kindLabel: 'مهمة',
+              reason: `مثبت في «${activeFocusCollection.title}»`,
+              pinCol: activeFocusCollection,
+              entityType: 'task',
+              entityId: item.entityId,
+              onOpen: () => {
+                if (onOpenTaskModal) onOpenTaskModal(t);
+                else {
+                  setEditingTask(t);
+                  setTaskModalOpen(true);
+                }
+              },
+            });
+          }
+        } else if (item.entityType === 'note') {
+          const n = bookNotes.find((x) => x.id === item.entityId);
+          if (n) {
+            result.push({
+              key: `pin-note-${n.id}`,
+              title: n.lectureTitle || n.bookTitle,
+              kindLabel: 'تلخيص',
+              reason: `مثبت في «${activeFocusCollection.title}»`,
+              pinCol: activeFocusCollection,
+              entityType: 'note',
+              entityId: item.entityId,
+              onOpen: () => onOpenNoteById(n.id),
+            });
+          }
+        } else if (item.entityType === 'path') {
+          const p = learningPaths.find((x) => x.id === item.entityId);
+          if (p) {
+            result.push({
+              key: `pin-path-${p.id}`,
+              title: p.title,
+              kindLabel: 'مسار',
+              reason: `مثبت في «${activeFocusCollection.title}»`,
+              pinCol: activeFocusCollection,
+              entityType: 'path',
+              entityId: item.entityId,
+              onOpen: () => onNavigateTab('paths'),
+            });
+          }
+        } else if (item.entityType === 'project') {
+          const pr = projects.find((x) => x.id === item.entityId);
+          if (pr) {
+            result.push({
+              key: `pin-proj-${pr.id}`,
+              title: pr.title,
+              kindLabel: 'مشروع',
+              reason: `مثبت في «${activeFocusCollection.title}»`,
+              pinCol: activeFocusCollection,
+              entityType: 'project',
+              entityId: item.entityId,
+              onOpen: () => onNavigateTab('tasks'),
+            });
+          }
+        }
+      }
+    }
+
+    const focusCourses = courses.filter(
+      (c) => resolveCourseStudyStage(c) === 'focus_now'
+    );
+    for (const c of focusCourses) {
+      if (result.some((r) => r.key === `pin-course-${c.id}`)) continue;
+      result.push({
+        key: `focus-course-${c.id}`,
+        title: c.title,
+        kindLabel: 'كورس',
+        reason: `مرحلة الدراسة: قيد التركيز الآن (${c.progressPct}%)`,
+        onOpen: () => onSelectCourse(c.id),
+      });
+    }
+
+    return result;
+  }, [
+    activeFocusCollection,
+    courses,
+    unifiedTasks,
+    bookNotes,
+    learningPaths,
+    projects,
+    onSelectCourse,
+    onOpenTaskModal,
+    onOpenNoteById,
+    onNavigateTab,
+  ]);
+
+  const quotesLibrary = preferences.quotesLibrary || [];
+  const effectiveQuoteInfo = useMemo(() => {
+    const resolved = resolveEffectiveDailyQuote({
+      dateKey: today,
+      quotesLibrary,
+      pinnedDailyQuoteId: preferences.pinnedDailyQuoteId,
+    });
+    if (rotatedQuoteText) {
+      const fromCustom = quotesLibrary.find((q) => q.text === rotatedQuoteText);
+      if (fromCustom) {
+        return {
+          quote: {
+            text: fromCustom.text,
+            author: fromCustom.author,
+            theme: fromCustom.theme || 'اقتباسي',
+            dateKey: today,
+          },
+          customQuote: fromCustom,
+          isPinnedFromLibrary: preferences.pinnedDailyQuoteId === fromCustom.id,
+        };
+      }
+      const fromBuiltIn = PERSONAL_GROWTH_QUOTES.find(
+        (q) => q.text === rotatedQuoteText
+      );
+      if (fromBuiltIn) {
+        return {
+          quote: {
+            text: fromBuiltIn.text,
+            author: fromBuiltIn.author,
+            theme: fromBuiltIn.theme,
+            dateKey: today,
+          },
+          customQuote: undefined,
+          isPinnedFromLibrary: false,
+        };
+      }
+    }
+    return resolved;
+  }, [today, quotesLibrary, preferences.pinnedDailyQuoteId, rotatedQuoteText]);
+
+  const activeQuoteTheme =
+    QUOTE_COLOR_THEMES[effectiveQuoteInfo.customQuote?.colorKey || 'amber'] ||
+    QUOTE_COLOR_THEMES.amber;
+
+  const openNewQuoteModal = () => {
+    if (!canEdit) return onRequireAuth();
+    setEditingQuoteId(null);
+    setQuoteTextDraft('');
+    setQuoteAuthorDraft('');
+    setQuoteThemeDraft('نمو شخصي');
+    setQuoteDateDraft(today);
+    setQuoteColorDraft('amber');
+    setQuoteModalOpen(true);
+  };
+
+  const openEditQuoteModal = (q: UserQuoteItem) => {
+    if (!canEdit) return onRequireAuth();
+    setEditingQuoteId(q.id);
+    setQuoteTextDraft(q.text);
+    setQuoteAuthorDraft(q.author);
+    setQuoteThemeDraft(q.theme || '');
+    setQuoteDateDraft(q.dateKey || today);
+    setQuoteColorDraft(q.colorKey || 'amber');
+    setQuoteModalOpen(true);
+  };
+
+  const handleSaveQuoteForm = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canEdit) return onRequireAuth();
+    const text = quoteTextDraft.trim();
+    if (!text) return;
+    const now = Date.now();
+    const author = quoteAuthorDraft.trim() || 'مقتبس شخصي';
+    const theme = quoteThemeDraft.trim() || 'تأملات';
+
+    if (editingQuoteId) {
+      const nextLib = quotesLibrary.map((q) =>
+        q.id === editingQuoteId
+          ? {
+              ...q,
+              text,
+              author,
+              theme,
+              dateKey: quoteDateDraft || today,
+              colorKey: quoteColorDraft,
+              updatedAtMs: now,
+            }
+          : q
+      );
+      onUpdatePreferences({ quotesLibrary: nextLib });
+      setRotatedQuoteText(text);
+    } else {
+      const newQuote: UserQuoteItem = {
+        id: `q_${now}_${Math.floor(Math.random() * 1000)}`,
+        text,
+        author,
+        theme,
+        dateKey: quoteDateDraft || today,
+        colorKey: quoteColorDraft,
+        isDailyPinned: true,
+        createdAtMs: now,
+        updatedAtMs: now,
+      };
+      onUpdatePreferences({
+        quotesLibrary: [newQuote, ...quotesLibrary],
+        pinnedDailyQuoteId: newQuote.id,
+      });
+      setRotatedQuoteText(null);
+    }
+    setQuoteModalOpen(false);
+  };
+
+  const handleDeleteCustomQuote = (quoteId: string) => {
+    if (!canEdit) return onRequireAuth();
+    const nextLib = quotesLibrary.filter((q) => q.id !== quoteId);
+    onUpdatePreferences({
+      quotesLibrary: nextLib,
+      ...(preferences.pinnedDailyQuoteId === quoteId
+        ? { pinnedDailyQuoteId: null }
+        : {}),
+    });
+    setRotatedQuoteText(null);
+  };
+
+  const handleReflectOnCurrentQuote = () => {
+    if (!canEdit) return onRequireAuth();
+    setQuickDraftId(`refl-${Date.now()}-${Math.floor(Math.random() * 1000)}`);
+    setQuickVoiceClip(null);
+    setQuickReflTitle(
+      effectiveQuoteInfo.quote.theme
+        ? `تأمل: ${effectiveQuoteInfo.quote.theme}`
+        : 'تأمل حول اقتباس اليوم'
+    );
+    setQuickReflContent(
+      `«${effectiveQuoteInfo.quote.text}» — ${effectiveQuoteInfo.quote.author}\n\nتأملي:`
+    );
+    setQuickReflMood('تأمل');
+    setQuickReflOpen(true);
+  };
 
   const dueItems = useMemo(() => {
     const list: Array<{
@@ -775,6 +1069,220 @@ export default function OverviewView({
         </div>
       </section>
 
+      {/* Balanced Row: Focus & Pinned Clarity + Daily Quotes & Reflection */}
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+        {/* Focus & Pinned Items Card */}
+        <div className="lg:col-span-6 bg-white border border-slate-200 rounded-2xl p-5 space-y-3.5 flex flex-col justify-between">
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Target className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <h2 className="font-editorial text-lg font-bold text-slate-900">
+                  عناصر التركيز والمثبتة ({focusShowcaseItems.length})
+                </h2>
+              </div>
+              {activeFocusCollection ? (
+                <button
+                  type="button"
+                  onClick={() => onSelectFocusPinCollection?.(null)}
+                  className="text-[11px] font-semibold text-rose-700 hover:underline cursor-pointer"
+                >
+                  إلغاء فلتر «{activeFocusCollection.title}»
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onNavigateTab('focus')}
+                  className="text-[11px] font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
+                >
+                  إدارة التركيز ←
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              تظهر هنا العناصر المثبتة في قائمة التركيز النشطة والكورسات المحددة كـ «قيد التركيز الآن». اضغط لفتح أي عنصر فورًا.
+            </p>
+          </div>
+
+          {focusShowcaseItems.length === 0 ? (
+            <div className="p-4 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center space-y-1.5">
+              <p className="text-xs font-semibold text-slate-700">
+                لا توجد عناصر تركيز أو تثبيت نشطة حاليًا
+              </p>
+              <p className="text-[11px] text-slate-500">
+                يمكنك اختيار قائمة تثبيت من الأعلى أو تحويل أي كورس لمرحلة «قيد التركيز الآن».
+              </p>
+            </div>
+          ) : (
+            <div className="max-h-[265px] overflow-y-auto thin-scrollbar pr-0.5 space-y-2">
+              {focusShowcaseItems.map((item) => (
+                <div
+                  key={item.key}
+                  role="button"
+                  tabIndex={0}
+                  onClick={item.onOpen}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      item.onOpen();
+                    }
+                  }}
+                  className="w-full text-right p-3 rounded-xl bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 flex items-center justify-between gap-2.5 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F]"
+                >
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <span className="font-bold text-[#1E3A5F]">Focus</span>
+                      <span aria-hidden="true" className="text-slate-400">·</span>
+                      <span className="font-medium text-slate-600">{item.kindLabel}</span>
+                    </div>
+                    <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">
+                      <BidiText text={item.title} />
+                    </p>
+                    <p className="text-[11px] text-slate-500 truncate">{item.reason}</p>
+                  </div>
+
+                  {item.pinCol && item.entityType && item.entityId && canEdit && onSavePinCollection ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const nextItems = item.pinCol!.items.filter(
+                          (x) => !(x.entityType === item.entityType && x.entityId === item.entityId)
+                        );
+                        onSavePinCollection({
+                          ...item.pinCol!,
+                          items: nextItems,
+                          updatedAtMs: Date.now(),
+                        });
+                      }}
+                      title="إزالة من قائمة التركيز"
+                      className="px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 rounded-lg cursor-pointer shrink-0"
+                    >
+                      إزالة
+                    </button>
+                  ) : (
+                    <ArrowLeft className="w-4 h-4 text-slate-400 shrink-0" aria-hidden="true" />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Daily Quote & Personal Reflection Card */}
+        <div
+          data-custom-card-surface="light"
+          className={`lg:col-span-6 border rounded-2xl p-5 flex flex-col justify-between gap-4 ${activeQuoteTheme.cardClass}`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Quote className={`w-4 h-4 ${activeQuoteTheme.accentTextClass}`} aria-hidden="true" />
+              <h2 className="font-editorial text-lg font-bold text-slate-900">
+                اقتباس اليوم وإلهام النمو
+              </h2>
+              {effectiveQuoteInfo.quote.theme && (
+                <span className={`text-[11px] font-semibold ${activeQuoteTheme.accentTextClass}`}>
+                  · {effectiveQuoteInfo.quote.theme}
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <button
+                type="button"
+                onClick={() => {
+                  const next = rotateDailyQuoteFromLibrary(
+                    today,
+                    effectiveQuoteInfo.quote.text,
+                    quotesLibrary
+                  );
+                  setRotatedQuoteText(next.quote.text);
+                }}
+                title="تبديل الاقتباس"
+                className="inline-flex items-center gap-1 px-2 py-1 bg-white/80 hover:bg-white border border-slate-200 rounded-lg font-semibold text-slate-700 cursor-pointer"
+              >
+                <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                <span>تبديل</span>
+              </button>
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={openNewQuoteModal}
+                  className="inline-flex items-center gap-1 px-2 py-1 bg-white/80 hover:bg-white border border-slate-200 rounded-lg font-semibold text-[#1E3A5F] cursor-pointer"
+                >
+                  <Plus className="w-3 h-3" aria-hidden="true" />
+                  <span>إضافة</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setQuoteArchiveOpen(true)}
+                className="inline-flex items-center gap-1 px-2 py-1 bg-white/80 hover:bg-white border border-slate-200 rounded-lg font-medium text-slate-700 cursor-pointer"
+              >
+                <Library className="w-3 h-3" aria-hidden="true" />
+                <span>الأرشيف ({quotesLibrary.length + PERSONAL_GROWTH_QUOTES.length})</span>
+              </button>
+            </div>
+          </div>
+
+          <blockquote className="space-y-2 py-1">
+            <p className="font-editorial text-base sm:text-lg font-bold text-slate-900 leading-relaxed">
+              «<BidiText text={effectiveQuoteInfo.quote.text} />»
+            </p>
+            <footer className="text-xs font-medium text-slate-600">
+              — {effectiveQuoteInfo.quote.author}
+            </footer>
+          </blockquote>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-black/10 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={handleReflectOnCurrentQuote}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-[#1E3A5F] hover:bg-[#162C49] text-white font-semibold rounded-lg cursor-pointer"
+                >
+                  <Feather className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>تدوين تأمل مرتبط</span>
+                </button>
+              )}
+              {effectiveQuoteInfo.customQuote && canEdit && (
+                <button
+                  type="button"
+                  onClick={() => openEditQuoteModal(effectiveQuoteInfo.customQuote!)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white/90 hover:bg-white border border-slate-200 text-slate-700 font-medium rounded-lg cursor-pointer"
+                >
+                  <Edit3 className="w-3 h-3" aria-hidden="true" />
+                  <span>تعديل</span>
+                </button>
+              )}
+            </div>
+
+            {effectiveQuoteInfo.customQuote && canEdit && (
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdatePreferences({
+                    pinnedDailyQuoteId:
+                      preferences.pinnedDailyQuoteId === effectiveQuoteInfo.customQuote!.id
+                        ? null
+                        : effectiveQuoteInfo.customQuote!.id,
+                  })
+                }
+                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border font-semibold cursor-pointer ${
+                  effectiveQuoteInfo.isPinnedFromLibrary
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white/90 text-slate-700 border-slate-200 hover:bg-white'
+                }`}
+              >
+                <Pin className="w-3 h-3" aria-hidden="true" />
+                <span>{effectiveQuoteInfo.isPinnedFromLibrary ? 'مثبّت لليوم' : 'تثبيت لليوم'}</span>
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+
       {/* Editable & Extensible Hubs Strip */}
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2.5">
@@ -977,7 +1485,7 @@ export default function OverviewView({
                 : 'لا توجد مهام نشطة في هذا العرض حاليًا.'}
             </div>
           ) : (
-            <div className="max-h-[330px] overflow-y-auto thin-scrollbar divide-y divide-slate-100 border border-slate-200 rounded-xl bg-[#F7F8FA]/50">
+            <div className="max-h-[290px] overflow-y-auto thin-scrollbar divide-y divide-slate-100 border border-slate-200 rounded-xl bg-[#F7F8FA]/50">
               {activeTasksList.map((t) => {
                 const tDate = t.scheduledDate || t.dueDate || '';
                 const isOverdue = Boolean(tDate && tDate < today);
@@ -988,26 +1496,52 @@ export default function OverviewView({
                     : t.priority === 'low'
                     ? 'منخفضة'
                     : 'متوسطة';
+                const recLabel = formatRecurrenceSummaryAr(t.recurrence);
                 return (
                   <div
                     key={t.id}
-                    className="px-3.5 py-2.5 bg-white hover:bg-[#F7F8FA] flex items-center justify-between gap-2.5 transition-colors"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      if (!canEdit) return onRequireAuth();
+                      if (onOpenTaskModal) onOpenTaskModal(t);
+                      else {
+                        setEditingTask(t);
+                        setTaskModalOpen(true);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
                         if (!canEdit) return onRequireAuth();
-                        onUpdateUnifiedTask?.(t.id, {
-                          status: t.status === 'done' ? 'todo' : 'done',
-                        });
-                      }}
-                      className="flex items-start gap-2.5 text-right flex-1 min-w-0 cursor-pointer"
-                    >
-                      {t.status === 'done' ? (
-                        <CheckSquare className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0" />
-                      ) : (
-                        <Square className="w-4 h-4 text-slate-400 mt-0.5 shrink-0" />
-                      )}
+                        if (onOpenTaskModal) onOpenTaskModal(t);
+                        else {
+                          setEditingTask(t);
+                          setTaskModalOpen(true);
+                        }
+                      }
+                    }}
+                    className="px-3.5 py-2.5 bg-white hover:bg-[#F7F8FA] flex items-center justify-between gap-2.5 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#1E3A5F]"
+                  >
+                    <div className="flex items-start gap-2.5 text-right flex-1 min-w-0">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!canEdit) return onRequireAuth();
+                          onUpdateUnifiedTask?.(t.id, {
+                            status: t.status === 'done' ? 'todo' : 'done',
+                          });
+                        }}
+                        aria-label={t.status === 'done' ? 'إلغاء الإكمال' : 'تحديد كمكتملة'}
+                        className="mt-0.5 shrink-0 cursor-pointer p-0.5 rounded hover:bg-slate-200/70"
+                      >
+                        {t.status === 'done' ? (
+                          <CheckSquare className="w-4 h-4 text-emerald-700" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-400" />
+                        )}
+                      </button>
                       <div className="min-w-0 flex-1 space-y-0.5">
                         <p className="text-xs sm:text-sm font-semibold text-slate-900 truncate">
                           <BidiText text={t.title} />
@@ -1026,6 +1560,11 @@ export default function OverviewView({
                           </span>
                           {t.startTime && <span>· {t.startTime}</span>}
                           <span>· أولوية {priLabel}</span>
+                          {recLabel && (
+                            <span className="text-[#1E3A5F] font-medium">
+                              · {recLabel}
+                            </span>
+                          )}
                           {t.linkedLabel && (
                             <span className="text-slate-600 truncate max-w-[180px]">
                               · {t.linkedLabel}
@@ -1038,19 +1577,9 @@ export default function OverviewView({
                           )}
                         </div>
                       </div>
-                    </button>
+                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!canEdit) return onRequireAuth();
-                        setEditingTask(t);
-                        setTaskModalOpen(true);
-                      }}
-                      className="px-2.5 py-1 text-[11px] font-medium text-[#1E3A5F] bg-[#F7F8FA] border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer shrink-0"
-                    >
-                      تعديل
-                    </button>
+                    <ArrowLeft className="w-3.5 h-3.5 text-slate-400 shrink-0" aria-hidden="true" />
                   </div>
                 );
               })}
@@ -1496,7 +2025,7 @@ export default function OverviewView({
               )}
             </div>
           ) : (
-            <div className="space-y-2.5">
+            <div className="max-h-[360px] overflow-y-auto thin-scrollbar pr-0.5 space-y-2.5">
               {latestReflections.map((r) => {
                 const cardStyle = getReflectionCardStyle(r);
                 const audioClips = reflectionAudioMap[r.id] || [];
@@ -1513,7 +2042,7 @@ export default function OverviewView({
                         onNavigateTab('reflections');
                       }
                     }}
-                    className={`w-full text-right rounded-xl border overflow-hidden transition-colors cursor-pointer ${cardStyle.cardBg} ${cardStyle.cardBorder}`}
+                    className={`w-full text-right rounded-xl border overflow-hidden transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F] ${cardStyle.cardBg} ${cardStyle.cardBorder}`}
                   >
                     {(r.imageUrl || r.imageStoragePath) && (
                       <FramedImage
@@ -1564,12 +2093,24 @@ export default function OverviewView({
         </section>
       </div>
 
-      {/* Interactive Weekly Rhythm Cards + Editor Popup */}
-      <WeeklyRhythmSection
-        items={preferences.weeklyRhythm}
-        canEdit={canEdit}
-        onSaveRhythm={handleSaveRhythm}
-      />
+      {/* Balanced Side-by-Side Row: Weekly Rhythm + Quick Drop */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <div className="lg:col-span-5">
+          <WeeklyRhythmSection
+            items={preferences.weeklyRhythm}
+            canEdit={canEdit}
+            onSaveRhythm={handleSaveRhythm}
+          />
+        </div>
+        <div className="lg:col-span-7">
+          <QuickDropSection
+            uid={user?.uid}
+            canEdit={canEdit}
+            onRequireAuth={onRequireAuth}
+            onOpenPdf={onOpenPdf}
+          />
+        </div>
+      </div>
 
       {/* Spaced Repetition Tracker */}
       {dueItems.length > 0 && (
@@ -1586,8 +2127,8 @@ export default function OverviewView({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {dueItems.slice(0, 6).map((item) => {
+          <div className="max-h-[260px] overflow-y-auto thin-scrollbar pr-0.5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {dueItems.slice(0, 12).map((item) => {
               const hubMeta = getHubMeta(item.hubId, hubs);
               const isDue = Boolean(item.nextDate) && (item.nextDate ?? '') <= today;
               return (
@@ -1603,14 +2144,14 @@ export default function OverviewView({
                       onNavigateTab('library');
                     }
                   }}
-                  className="p-3.5 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-xl text-right space-y-1.5 cursor-pointer transition-colors"
+                  className="p-3.5 bg-[#F7F8FA] hover:bg-slate-100 border border-slate-200 rounded-xl text-right space-y-1.5 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F]"
                 >
                   <div className="flex items-center justify-between gap-2 text-[11px]">
                     <span className="font-semibold text-[#1E3A5F]">
                       {hubMeta.shortTitle}
                     </span>
                     {isDue && (
-                      <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-900 font-semibold">
+                      <span className="text-rose-700 font-semibold">
                         مستحق اليوم
                       </span>
                     )}
@@ -1676,12 +2217,264 @@ export default function OverviewView({
         />
       </section>
 
-      {/* Quick Drop — Cross-Device Temporary Sharing Inbox (Last Dashboard Section) */}
-      <QuickDropSection
-        uid={user?.uid}
-        canEdit={canEdit}
-        onRequireAuth={onRequireAuth}
-      />
+      {/* Add / Edit Custom Quote Modal */}
+      {quoteModalOpen && (
+        <div
+          className="fixed inset-0 z-[75] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setQuoteModalOpen(false)}
+        >
+          <form
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={handleSaveQuoteForm}
+            className="w-full max-w-lg max-h-[92dvh] overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-2xl p-5 sm:p-6 space-y-4"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-editorial text-lg font-bold text-slate-900">
+                {editingQuoteId ? 'تعديل الاقتباس' : 'إضافة اقتباس جديد لمكتبتك'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setQuoteModalOpen(false)}
+                className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                نص الاقتباس *
+              </label>
+              <AutoResizeTextarea
+                minRows={3}
+                value={quoteTextDraft}
+                onChange={(e) => setQuoteTextDraft(e.target.value)}
+                placeholder="اكتب الاقتباس أو العبارة الملهمة هنا..."
+                className="w-full px-3 py-2 text-sm bg-[#F7F8FA] border border-slate-300 rounded-xl"
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  القائل / المصدر
+                </label>
+                <input
+                  type="text"
+                  value={quoteAuthorDraft}
+                  onChange={(e) => setQuoteAuthorDraft(e.target.value)}
+                  placeholder="مثال: جيمس كلير"
+                  className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-300 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  المحور / الموضوع
+                </label>
+                <input
+                  type="text"
+                  value={quoteThemeDraft}
+                  onChange={(e) => setQuoteThemeDraft(e.target.value)}
+                  placeholder="مثال: الاستمرارية"
+                  className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-300 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  التاريخ
+                </label>
+                <input
+                  type="date"
+                  value={quoteDateDraft}
+                  onChange={(e) => setQuoteDateDraft(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-300 rounded-xl"
+                />
+              </div>
+            </div>
+
+            <div>
+              <span className="block text-xs font-semibold text-slate-700 mb-1.5">
+                لون البطاقة
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {Object.values(QUOTE_COLOR_THEMES).map((theme) => (
+                  <button
+                    key={theme.key}
+                    type="button"
+                    onClick={() => setQuoteColorDraft(theme.key)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs cursor-pointer ${
+                      quoteColorDraft === theme.key
+                        ? 'border-[#1E3A5F] bg-[#F0F4F9] font-bold text-[#1E3A5F]'
+                        : 'border-slate-200 bg-white text-slate-700'
+                    }`}
+                  >
+                    <span className={`w-3 h-3 rounded-full border ${theme.swatchClass}`} />
+                    <span>{theme.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setQuoteModalOpen(false)}
+                className="px-4 py-2 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>حفظ الاقتباس</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Quotes Archive Modal */}
+      {quoteArchiveOpen && (
+        <div
+          className="fixed inset-0 z-[75] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setQuoteArchiveOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-2xl max-h-[92dvh] flex flex-col bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
+          >
+            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-2">
+              <div>
+                <h3 className="font-editorial text-lg font-bold text-slate-900">
+                  أرشيف الاقتباسات الشخصية والعامة
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  {quotesLibrary.length} اقتباسات مخصصة · {PERSONAL_GROWTH_QUOTES.length} اقتباس ملهم
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuoteArchiveOpen(false);
+                      openNewQuoteModal();
+                    }}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>جديد</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setQuoteArchiveOpen(false)}
+                  className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 sm:p-5 overflow-y-auto thin-scrollbar space-y-3">
+              {quotesLibrary.map((q) => {
+                const th = QUOTE_COLOR_THEMES[q.colorKey || 'amber'] || QUOTE_COLOR_THEMES.amber;
+                const isPinned = preferences.pinnedDailyQuoteId === q.id;
+                return (
+                  <div
+                    key={q.id}
+                    data-custom-card-surface="light"
+                    className={`p-3.5 rounded-xl border space-y-2 ${th.cardClass}`}
+                  >
+                    <p className="text-sm font-bold text-slate-900 leading-relaxed">
+                      «{q.text}»
+                    </p>
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-600">
+                      <span>
+                        — {q.author}
+                        {q.theme ? ` · ${q.theme}` : ''}
+                        {q.dateKey ? ` · ${q.dateKey}` : ''}
+                      </span>
+                      {canEdit && (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onUpdatePreferences({
+                                pinnedDailyQuoteId: isPinned ? null : q.id,
+                              });
+                              setRotatedQuoteText(null);
+                            }}
+                            className={`px-2 py-1 rounded-md border font-semibold cursor-pointer ${
+                              isPinned
+                                ? 'bg-slate-900 text-white border-slate-900'
+                                : 'bg-white text-slate-700 border-slate-200'
+                            }`}
+                          >
+                            {isPinned ? 'مثبّت اليوم' : 'اختيار لليوم'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setQuoteArchiveOpen(false);
+                              openEditQuoteModal(q);
+                            }}
+                            className="p-1.5 bg-white border border-slate-200 rounded-md text-slate-700 hover:text-[#1E3A5F] cursor-pointer"
+                            aria-label="تعديل الاقتباس"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCustomQuote(q.id)}
+                            className="p-1.5 bg-white border border-slate-200 rounded-md text-rose-700 hover:bg-rose-50 cursor-pointer"
+                            aria-label="حذف الاقتباس"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {PERSONAL_GROWTH_QUOTES.map((q, idx) => (
+                <div
+                  key={`builtin-${idx}`}
+                  className="p-3.5 rounded-xl bg-[#F7F8FA] border border-slate-200 space-y-1.5"
+                >
+                  <p className="text-xs sm:text-sm font-semibold text-slate-900 leading-relaxed">
+                    «{q.text}»
+                  </p>
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                    <span>
+                      — {q.author} · {q.theme}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRotatedQuoteText(q.text);
+                        setQuoteArchiveOpen(false);
+                      }}
+                      className="px-2 py-0.5 rounded bg-white border border-slate-200 text-[#1E3A5F] font-semibold cursor-pointer"
+                    >
+                      عرض الآن
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Hub Create / Edit Modal */}
       {hubModalMode && (

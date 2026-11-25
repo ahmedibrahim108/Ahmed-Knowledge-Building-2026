@@ -134,6 +134,7 @@ import {
   PublicCatalogData,
   UserProfileRecord,
   addGrantedItemNote,
+  deleteActivityLogDoc,
   deleteBlogPostDoc,
   deleteBookNoteDoc,
   deleteCalendarEventDoc,
@@ -187,6 +188,20 @@ import {
   subscribeUserWorkspace,
 } from './services/supabaseSync';
 import { exportPlanToExcel } from './utils/excelExport';
+import {
+  isAppOnline,
+  isNetworkOrOfflineError,
+  loadCachedUserProfile,
+  loadWorkspaceOfflineSnapshot,
+  saveWorkspaceOfflineSnapshot,
+  setActiveOfflineQueueUid,
+  WorkspaceOfflineSnapshot,
+} from './utils/offlineQueue';
+import { initOfflineAutoSyncListener } from './utils/offlineSync';
+import {
+  isTaskCompletedOnDate,
+  toggleTaskOccurrenceForDate,
+} from './utils/taskRecurrence';
 
 function formatArabicDate(): string {
   try {
@@ -721,6 +736,74 @@ export default function App() {
     };
   }, []);
 
+  // Background offline queue auto-sync on network restore
+  useEffect(() => {
+    return initOfflineAutoSyncListener(() => {
+      setSyncRefreshTick((t) => t + 1);
+    });
+  }, []);
+
+  // Debounced IndexedDB workspace snapshot for instant offline startup
+  const snapshotReadyRef = useRef(false);
+  useEffect(() => {
+    if (!authReady || !user || !isAdmin || !snapshotReadyRef.current) return;
+    const timer = window.setTimeout(() => {
+      void saveWorkspaceOfflineSnapshot({
+        uid: user.uid,
+        savedAtMs: Date.now(),
+        quarters,
+        months,
+        domains,
+        courses,
+        bookNotes,
+        customCategories,
+        history,
+        preferences,
+        reflections,
+        blogPosts,
+        calendarEvents,
+        learningPaths,
+        readingItems,
+        projects,
+        unifiedTasks,
+        dentalCases,
+        weeklyMeetings,
+        activityLogs,
+        dailyJournals,
+        periodReviews,
+        weeklyPlans,
+        pinCollections,
+      });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [
+    authReady,
+    user,
+    isAdmin,
+    quarters,
+    months,
+    domains,
+    courses,
+    bookNotes,
+    customCategories,
+    history,
+    preferences,
+    reflections,
+    blogPosts,
+    calendarEvents,
+    learningPaths,
+    readingItems,
+    projects,
+    unifiedTasks,
+    dentalCases,
+    weeklyMeetings,
+    activityLogs,
+    dailyJournals,
+    periodReviews,
+    weeklyPlans,
+    pinCollections,
+  ]);
+
   // Listen to Firebase Auth state & enforce strict RBAC before seeding or subscribing to private workspace
   useEffect(() => {
     if (!auth) {
@@ -736,6 +819,37 @@ export default function App() {
     let unsubAttachments: (() => void) | null = null;
     let isMounted = true;
 
+    const applyOfflineSnapshot = (snap: WorkspaceOfflineSnapshot | null) => {
+      if (!snap || !isMounted) return;
+      if (snap.quarters && snap.quarters.length > 0) setQuarters(snap.quarters);
+      if (snap.months && snap.months.length > 0) setMonths(snap.months);
+      if (snap.domains && snap.domains.length > 0) setDomains(snap.domains);
+      if (snap.courses && snap.courses.length > 0) setCourses(snap.courses);
+      if (snap.bookNotes) setBookNotes(snap.bookNotes);
+      if (snap.customCategories && snap.customCategories.length > 0) {
+        setCustomCategories(snap.customCategories);
+      }
+      if (snap.history) setHistory(snap.history);
+      if (snap.preferences) {
+        setPreferences(snap.preferences);
+        setActiveLearningHubs(snap.preferences.customHubs);
+      }
+      if (snap.reflections) setReflections(snap.reflections);
+      if (snap.blogPosts) setBlogPosts(snap.blogPosts);
+      if (snap.calendarEvents) setCalendarEvents(snap.calendarEvents);
+      if (snap.learningPaths) setLearningPaths(snap.learningPaths);
+      if (snap.readingItems) setReadingItems(snap.readingItems);
+      if (snap.projects) setProjects(snap.projects);
+      if (snap.unifiedTasks) setUnifiedTasks(snap.unifiedTasks);
+      if (snap.dentalCases) setDentalCases(snap.dentalCases);
+      if (snap.weeklyMeetings) setWeeklyMeetings(snap.weeklyMeetings);
+      if (snap.activityLogs) setActivityLogs(snap.activityLogs);
+      if (snap.dailyJournals) setDailyJournals(snap.dailyJournals);
+      if (snap.periodReviews) setPeriodReviews(snap.periodReviews);
+      if (snap.weeklyPlans) setWeeklyPlans(snap.weeklyPlans);
+      if (snap.pinCollections) setPinCollections(snap.pinCollections);
+    };
+
     const unsubAuth = onAuthStateChanged(auth, async (nextUser) => {
       if (unsubWorkspace) {
         unsubWorkspace();
@@ -747,6 +861,7 @@ export default function App() {
       }
 
       // Always reset in-memory state first so switching accounts or signing out never bleeds prior account data
+      snapshotReadyRef.current = false;
       resetToDefaultView(true);
       setUserProfile(null);
       setGrantedWorkspace(null);
@@ -756,6 +871,7 @@ export default function App() {
       setNonAdminThemeError(null);
       setIsPreviewingPublic(false);
       setUser(nextUser);
+      setActiveOfflineQueueUid(nextUser?.uid ?? null);
 
       if (!nextUser) {
         setAuthReady(true);
@@ -763,6 +879,51 @@ export default function App() {
         setSelectedCourseId(null);
         setStudyModalState(null);
         void refreshPublicCatalog();
+        return;
+      }
+
+      // Hydrate cached offline snapshot early so UI is responsive immediately even before network finishes
+      const cachedProfile = loadCachedUserProfile(nextUser.uid);
+      const cachedSnap = await loadWorkspaceOfflineSnapshot(nextUser.uid);
+      if (!isMounted) return;
+
+      const offlineAdminAllowed = checkIsAdminAccess(
+        nextUser,
+        cachedProfile
+          ? {
+              uid: cachedProfile.uid,
+              email: cachedProfile.email,
+              display_name: cachedProfile.display_name,
+              photo_url: cachedProfile.photo_url,
+              role: cachedProfile.role,
+              approval_status: cachedProfile.approval_status,
+            }
+          : null
+      );
+
+      if (!isAppOnline() && offlineAdminAllowed) {
+        if (cachedProfile) {
+          setUserProfile({
+            uid: cachedProfile.uid,
+            email: cachedProfile.email,
+            display_name: cachedProfile.display_name,
+            photo_url: cachedProfile.photo_url,
+            role: cachedProfile.role,
+            approval_status: cachedProfile.approval_status,
+          });
+        }
+        applyOfflineSnapshot(cachedSnap);
+        snapshotReadyRef.current = true;
+        setAuthReady(true);
+        setSyncingCloud(false);
+        setAuthError(null);
+        setActiveTab((prev) => {
+          if (prev === 'public') {
+            syncLocationHash('overview', null, null);
+            return 'overview';
+          }
+          return prev;
+        });
         return;
       }
 
@@ -910,6 +1071,11 @@ export default function App() {
           },
         });
 
+        if (cachedSnap) {
+          applyOfflineSnapshot(cachedSnap);
+        }
+        snapshotReadyRef.current = true;
+
         setActiveTab((prev) => {
           if (prev === 'public') {
             syncLocationHash('overview', null, null);
@@ -919,10 +1085,34 @@ export default function App() {
         });
       } catch (err) {
         if (!isMounted) return;
-        setAuthReady(true);
-        setAuthError(
-          formatSupabaseErrorMessage(err, 'تعذرت المزامنة مع قاعدة البيانات.')
-        );
+        if (isNetworkOrOfflineError(err) && offlineAdminAllowed) {
+          if (cachedProfile) {
+            setUserProfile({
+              uid: cachedProfile.uid,
+              email: cachedProfile.email,
+              display_name: cachedProfile.display_name,
+              photo_url: cachedProfile.photo_url,
+              role: cachedProfile.role,
+              approval_status: cachedProfile.approval_status,
+            });
+          }
+          applyOfflineSnapshot(cachedSnap);
+          snapshotReadyRef.current = true;
+          setAuthReady(true);
+          setAuthError(null);
+          setActiveTab((prev) => {
+            if (prev === 'public') {
+              syncLocationHash('overview', null, null);
+              return 'overview';
+            }
+            return prev;
+          });
+        } else {
+          setAuthReady(true);
+          setAuthError(
+            formatSupabaseErrorMessage(err, 'تعذرت المزامنة مع قاعدة البيانات.')
+          );
+        }
       } finally {
         if (isMounted) setSyncingCloud(false);
       }
@@ -1282,6 +1472,15 @@ export default function App() {
     };
     setActivityLogs((prev) => [entry, ...prev].slice(0, 600));
     void saveActivityLogDoc(user.uid, entry);
+  };
+
+  const handleDeleteActivityLog = (entryId: string) => {
+    if (!user || !isAdmin) {
+      handleRequireAuth();
+      return;
+    }
+    setActivityLogs((prev) => prev.filter((a) => a.id !== entryId));
+    void deleteActivityLogDoc(user.uid, entryId);
   };
 
   const recordHistory = (
@@ -1892,14 +2091,6 @@ export default function App() {
       detail: newCourse.category,
       targetTab: 'courses',
     });
-    recordActivityLog({
-      entityType: 'course',
-      entityId: String(newCourse.id),
-      action: 'created',
-      title: newCourse.title,
-      hubId: newCourse.hubId,
-      subtitle: newCourse.category,
-    });
   };
 
   const handleUpdateCourse = (
@@ -1926,19 +2117,6 @@ export default function App() {
             entityType: 'course',
             entityId: String(c.id),
             action: 'completed',
-            title: c.title,
-            hubId: next.hubId,
-          });
-        } else if (
-          updates.progressPct !== undefined ||
-          updates.studyStage !== undefined ||
-          updates.listenCount !== undefined ||
-          updates.reviewCount !== undefined
-        ) {
-          recordActivityLog({
-            entityType: 'course',
-            entityId: String(c.id),
-            action: 'studied',
             title: c.title,
             hubId: next.hubId,
           });
@@ -2214,14 +2392,16 @@ export default function App() {
       targetTab: 'journal',
       targetNoteId: newNote.id,
     });
-    recordActivityLog({
-      entityType: 'book_note',
-      entityId: newNote.id,
-      action: 'created',
-      title: newNote.bookTitle,
-      hubId: newNote.hubId,
-      subtitle: newNote.lectureTitle || newNote.author,
-    });
+    if (payload.initialContent && payload.initialContent.trim().length > 0) {
+      recordActivityLog({
+        entityType: 'book_note',
+        entityId: newNote.id,
+        action: 'created',
+        title: newNote.bookTitle,
+        hubId: newNote.hubId,
+        subtitle: newNote.lectureTitle || newNote.author,
+      });
+    }
     return newNote.id;
   };
 
@@ -2307,11 +2487,11 @@ export default function App() {
         if (bn.id !== id) return bn;
         const next = { ...bn, ...updates, updatedAt: formatArabicDate() };
         void saveBookNoteDoc(user.uid, next);
-        if (updates.content !== undefined || updates.reviewCount !== undefined || updates.listenCount !== undefined) {
+        if (updates.content !== undefined && updates.content.trim().length > 0) {
           recordActivityLog({
             entityType: 'book_note',
             entityId: next.id,
-            action: updates.reviewCount !== undefined ? 'reviewed' : 'updated',
+            action: 'updated',
             title: next.bookTitle,
             hubId: next.hubId,
           });
@@ -2611,13 +2791,6 @@ export default function App() {
       detail: `${newEvent.dateKey} · ${newEvent.category}`,
       targetTab: 'calendar',
     });
-    recordActivityLog({
-      entityType: 'calendar_event',
-      entityId: newEvent.id,
-      action: 'created',
-      title: newEvent.title,
-      subtitle: `${newEvent.dateKey} · ${newEvent.category}`,
-    });
   };
 
   const handleUpdateCalendarEvent = (
@@ -2664,14 +2837,6 @@ export default function App() {
       title: `أنشأت مسار تعلّم: ${newPath.title}`,
       detail: newPath.categoryLabel,
       targetTab: 'paths',
-    });
-    recordActivityLog({
-      entityType: 'learning_path',
-      entityId: newPath.id,
-      action: 'created',
-      title: newPath.title,
-      hubId: newPath.hubId,
-      subtitle: newPath.categoryLabel,
     });
   };
 
@@ -2788,14 +2953,6 @@ export default function App() {
       detail: newItem.categoryLabel,
       targetTab: 'library',
     });
-    recordActivityLog({
-      entityType: 'reading_item',
-      entityId: newItem.id,
-      action: 'created',
-      title: newItem.title,
-      hubId: newItem.hubId,
-      subtitle: newItem.categoryLabel,
-    });
   };
 
   const handleUpdateReadingItem = (
@@ -2811,15 +2968,11 @@ export default function App() {
         if (item.id !== id) return item;
         const next = { ...item, ...updates };
         void saveReadingItemDoc(user.uid, next);
-        if (
-          updates.status === 'completed' ||
-          updates.currentPage !== undefined ||
-          updates.reviewCount !== undefined
-        ) {
+        if (updates.status === 'completed' && item.status !== 'completed') {
           recordActivityLog({
             entityType: 'reading_item',
             entityId: item.id,
-            action: updates.status === 'completed' ? 'completed' : 'studied',
+            action: 'completed',
             title: next.title,
             hubId: next.hubId,
           });
@@ -2864,14 +3017,6 @@ export default function App() {
       detail: newProj.categoryLabel,
       targetTab: 'tasks',
     });
-    recordActivityLog({
-      entityType: 'project',
-      entityId: newProj.id,
-      action: 'created',
-      title: newProj.title,
-      hubId: newProj.hubId,
-      subtitle: newProj.categoryLabel,
-    });
   };
 
   const handleUpdateProject = (
@@ -2887,11 +3032,11 @@ export default function App() {
         if (p.id !== id) return p;
         const next = { ...p, ...updates };
         void savePracticalProjectDoc(user.uid, next);
-        if (updates.status && updates.status !== p.status) {
+        if (updates.status === 'completed' && p.status !== 'completed') {
           recordActivityLog({
             entityType: 'project',
             entityId: p.id,
-            action: updates.status === 'completed' ? 'completed' : 'updated',
+            action: 'completed',
             title: next.title,
             hubId: next.hubId,
           });
@@ -2928,13 +3073,15 @@ export default function App() {
       detail: newTask.categoryLabel,
       targetTab: 'tasks',
     });
-    recordActivityLog({
-      entityType: 'task',
-      entityId: newTask.id,
-      action: 'created',
-      title: newTask.title,
-      hubId: newTask.hubId,
-    });
+    if (newTask.status === 'done') {
+      recordActivityLog({
+        entityType: 'task',
+        entityId: newTask.id,
+        action: 'completed',
+        title: newTask.title,
+        hubId: newTask.hubId,
+      });
+    }
     return newTask.id;
   };
 
@@ -3061,6 +3208,30 @@ export default function App() {
     }
     setUnifiedTasks((prev) => prev.filter((t) => t.id !== id));
     void deleteUnifiedTaskDoc(user.uid, id);
+  };
+
+  const handleToggleTaskOccurrence = (taskId: string, dateKey: string) => {
+    if (!user || !isAdmin) {
+      handleRequireAuth();
+      return;
+    }
+    const target = unifiedTasks.find((t) => t.id === taskId);
+    if (!target) return;
+    const wasDone = isTaskCompletedOnDate(target, dateKey);
+    const updated = toggleTaskOccurrenceForDate(target, dateKey);
+    handleUpdateUnifiedTask(taskId, {
+      status: updated.status,
+      completedOccurrenceDates: updated.completedOccurrenceDates,
+    });
+    if (!wasDone) {
+      recordActivityLog({
+        entityType: 'task',
+        entityId: target.id,
+        action: 'completed',
+        title: `${target.title} (${dateKey})`,
+        hubId: target.hubId,
+      });
+    }
   };
 
   // --- Dental Cases CRUD ---
@@ -3702,6 +3873,7 @@ export default function App() {
           setAccountInitialSubTab('appearance');
           navigateToTab('account');
         }}
+        onOfflineSyncCompleted={() => setSyncRefreshTick((t) => t + 1)}
       />
 
       {/* Auth Prompt Notice when a read-only trigger is fired */}
@@ -3967,6 +4139,7 @@ export default function App() {
             onSavePinCollection={handleSavePinCollection}
             onDeletePinCollection={handleDeletePinCollection}
             weeklyPlans={weeklyPlans}
+            onOpenTaskModal={(task) => setQuickTaskModal({ open: true, task })}
           />
         )}
 
@@ -4239,6 +4412,8 @@ export default function App() {
             onChangeStatusOrder={(nextOrder) =>
               handleUpdatePreferences({ taskStatusOrder: nextOrder })
             }
+            preferences={preferences}
+            onUpdatePreferences={handleUpdatePreferences}
             pinCollections={pinCollections}
             activeFocusPinCollectionId={preferences.activeFocusPinCollectionId ?? null}
             onSelectFocusPinCollection={handleSelectFocusPinCollection}
@@ -4312,6 +4487,7 @@ export default function App() {
             onRequireAuth={handleRequireAuth}
             onSaveDailyJournal={handleSaveDailyJournal}
             onOpenEntity={handleJournalOpenEntity}
+            onDeleteActivityLog={handleDeleteActivityLog}
             hubs={resolveLearningHubs(preferences.customHubs)}
             externalOpenDayKey={pendingJournalDayKey}
             onConsumeExternalOpenDayKey={() => setPendingJournalDayKey(null)}
@@ -4432,6 +4608,7 @@ export default function App() {
             onAddUnifiedTask={handleAddUnifiedTask}
             onUpdateUnifiedTask={handleUpdateUnifiedTask}
             onDeleteUnifiedTask={handleDeleteUnifiedTask}
+            onToggleTaskOccurrence={handleToggleTaskOccurrence}
             onUpdateWeeklyMeeting={handleUpdateWeeklyMeeting}
             onToggleCourseTask={handleToggleCourseTask}
             onTogglePathStage={handleTogglePathStage}
@@ -4687,7 +4864,7 @@ export default function App() {
         </ErrorBoundary>
       )}
 
-      <OfflineIndicator />
+      <OfflineIndicator onSynced={() => setSyncRefreshTick((t) => t + 1)} />
 
       <AdvancedSearchModal
         open={advancedSearchOpen}

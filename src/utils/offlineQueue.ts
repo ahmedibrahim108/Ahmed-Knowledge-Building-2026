@@ -42,10 +42,10 @@ export interface OfflineCachedUserProfile {
   email: string;
   display_name: string;
   photo_url: string;
-  role: 'admin' | 'member';
-  is_active: boolean;
-  created_at_ms: number;
-  last_login_ms: number;
+  role: 'user' | 'admin';
+  approval_status: 'pending' | 'approved' | 'rejected' | 'suspended';
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface WorkspaceOfflineSnapshot {

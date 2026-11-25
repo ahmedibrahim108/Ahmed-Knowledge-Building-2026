@@ -16,9 +16,12 @@ import {
   Layers,
   Loader2,
   Mic,
+  MicOff,
+  Minimize2,
   Palette,
   PenLine,
   Plus,
+  Quote,
   RefreshCw,
   RotateCcw,
   Save,
@@ -57,6 +60,12 @@ import {
   uploadJournalCoverImage,
   validateImageFileForUpload,
 } from '../utils/imageStorage';
+import { useSpeechDictation } from '../hooks/useSpeechDictation';
+import {
+  QUOTE_COLOR_THEMES,
+  resolveEffectiveDailyQuote,
+  rotateDailyQuoteFromLibrary,
+} from '../utils/dailyQuotes';
 import {
   DailyJournalItem,
   JournalNavAction,
@@ -120,6 +129,7 @@ function buildInitialDraft(
     coverImageUrl: existing?.coverImageUrl || '',
     coverImageStoragePath: existing?.coverImageStoragePath || '',
     coverFrame: existing?.coverFrame,
+    dailyQuote: existing?.dailyQuote,
     reflectionText: existing?.reflectionText || '',
     highlightsText: existing?.highlightsText || '',
     moodLabel: existing?.moodLabel || '',
@@ -143,6 +153,7 @@ function hasJournalDraftChanged(
     (a.cardColor || 'default') !== (b.cardColor || 'default') ||
     (a.coverImageUrl || '') !== (b.coverImageUrl || '') ||
     (a.coverImageStoragePath || '') !== (b.coverImageStoragePath || '') ||
+    (a.dailyQuote?.text || '') !== (b.dailyQuote?.text || '') ||
     JSON.stringify(a.coverFrame || null) !== JSON.stringify(b.coverFrame || null) ||
     JSON.stringify(a.sections || []) !== JSON.stringify(b.sections || []) ||
     JSON.stringify(a.quickNotes || []) !== JSON.stringify(b.quickNotes || [])
@@ -219,6 +230,33 @@ export default function JournalDayModal({
   const replaceTargetRef = useRef<ResolvedPhotoItem | null>(null);
   const coverInputRef = useRef<HTMLInputElement | null>(null);
   const activeObjectUrlsRef = useRef<string[]>([]);
+
+  const isMinimalWriting = Boolean(preferences.minimalWritingMode);
+  const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
+
+  const highlightsMic = useSpeechDictation({
+    dialect: preferences.voiceDialect,
+    onTranscriptSegment: (segment) => {
+      setDraft((prev) => ({
+        ...prev,
+        highlightsText: prev.highlightsText
+          ? `${prev.highlightsText.trimEnd()} ${segment}`
+          : segment,
+      }));
+    },
+  });
+
+  const reflectionMic = useSpeechDictation({
+    dialect: preferences.voiceDialect,
+    onTranscriptSegment: (segment) => {
+      setDraft((prev) => ({
+        ...prev,
+        reflectionText: prev.reflectionText
+          ? `${prev.reflectionText.trimEnd()} ${segment}`
+          : segment,
+      }));
+    },
+  });
 
   useEffect(() => {
     setShowCustomize(initialShowCustomize);
@@ -415,8 +453,33 @@ export default function JournalDayModal({
   }, [open, lightboxIndex, photos.length, confirmDeletePhoto, flushSaveNow, onClose]);
 
   const summary = useMemo(
-    () => buildDailyJournalSummary(dateKey, analyticsInput),
-    [dateKey, analyticsInput]
+    () =>
+      buildDailyJournalSummary(dateKey, analyticsInput, {
+        hiddenActivityIds: preferences.hiddenActivityIds,
+        hiddenActivityTypes: preferences.hiddenActivityTypes,
+      }),
+    [
+      dateKey,
+      analyticsInput,
+      preferences.hiddenActivityIds,
+      preferences.hiddenActivityTypes,
+    ]
+  );
+
+  const resolvedQuote = useMemo(
+    () =>
+      resolveEffectiveDailyQuote({
+        dateKey,
+        journalQuote: draft.dailyQuote,
+        quotesLibrary: preferences.quotesLibrary,
+        pinnedDailyQuoteId: preferences.pinnedDailyQuoteId,
+      }),
+    [
+      dateKey,
+      draft.dailyQuote,
+      preferences.quotesLibrary,
+      preferences.pinnedDailyQuoteId,
+    ]
   );
 
   const dayVoiceCount = useMemo(
@@ -476,10 +539,29 @@ export default function JournalDayModal({
   };
 
   const handleDeleteSection = (secId: string) => {
+    if (editingSectionId === secId) setEditingSectionId(null);
     updateDraft((prev) => ({
       ...prev,
       sections: (prev.sections || []).filter((s) => s.id !== secId),
     }));
+  };
+
+  const handleToggleMinimalWriting = () => {
+    if (!canEdit) return onRequireAuth();
+    onUpdatePreferences?.({ minimalWritingMode: !isMinimalWriting });
+  };
+
+  const handleRotateQuote = () => {
+    if (!canEdit) return onRequireAuth();
+    const rotated = rotateDailyQuoteFromLibrary(
+      dateKey,
+      resolvedQuote.quote.text,
+      preferences.quotesLibrary || []
+    );
+    if (preferences.pinnedDailyQuoteId && onUpdatePreferences) {
+      onUpdatePreferences({ pinnedDailyQuoteId: null });
+    }
+    updateDraft((prev) => ({ ...prev, dailyQuote: rotated.quote }));
   };
 
   // Quick Notes Handlers
@@ -649,6 +731,11 @@ export default function JournalDayModal({
     }));
   };
 
+  const quoteTheme =
+    (resolvedQuote.customQuote?.colorKey &&
+      QUOTE_COLOR_THEMES[resolvedQuote.customQuote.colorKey]) ||
+    QUOTE_COLOR_THEMES.amber;
+
   const renderWrittenSection = () => (
     <section className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -658,17 +745,68 @@ export default function JournalDayModal({
             التدوين اليومي والكتابة الحرة
           </h3>
         </div>
-        {canEdit && (
-          <button
-            type="button"
-            onClick={handleAddSection}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-[#F0F4F9] hover:bg-[#E3ECF6] border border-[#1E3A5F]/20 rounded-xl cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>إضافة قسم كتابة</span>
-          </button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {canEdit && onUpdatePreferences && (
+            <button
+              type="button"
+              onClick={handleToggleMinimalWriting}
+              aria-pressed={isMinimalWriting}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                isMinimalWriting
+                  ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>كتابة هادئة</span>
+            </button>
+          )}
+          {canEdit && (
+            <button
+              type="button"
+              onClick={handleAddSection}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#1E3A5F] bg-[#F0F4F9] hover:bg-[#E3ECF6] border border-[#1E3A5F]/20 rounded-xl whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>إضافة قسم كتابة</span>
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Quote of the Day Strip (hidden in minimal writing mode) */}
+      {!isMinimalWriting && (
+        <div
+          data-custom-card-surface="light"
+          className={`rounded-xl border px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 ${quoteTheme.cardClass}`}
+        >
+          <div className="min-w-0 flex-1 flex items-start gap-2">
+            <Quote
+              className={`w-4 h-4 shrink-0 mt-0.5 ${quoteTheme.accentTextClass}`}
+              aria-hidden="true"
+            />
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-slate-900 leading-relaxed">
+                «{resolvedQuote.quote.text}»
+              </p>
+              <p className="text-[11px] text-slate-600 mt-0.5">
+                {resolvedQuote.quote.author || 'حكمة اليوم'}
+                {resolvedQuote.quote.theme ? ` · ${resolvedQuote.quote.theme}` : ''}
+              </p>
+            </div>
+          </div>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={handleRotateQuote}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold bg-white/85 hover:bg-white text-slate-700 border border-slate-200 rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <RefreshCw className="w-3 h-3" aria-hidden="true" />
+              <span>تبديل الحكمة</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Title & Subtitle */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -721,6 +859,9 @@ export default function JournalDayModal({
             onRequireAuth={onRequireAuth}
             preferences={preferences}
             onUpdatePreferences={onUpdatePreferences}
+            minimalMode={isMinimalWriting}
+            onToggleMinimalMode={handleToggleMinimalWriting}
+            voiceDialect={preferences.voiceDialect}
             minHeightClass="min-h-[200px]"
           />
         ) : draft.bodyHtml ? (
@@ -737,66 +878,120 @@ export default function JournalDayModal({
         )}
       </div>
 
-      {/* Multiple Custom Free-Form Sections */}
-      {(draft.sections || []).map((sec, idx) => (
-        <div
-          key={sec.id}
-          className="p-4 rounded-xl bg-white/90 border border-slate-200 space-y-3"
-        >
+      {/* Multiple Custom Free-Form Sections with Edit/Rename/Delete CRUD */}
+      {(draft.sections || []).map((sec, idx) => {
+        const isRenaming = editingSectionId === sec.id || !sec.heading;
+        return (
+          <div
+            key={sec.id}
+            className="p-4 rounded-xl bg-white/90 border border-slate-200 space-y-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {isRenaming && canEdit ? (
+                <input
+                  type="text"
+                  value={sec.heading}
+                  onChange={(e) =>
+                    handleUpdateSection(sec.id, { heading: e.target.value })
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && sec.heading.trim()) {
+                      e.preventDefault();
+                      setEditingSectionId(null);
+                    }
+                  }}
+                  placeholder={`عنوان القسم الإضافي #${idx + 1}...`}
+                  className="flex-1 min-w-[180px] px-3 py-1.5 text-sm font-bold bg-[#F7F8FA] border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+                />
+              ) : (
+                <h4 className="flex-1 text-sm font-bold text-slate-900">
+                  {sec.heading || `قسم إضافي #${idx + 1}`}
+                </h4>
+              )}
+              {canEdit && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditingSectionId(isRenaming && sec.heading.trim() ? null : sec.id)
+                    }
+                    title={isRenaming ? 'اعتماد العنوان' : 'تعديل عنوان القسم'}
+                    aria-label={isRenaming ? 'اعتماد العنوان' : 'تعديل عنوان القسم'}
+                    className="p-2 text-slate-500 hover:text-[#1E3A5F] hover:bg-slate-100 rounded-lg cursor-pointer"
+                  >
+                    {isRenaming && sec.heading.trim() ? (
+                      <Check className="w-4 h-4 text-emerald-700" />
+                    ) : (
+                      <Edit3 className="w-4 h-4" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteSection(sec.id)}
+                    title="حذف القسم"
+                    aria-label="حذف القسم"
+                    className="p-2 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+            {canEdit ? (
+              <RichTextNoteEditor
+                noteKey={`journal_sec_${dateKey}_${sec.id}`}
+                value={sec.bodyHtml}
+                onChange={(html) =>
+                  handleUpdateSection(sec.id, { bodyHtml: html })
+                }
+                placeholder="اكتب محتوى هذا القسم..."
+                canEdit={canEdit}
+                onRequireAuth={onRequireAuth}
+                preferences={preferences}
+                onUpdatePreferences={onUpdatePreferences}
+                minimalMode={isMinimalWriting}
+                onToggleMinimalMode={handleToggleMinimalWriting}
+                voiceDialect={preferences.voiceDialect}
+                minHeightClass="min-h-[140px]"
+              />
+            ) : (
+              <div
+                className="prose-bidi text-sm text-slate-800"
+                dangerouslySetInnerHTML={{
+                  __html: renderSafeBidiHtml(sec.bodyHtml),
+                }}
+              />
+            )}
+          </div>
+        );
+      })}
+
+      {/* Synced Dashboard Takeaways & Evening Reflection with Inline Mic */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+        <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-2">
-            <input
-              type="text"
-              value={sec.heading}
-              disabled={!canEdit}
-              onChange={(e) =>
-                handleUpdateSection(sec.id, { heading: e.target.value })
-              }
-              placeholder={`عنوان القسم الإضافي #${idx + 1}...`}
-              className="flex-1 px-3 py-1.5 text-sm font-bold bg-[#F7F8FA] border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
-            />
-            {canEdit && (
+            <label className="text-xs font-semibold text-slate-700">
+              أهم نقطة تعلّمتها أو أنجزتها
+            </label>
+            {canEdit && highlightsMic.isSupported && (
               <button
                 type="button"
-                onClick={() => handleDeleteSection(sec.id)}
-                title="حذف القسم"
-                aria-label="حذف القسم"
-                className="p-2 text-slate-400 hover:text-red-700 hover:bg-red-50 rounded-lg cursor-pointer"
+                onClick={() => highlightsMic.toggle()}
+                className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+                  highlightsMic.isListening
+                    ? 'bg-rose-600 text-white'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                }`}
               >
-                <Trash2 className="w-4 h-4" />
+                {highlightsMic.isListening ? (
+                  <MicOff className="w-3 h-3" />
+                ) : (
+                  <Mic className="w-3 h-3" />
+                )}
+                <span>{highlightsMic.isListening ? 'إيقاف' : 'إملاء'}</span>
               </button>
             )}
           </div>
-          {canEdit ? (
-            <RichTextNoteEditor
-              noteKey={`journal_sec_${dateKey}_${sec.id}`}
-              value={sec.bodyHtml}
-              onChange={(html) =>
-                handleUpdateSection(sec.id, { bodyHtml: html })
-              }
-              placeholder="اكتب محتوى هذا القسم..."
-              canEdit={canEdit}
-              onRequireAuth={onRequireAuth}
-              preferences={preferences}
-              onUpdatePreferences={onUpdatePreferences}
-              minHeightClass="min-h-[140px]"
-            />
-          ) : (
-            <div
-              className="prose-bidi text-sm text-slate-800"
-              dangerouslySetInnerHTML={{
-                __html: renderSafeBidiHtml(sec.bodyHtml),
-              }}
-            />
-          )}
-        </div>
-      ))}
-
-      {/* Synced Dashboard Takeaways & Evening Reflection */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-        <div className="space-y-1">
-          <label className="text-xs font-semibold text-slate-700 block">
-            أهم نقطة تعلّمتها أو أنجزتها (متزامنة مع لوحة اليوميات)
-          </label>
           <AutoResizeTextarea
             minRows={2}
             disabled={!canEdit}
@@ -811,10 +1006,30 @@ export default function JournalDayModal({
             className="w-full px-3.5 py-2 text-xs bg-white/90 border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
           />
         </div>
-        <div className="space-y-1">
-          <label className="text-xs font-semibold text-slate-700 block">
-            تأمل ختام اليوم (متزامن مع لوحة اليوميات)
-          </label>
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs font-semibold text-slate-700">
+              تأمل ختام اليوم
+            </label>
+            {canEdit && reflectionMic.isSupported && (
+              <button
+                type="button"
+                onClick={() => reflectionMic.toggle()}
+                className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+                  reflectionMic.isListening
+                    ? 'bg-rose-600 text-white'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                }`}
+              >
+                {reflectionMic.isListening ? (
+                  <MicOff className="w-3 h-3" />
+                ) : (
+                  <Mic className="w-3 h-3" />
+                )}
+                <span>{reflectionMic.isListening ? 'إيقاف' : 'إملاء'}</span>
+              </button>
+            )}
+          </div>
           <AutoResizeTextarea
             minRows={2}
             disabled={!canEdit}
@@ -1308,7 +1523,7 @@ export default function JournalDayModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-0 sm:p-4 lg:p-6"
+      className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[2px] flex items-center justify-center p-2 sm:p-4 lg:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby="diary-modal-title"
@@ -1318,7 +1533,7 @@ export default function JournalDayModal({
         data-custom-card-surface={
           draft.cardColor && draft.cardColor !== 'default' ? 'light' : undefined
         }
-        className={`w-full h-full sm:h-[92vh] sm:max-w-5xl sm:rounded-2xl border shadow-2xl overflow-hidden flex flex-col ${theme.cardClass}`}
+        className={`w-full max-h-[92dvh] h-[92dvh] sm:max-w-5xl rounded-2xl border shadow-2xl overflow-hidden flex flex-col ${theme.cardClass}`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top Modal Header */}

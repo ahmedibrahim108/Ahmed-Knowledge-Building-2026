@@ -675,6 +675,22 @@ export function sanitizeTaskStatusOrder(raw: unknown): UnifiedTaskStatus[] {
   return seen;
 }
 
+export type TaskRecurrenceFrequency =
+  | 'none'
+  | 'daily'
+  | 'weekly'
+  | 'monthly'
+  | 'custom';
+
+export interface TaskRecurrenceRule {
+  frequency: TaskRecurrenceFrequency;
+  intervalDays?: number; // For 'custom' (or step >= 1)
+  weekdays?: number[]; // 0=Sun..6=Sat for 'weekly'
+  startDate?: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD
+  paused?: boolean;
+}
+
 export interface UnifiedTask {
   id: string;
   title: string;
@@ -694,6 +710,8 @@ export interface UnifiedTask {
   linkedCourseId?: number;
   linkedPathId?: string;
   linkedBookId?: string;
+  recurrence?: TaskRecurrenceRule;
+  completedOccurrenceDates?: string[];
 }
 
 export interface StudyHistoryEntry {
@@ -1475,6 +1493,19 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   contrastLevel: 'standard',
 };
 
+export interface UserQuoteItem {
+  id: string;
+  text: string;
+  author: string;
+  theme?: string;
+  dateKey: string;
+  colorKey?: string;
+  reflection?: string;
+  isDailyPinned?: boolean;
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
 export interface UserPreferences {
   noteFontSize: 'sm' | 'base' | 'lg';
   noteHighlightColor: HighlightColorKey;
@@ -1499,8 +1530,14 @@ export interface UserPreferences {
   dashboardHeroImageStoragePath?: string;
   dashboardHeroImageFrame?: ImageFrameSpec;
   taskStatusOrder?: UnifiedTaskStatus[];
+  hiddenTaskStatuses?: UnifiedTaskStatus[];
   activeFocusPinCollectionId?: string | null;
   themeConfig?: ThemeConfig;
+  quotesLibrary?: UserQuoteItem[];
+  pinnedDailyQuoteId?: string | null;
+  hiddenActivityIds?: string[];
+  hiddenActivityTypes?: ActivityEntityType[];
+  minimalWritingMode?: boolean;
 }
 
 export interface PinnableNavTabMeta {

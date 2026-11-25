@@ -13,12 +13,15 @@ import {
   Columns3,
   Compass,
   Edit3,
+  Eye,
+  EyeOff,
   GripVertical,
   LayoutGrid,
   Link2,
   List,
   ListTodo,
   Plus,
+  Repeat,
   RotateCcw,
   Square,
   Trash2,
@@ -39,11 +42,13 @@ import {
   TaskPriority,
   UnifiedTask,
   UnifiedTaskStatus,
+  UserPreferences,
   computeEndTimeFromMinutes,
   getHubMeta,
   getTodayDateKey,
   sanitizeTaskStatusOrder,
 } from '../data/curriculumData';
+import { formatRecurrenceSummaryAr } from '../utils/taskRecurrence';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import {
@@ -80,6 +85,8 @@ interface TasksProjectsViewProps {
   onOpenCalendar?: () => void;
   statusOrder?: UnifiedTaskStatus[];
   onChangeStatusOrder?: (order: UnifiedTaskStatus[]) => void;
+  preferences?: UserPreferences;
+  onUpdatePreferences?: (updates: Partial<UserPreferences>) => void;
   pinCollections?: PinCollection[];
   activeFocusPinCollectionId?: string | null;
   onSelectFocusPinCollection?: (id: string | null) => void;
@@ -135,6 +142,7 @@ const PROJECT_STATUS_TO_UNIFIED: Record<ProjectStatus, UnifiedTaskStatus> = {
 };
 
 const LOCAL_STATUS_ORDER_KEY = 'mizan_task_status_order_v1';
+const LOCAL_HIDDEN_STATUSES_KEY = 'mizan_hidden_task_statuses_v1';
 
 export default function TasksProjectsView({
   canEdit,
@@ -163,6 +171,8 @@ export default function TasksProjectsView({
   onOpenCalendar,
   statusOrder: propStatusOrder,
   onChangeStatusOrder,
+  preferences,
+  onUpdatePreferences,
   pinCollections = [],
   activeFocusPinCollectionId = null,
   onSelectFocusPinCollection,
@@ -179,6 +189,62 @@ export default function TasksProjectsView({
   const [statusFilter, setStatusFilter] = useState<
     UnifiedTaskStatus | 'all' | 'unscheduled' | 'scheduled' | 'overdue'
   >('all');
+
+  const [hiddenTaskStatuses, setHiddenTaskStatuses] = useState<UnifiedTaskStatus[]>(() => {
+    if (Array.isArray(preferences?.hiddenTaskStatuses)) {
+      return preferences.hiddenTaskStatuses;
+    }
+    try {
+      const saved =
+        typeof window !== 'undefined'
+          ? window.localStorage.getItem(LOCAL_HIDDEN_STATUSES_KEY)
+          : null;
+      if (saved) return JSON.parse(saved) as UnifiedTaskStatus[];
+    } catch {
+      // ignore storage errors
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    if (Array.isArray(preferences?.hiddenTaskStatuses)) {
+      setHiddenTaskStatuses(preferences.hiddenTaskStatuses);
+    }
+  }, [preferences?.hiddenTaskStatuses]);
+
+  const toggleHiddenStatus = (status: UnifiedTaskStatus) => {
+    const isHidden = hiddenTaskStatuses.includes(status);
+    const next = isHidden
+      ? hiddenTaskStatuses.filter((s) => s !== status)
+      : [...hiddenTaskStatuses, status];
+    // Prevent hiding all statuses at once
+    if (next.length >= statusOrder.length) return;
+    setHiddenTaskStatuses(next);
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(LOCAL_HIDDEN_STATUSES_KEY, JSON.stringify(next));
+      }
+    } catch {
+      // ignore storage errors
+    }
+    if (canEdit) {
+      onUpdatePreferences?.({ hiddenTaskStatuses: next });
+    }
+  };
+
+  const resetHiddenStatuses = () => {
+    setHiddenTaskStatuses([]);
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(LOCAL_HIDDEN_STATUSES_KEY);
+      }
+    } catch {
+      // ignore
+    }
+    if (canEdit) {
+      onUpdatePreferences?.({ hiddenTaskStatuses: [] });
+    }
+  };
 
   const [statusOrder, setStatusOrder] = useState<UnifiedTaskStatus[]>(() => {
     if (propStatusOrder && propStatusOrder.length >= 3) {
@@ -383,6 +449,31 @@ export default function TasksProjectsView({
   }>({ open: false, initialTask: null });
 
   const [confirmDeleteTask, setConfirmDeleteTask] = useState<UnifiedTask | null>(null);
+  const [activeProjectDetail, setActiveProjectDetail] = useState<PracticalProject | null>(null);
+  const [editProjDraft, setEditProjDraft] = useState<{
+    title: string;
+    description: string;
+    deliverables: string;
+    objectives: string;
+    notes: string;
+    progressPct: number;
+    status: ProjectStatus;
+    linkedCourseId: string;
+  } | null>(null);
+
+  const openProjectDetail = (proj: PracticalProject) => {
+    setActiveProjectDetail(proj);
+    setEditProjDraft({
+      title: proj.title,
+      description: proj.description || '',
+      deliverables: proj.deliverables || '',
+      objectives: proj.objectives || '',
+      notes: proj.notes || '',
+      progressPct: proj.progressPct ?? 0,
+      status: proj.status,
+      linkedCourseId: proj.linkedCourseId ? String(proj.linkedCourseId) : '',
+    });
+  };
 
   // New Project Form
   const [showAddProject, setShowAddProject] = useState(false);
@@ -471,6 +562,9 @@ export default function TasksProjectsView({
       if (activePinCollection && !isEntityInCollection(activePinCollection, 'task', t.id)) {
         return false;
       }
+      if (statusFilter === 'all' && hiddenTaskStatuses.includes(t.status)) {
+        return false;
+      }
       if (statusFilter === 'unscheduled') return !t.scheduledDate && t.status !== 'done';
       if (statusFilter === 'scheduled') return Boolean(t.scheduledDate) && t.status !== 'done';
       if (statusFilter === 'overdue') return isTaskOverdue(t);
@@ -489,7 +583,7 @@ export default function TasksProjectsView({
       );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unifiedTasks, activeHubFilter, activePinCollection, statusFilter, todayKey, statusOrder]);
+  }, [unifiedTasks, activeHubFilter, activePinCollection, statusFilter, todayKey, statusOrder, hiddenTaskStatuses]);
 
   const unscheduledCount = useMemo(
     () => unifiedTasks.filter((t) => !t.scheduledDate && t.status !== 'done').length,
@@ -664,6 +758,7 @@ export default function TasksProjectsView({
     const hubMeta = getHubMeta(t.hubId);
     const overdue = isTaskOverdue(t);
     const contextBadge = resolveTaskContextBadge(t);
+    const recurrenceSummary = formatRecurrenceSummaryAr(t.recurrence);
     const isDraggingThis =
       draggedItem?.kind === 'task' && draggedItem.id === t.id;
     const priorityBorder =
@@ -673,9 +768,26 @@ export default function TasksProjectsView({
         ? 'border-slate-200'
         : 'border-slate-200';
 
+    const handleOpenCard = () => {
+      if (!canEdit) {
+        onRequireAuth();
+        return;
+      }
+      setTaskModalState({ open: true, initialTask: t });
+    };
+
     return (
       <article
         key={t.id}
+        role="button"
+        tabIndex={0}
+        onClick={handleOpenCard}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleOpenCard();
+          }
+        }}
         draggable={canEdit}
         onDragStart={(e) => {
           if (!canEdit) return;
@@ -692,7 +804,7 @@ export default function TasksProjectsView({
           setDraggedItem(null);
           setHoverDropStatus(null);
         }}
-        className={`bg-white border ${priorityBorder} hover:border-[#1E3A5F]/40 rounded-xl ${
+        className={`bg-white border ${priorityBorder} hover:border-[#1E3A5F]/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F] rounded-xl cursor-pointer ${
           compact ? 'p-3' : 'p-3.5'
         } flex flex-col justify-between gap-2.5 transition-all ${
           isDraggingThis ? 'opacity-45 ring-2 ring-[#1E3A5F]/40' : ''
@@ -702,14 +814,16 @@ export default function TasksProjectsView({
           {canEdit && (
             <button
               type="button"
-              onPointerDown={(e) =>
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => {
+                e.stopPropagation();
                 startPointerDrag(e, {
                   kind: 'task',
                   id: t.id,
                   title: t.title,
                   currentStatus: t.status,
-                })
-              }
+                });
+              }}
               title="اسحب وأفلت لتغيير الحالة"
               aria-label="سحب المهمة لتغيير الحالة"
               className="mt-0.5 p-0.5 text-slate-300 hover:text-[#1E3A5F] touch-none cursor-grab active:cursor-grabbing shrink-0"
@@ -721,11 +835,12 @@ export default function TasksProjectsView({
           <button
             type="button"
             disabled={!canEdit}
-            onClick={() =>
+            onClick={(e) => {
+              e.stopPropagation();
               onUpdateUnifiedTask(t.id, {
                 status: t.status === 'done' ? 'in_progress' : 'done',
-              })
-            }
+              });
+            }}
             title={t.status === 'done' ? 'إرجاع لقيد التنفيذ' : 'تفعيل كمكتمل'}
             className="mt-0.5 cursor-pointer disabled:opacity-60 shrink-0"
           >
@@ -764,6 +879,12 @@ export default function TasksProjectsView({
               ) : (
                 <span>· غير مجدولة</span>
               )}
+              {recurrenceSummary && (
+                <span className="inline-flex items-center gap-1 text-[#1E3A5F] font-medium">
+                  · <Repeat className="w-3 h-3" aria-hidden="true" />
+                  {recurrenceSummary}
+                </span>
+              )}
               {overdue && (
                 <span className="inline-flex items-center gap-0.5 font-semibold text-rose-700">
                   · <AlertTriangle className="w-3 h-3" aria-hidden="true" /> متأخرة
@@ -781,8 +902,11 @@ export default function TasksProjectsView({
         </div>
 
         {canEdit && (
-          <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-1.5">
-            {/* Quick 1-Tap Status Switcher (Follows user's Priority Order, with 1-tap مكتمل toggle) */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-1.5"
+          >
+            {/* Quick 1-Tap Status Switcher */}
             <div
               role="group"
               aria-label="تغيير حالة المهمة"
@@ -802,7 +926,10 @@ export default function TasksProjectsView({
                   <button
                     key={st}
                     type="button"
-                    onClick={() => onUpdateUnifiedTask(t.id, { status: st })}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onUpdateUnifiedTask(t.id, { status: st });
+                    }}
                     className={`px-2 py-1 text-[10px] sm:text-[11px] rounded-md whitespace-nowrap transition-colors cursor-pointer ${
                       active
                         ? activeClass
@@ -832,12 +959,13 @@ export default function TasksProjectsView({
               )}
               <button
                 type="button"
-                onClick={() =>
+                onClick={(e) => {
+                  e.stopPropagation();
                   setTaskModalState({
                     open: true,
                     initialTask: t,
-                  })
-                }
+                  });
+                }}
                 className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#1E3A5F] bg-[#F7F8FA] hover:bg-slate-200 rounded-md whitespace-nowrap cursor-pointer"
                 aria-label="تعديل وجدولة المهمة"
               >
@@ -846,7 +974,10 @@ export default function TasksProjectsView({
               </button>
               <button
                 type="button"
-                onClick={() => setConfirmDeleteTask(t)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDeleteTask(t);
+                }}
                 aria-label="حذف المهمة"
                 className="p-1 text-slate-400 hover:text-red-600 cursor-pointer"
               >
@@ -864,15 +995,26 @@ export default function TasksProjectsView({
 
   const boardColumns = useMemo(
     () =>
-      statusOrder.map((st, idx) => ({
-        status: st,
-        priorityIndex: idx + 1,
-        title: TASK_STATUS_AR[st],
-        accent: TASK_STATUS_ACCENT[st],
-        items: filteredTasks.filter((t) => t.status === st),
-      })),
-    [statusOrder, filteredTasks]
+      statusOrder
+        .filter((st) => !hiddenTaskStatuses.includes(st))
+        .map((st, idx) => ({
+          status: st,
+          priorityIndex: idx + 1,
+          title: TASK_STATUS_AR[st],
+          accent: TASK_STATUS_ACCENT[st],
+          items: filteredTasks.filter((t) => t.status === st),
+        })),
+    [statusOrder, filteredTasks, hiddenTaskStatuses]
   );
+
+  const boardGridColsClass =
+    boardColumns.length <= 1
+      ? 'grid-cols-1'
+      : boardColumns.length === 2
+      ? 'grid-cols-1 md:grid-cols-2'
+      : boardColumns.length === 3
+      ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
+      : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4';
 
   const linkedCourseDone = aggregatedCourseTasks.filter((t) => t.done).length;
   const linkedPathDone = aggregatedPathStages.filter((s) => s.done).length;
@@ -972,77 +1114,109 @@ export default function TasksProjectsView({
         />
       )}
 
-      {/* Status Priority Order Controls (Shared for Tasks & Projects) */}
+      {/* Status Priority Order & Visibility Controls */}
       <div className="bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
-            ترتيب أولوية الحالات:
+            ترتيب وإظهار الحالات:
           </span>
           <div className="flex flex-wrap items-center gap-1.5">
-            {statusOrder.map((st, idx) => (
-              <div
-                key={st}
-                draggable={canEdit}
-                onDragStart={(e) => {
-                  if (!canEdit) return;
-                  e.dataTransfer.effectAllowed = 'move';
-                  setDraggingStatusChip(st);
-                }}
-                onDragOver={(e) => {
-                  if (!draggingStatusChip || draggingStatusChip === st) return;
-                  e.preventDefault();
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (draggingStatusChip && draggingStatusChip !== st) {
-                    swapStatusOrder(draggingStatusChip, st);
-                  }
-                  setDraggingStatusChip(null);
-                }}
-                onDragEnd={() => setDraggingStatusChip(null)}
-                className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-lg border bg-[#F7F8FA] transition-colors ${
-                  draggingStatusChip === st
-                    ? 'border-[#1E3A5F] bg-[#1E3A5F]/10 opacity-70'
-                    : 'border-slate-200'
-                } ${canEdit ? 'cursor-grab active:cursor-grabbing' : ''}`}
-              >
-                <span className="font-bold text-[#1E3A5F] tabular-nums">
-                  {idx + 1}.
-                </span>
-                <span className={`font-semibold ${TASK_STATUS_ACCENT[st]}`}>
-                  {TASK_STATUS_AR[st]}
-                </span>
-                {canEdit && (
-                  <div className="inline-flex items-center gap-0.5 mr-0.5">
+            {statusOrder.map((st, idx) => {
+              const isHidden = hiddenTaskStatuses.includes(st);
+              const visibleCount = statusOrder.length - hiddenTaskStatuses.length;
+              return (
+                <div
+                  key={st}
+                  draggable={canEdit}
+                  onDragStart={(e) => {
+                    if (!canEdit) return;
+                    e.dataTransfer.effectAllowed = 'move';
+                    setDraggingStatusChip(st);
+                  }}
+                  onDragOver={(e) => {
+                    if (!draggingStatusChip || draggingStatusChip === st) return;
+                    e.preventDefault();
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (draggingStatusChip && draggingStatusChip !== st) {
+                      swapStatusOrder(draggingStatusChip, st);
+                    }
+                    setDraggingStatusChip(null);
+                  }}
+                  onDragEnd={() => setDraggingStatusChip(null)}
+                  className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-lg border transition-colors ${
+                    draggingStatusChip === st
+                      ? 'border-[#1E3A5F] bg-[#1E3A5F]/10 opacity-70'
+                      : isHidden
+                      ? 'bg-slate-100 border-slate-200 opacity-60'
+                      : 'bg-[#F7F8FA] border-slate-200'
+                  } ${canEdit ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                >
+                  <span className="font-bold text-[#1E3A5F] tabular-nums">
+                    {idx + 1}.
+                  </span>
+                  <span className={`font-semibold ${isHidden ? 'line-through text-slate-400' : TASK_STATUS_ACCENT[st]}`}>
+                    {TASK_STATUS_AR[st]}
+                  </span>
+                  {subTab === 'tasks' && (
                     <button
                       type="button"
-                      disabled={idx === 0}
-                      onClick={() => moveStatusOrder(st, -1)}
-                      title="تقديم الأولوية"
-                      aria-label={`تقديم أولوية ${TASK_STATUS_AR[st]}`}
+                      disabled={!isHidden && visibleCount <= 1}
+                      onClick={() => toggleHiddenStatus(st)}
+                      title={isHidden ? `إظهار عمود ${TASK_STATUS_AR[st]}` : `إخفاء عمود ${TASK_STATUS_AR[st]}`}
+                      aria-label={isHidden ? `إظهار ${TASK_STATUS_AR[st]}` : `إخفاء ${TASK_STATUS_AR[st]}`}
                       className="p-0.5 text-slate-500 hover:text-[#1E3A5F] disabled:opacity-30 cursor-pointer"
                     >
-                      <ArrowRight className="w-3 h-3" aria-hidden="true" />
+                      {isHidden ? (
+                        <EyeOff className="w-3 h-3" aria-hidden="true" />
+                      ) : (
+                        <Eye className="w-3 h-3" aria-hidden="true" />
+                      )}
                     </button>
-                    <button
-                      type="button"
-                      disabled={idx === statusOrder.length - 1}
-                      onClick={() => moveStatusOrder(st, 1)}
-                      title="تأخير الأولوية"
-                      aria-label={`تأخير أولوية ${TASK_STATUS_AR[st]}`}
-                      className="p-0.5 text-slate-500 hover:text-[#1E3A5F] disabled:opacity-30 cursor-pointer"
-                    >
-                      <ArrowLeft className="w-3 h-3" aria-hidden="true" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
+                  )}
+                  {canEdit && (
+                    <div className="inline-flex items-center gap-0.5 mr-0.5">
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        onClick={() => moveStatusOrder(st, -1)}
+                        title="تقديم الأولوية"
+                        aria-label={`تقديم أولوية ${TASK_STATUS_AR[st]}`}
+                        className="p-0.5 text-slate-500 hover:text-[#1E3A5F] disabled:opacity-30 cursor-pointer"
+                      >
+                        <ArrowRight className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === statusOrder.length - 1}
+                        onClick={() => moveStatusOrder(st, 1)}
+                        title="تأخير الأولوية"
+                        aria-label={`تأخير أولوية ${TASK_STATUS_AR[st]}`}
+                        className="p-0.5 text-slate-500 hover:text-[#1E3A5F] disabled:opacity-30 cursor-pointer"
+                      >
+                        <ArrowLeft className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        <div className="flex items-center justify-between sm:justify-end gap-2 text-[11px] text-slate-500">
+        <div className="flex flex-wrap items-center justify-between sm:justify-end gap-2 text-[11px] text-slate-500">
           <span>اسحب البطاقات أو الحالات لتغيير الترتيب أو الحالة</span>
+          {hiddenTaskStatuses.length > 0 && (
+            <button
+              type="button"
+              onClick={resetHiddenStatuses}
+              className="inline-flex items-center gap-1 px-2 py-1 font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-md whitespace-nowrap cursor-pointer"
+            >
+              <Eye className="w-3 h-3" aria-hidden="true" />
+              <span>إظهار الكل ({hiddenTaskStatuses.length} مخفي)</span>
+            </button>
+          )}
           {canEdit &&
             statusOrder.join(',') !== DEFAULT_TASK_STATUS_ORDER.join(',') && (
               <button
@@ -1200,7 +1374,7 @@ export default function TasksProjectsView({
               لا توجد مهام مطابقة للتصفية الحالية — اضغط «إضافة مهمة».
             </div>
           ) : effectiveLayout === 'board' ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3.5 items-start">
+            <div className={`grid ${boardGridColsClass} gap-3.5 items-start`}>
               {boardColumns.map((col, colIdx) => {
                 const isDropTarget =
                   draggedItem?.kind === 'task' && hoverDropStatus === col.status;
@@ -1324,11 +1498,28 @@ export default function TasksProjectsView({
                 const hubMeta = getHubMeta(t.hubId);
                 const overdue = isTaskOverdue(t);
                 const contextBadge = resolveTaskContextBadge(t);
+                const recurrenceSummary = formatRecurrenceSummaryAr(t.recurrence);
                 const isDraggingThis =
                   draggedItem?.kind === 'task' && draggedItem.id === t.id;
+                const handleOpenCompact = () => {
+                  if (!canEdit) {
+                    onRequireAuth();
+                    return;
+                  }
+                  setTaskModalState({ open: true, initialTask: t });
+                };
                 return (
                   <div
                     key={t.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={handleOpenCompact}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleOpenCompact();
+                      }
+                    }}
                     draggable={canEdit}
                     onDragStart={(e) => {
                       if (!canEdit) return;
@@ -1344,7 +1535,7 @@ export default function TasksProjectsView({
                       setDraggedItem(null);
                       setHoverDropStatus(null);
                     }}
-                    className={`px-3 sm:px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 hover:bg-[#F7F8FA] transition-opacity ${
+                    className={`px-3 sm:px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 hover:bg-[#F7F8FA] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#1E3A5F] cursor-pointer transition-opacity ${
                       isDraggingThis ? 'opacity-45' : ''
                     }`}
                   >
@@ -1352,14 +1543,16 @@ export default function TasksProjectsView({
                       {canEdit && (
                         <button
                           type="button"
-                          onPointerDown={(e) =>
+                          onClick={(e) => e.stopPropagation()}
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
                             startPointerDrag(e, {
                               kind: 'task',
                               id: t.id,
                               title: t.title,
                               currentStatus: t.status,
-                            })
-                          }
+                            });
+                          }}
                           aria-label="سحب المهمة"
                           className="p-0.5 text-slate-300 hover:text-[#1E3A5F] touch-none cursor-grab active:cursor-grabbing shrink-0"
                         >
@@ -1369,11 +1562,12 @@ export default function TasksProjectsView({
                       <button
                         type="button"
                         disabled={!canEdit}
-                        onClick={() =>
+                        onClick={(e) => {
+                          e.stopPropagation();
                           onUpdateUnifiedTask(t.id, {
                             status: t.status === 'done' ? 'in_progress' : 'done',
-                          })
-                        }
+                          });
+                        }}
                         className="flex items-center gap-2 text-right flex-1 min-w-0 cursor-pointer"
                       >
                         {t.status === 'done' ? (
@@ -1391,12 +1585,21 @@ export default function TasksProjectsView({
                       </button>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-[11px] text-slate-500 tabular-nums shrink-0">
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex flex-wrap items-center gap-2 sm:gap-3 text-[11px] text-slate-500 tabular-nums shrink-0"
+                    >
                       <span>{hubMeta.shortTitle}</span>
                       {t.scheduledDate && (
                         <span>
                           {t.scheduledDate}
                           {t.startTime ? ` · ${t.startTime}` : ''}
+                        </span>
+                      )}
+                      {recurrenceSummary && (
+                        <span className="inline-flex items-center gap-1 text-[#1E3A5F] font-medium">
+                          <Repeat className="w-3 h-3" aria-hidden="true" />
+                          {recurrenceSummary}
                         </span>
                       )}
                       {contextBadge && (
@@ -1872,6 +2075,15 @@ export default function TasksProjectsView({
               return (
                 <article
                   key={proj.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openProjectDetail(proj)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      openProjectDetail(proj);
+                    }
+                  }}
                   draggable={canEdit}
                   onDragStart={(e) => {
                     if (!canEdit) return;
@@ -1887,7 +2099,7 @@ export default function TasksProjectsView({
                     setDraggedItem(null);
                     setHoverDropStatus(null);
                   }}
-                  className={`bg-white border border-slate-200 hover:border-[#1E3A5F]/40 rounded-xl p-4 space-y-3 transition-all ${
+                  className={`bg-white border border-slate-200 hover:border-[#1E3A5F]/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F] rounded-xl p-4 space-y-3 transition-all cursor-pointer ${
                     isDraggingThis ? 'opacity-45 ring-2 ring-[#1E3A5F]/40' : ''
                   }`}
                 >
@@ -1896,14 +2108,16 @@ export default function TasksProjectsView({
                       {canEdit && (
                         <button
                           type="button"
-                          onPointerDown={(e) =>
+                          onClick={(e) => e.stopPropagation()}
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
                             startPointerDrag(e, {
                               kind: 'project',
                               id: proj.id,
                               title: proj.title,
                               currentStatus: projUnifiedStatus,
-                            })
-                          }
+                            });
+                          }}
                           aria-label="سحب المشروع"
                           className="mt-0.5 p-0.5 text-slate-300 hover:text-[#1E3A5F] touch-none cursor-grab active:cursor-grabbing shrink-0"
                         >
@@ -1923,7 +2137,10 @@ export default function TasksProjectsView({
                         </h3>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex items-center gap-1 shrink-0"
+                    >
                       {onTogglePinEntity && (
                         <PinEntityButton
                           entityType="project"
@@ -1956,7 +2173,10 @@ export default function TasksProjectsView({
                     />
                   )}
 
-                  <div className="space-y-1.5">
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="space-y-1.5"
+                  >
                     <div className="flex items-center justify-between text-xs">
                       <span className="text-slate-600">نسبة الإنجاز</span>
                       <span className="font-bold tabular-nums">{proj.progressPct}%</span>
@@ -1983,7 +2203,10 @@ export default function TasksProjectsView({
                     />
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs"
+                  >
                     {linkedCourse ? (
                       <button
                         type="button"
@@ -2147,10 +2370,258 @@ export default function TasksProjectsView({
         onDelete={onDeleteUnifiedTask}
       />
 
+      {/* Project Detail & Edit Modal */}
+      {activeProjectDetail && editProjDraft && (
+        <div
+          className="fixed inset-0 z-[75] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="تفاصيل المشروع التطبيقي"
+          onClick={() => setActiveProjectDetail(null)}
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!canEdit) {
+                onRequireAuth();
+                return;
+              }
+              const cleanTitle = editProjDraft.title.trim();
+              if (!cleanTitle) return;
+              onUpdateProject(activeProjectDetail.id, {
+                title: cleanTitle,
+                description: editProjDraft.description.trim(),
+                deliverables: editProjDraft.deliverables.trim(),
+                objectives: editProjDraft.objectives.trim(),
+                notes: editProjDraft.notes.trim(),
+                progressPct: editProjDraft.progressPct,
+                status: editProjDraft.status,
+                linkedCourseId: editProjDraft.linkedCourseId
+                  ? parseInt(editProjDraft.linkedCourseId, 10)
+                  : undefined,
+              });
+              setActiveProjectDetail(null);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-xl max-h-[92dvh] flex flex-col bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden"
+          >
+            <div className="px-4 sm:px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Briefcase className="w-4 h-4 text-[#1E3A5F] shrink-0" aria-hidden="true" />
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 truncate">
+                  تفاصيل المشروع التطبيقي
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveProjectDetail(null)}
+                aria-label="إغلاق"
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  اسم المشروع
+                </label>
+                <input
+                  type="text"
+                  required
+                  readOnly={!canEdit}
+                  value={editProjDraft.title}
+                  onChange={(e) =>
+                    setEditProjDraft({ ...editProjDraft, title: e.target.value })
+                  }
+                  className="w-full px-3 py-2 text-sm bg-[#F7F8FA] border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    الحالة
+                  </label>
+                  <select
+                    disabled={!canEdit}
+                    value={editProjDraft.status}
+                    onChange={(e) => {
+                      const nextSt = e.target.value as ProjectStatus;
+                      setEditProjDraft({
+                        ...editProjDraft,
+                        status: nextSt,
+                        progressPct:
+                          nextSt === 'completed'
+                            ? 100
+                            : nextSt === 'planned'
+                            ? 0
+                            : Math.max(25, editProjDraft.progressPct || 50),
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                  >
+                    <option value="planned">قيد الانتظار</option>
+                    <option value="in_progress">قيد التنفيذ</option>
+                    <option value="completed">مكتمل</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    ربط بكورس (اختياري)
+                  </label>
+                  <select
+                    disabled={!canEdit}
+                    value={editProjDraft.linkedCourseId}
+                    onChange={(e) =>
+                      setEditProjDraft({
+                        ...editProjDraft,
+                        linkedCourseId: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+                  >
+                    <option value="">بدون ربط</option>
+                    {courses.map((c) => (
+                      <option key={c.id} value={String(c.id)}>
+                        {c.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
+                  <span>نسبة الإنجاز</span>
+                  <span className="tabular-nums text-[#1E3A5F]">
+                    {editProjDraft.progressPct}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  disabled={!canEdit}
+                  value={editProjDraft.progressPct}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setEditProjDraft({
+                      ...editProjDraft,
+                      progressPct: val,
+                      status:
+                        val === 100
+                          ? 'completed'
+                          : val > 0
+                          ? 'in_progress'
+                          : 'planned',
+                    });
+                  }}
+                  className="w-full accent-[#1E3A5F]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  المخرجات المستهدفة
+                </label>
+                <input
+                  type="text"
+                  readOnly={!canEdit}
+                  value={editProjDraft.deliverables}
+                  onChange={(e) =>
+                    setEditProjDraft({
+                      ...editProjDraft,
+                      deliverables: e.target.value,
+                    })
+                  }
+                  placeholder="ما النتيجة النهائية الملموسة؟"
+                  className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  الوصف والأهداف
+                </label>
+                <textarea
+                  rows={3}
+                  readOnly={!canEdit}
+                  value={editProjDraft.description}
+                  onChange={(e) =>
+                    setEditProjDraft({
+                      ...editProjDraft,
+                      description: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 text-xs sm:text-sm bg-[#F7F8FA] border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  ملاحظات تنفيذية
+                </label>
+                <textarea
+                  rows={2}
+                  readOnly={!canEdit}
+                  value={editProjDraft.notes}
+                  onChange={(e) =>
+                    setEditProjDraft({
+                      ...editProjDraft,
+                      notes: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 text-xs sm:text-sm bg-[#F7F8FA] border border-slate-300 rounded-lg"
+                />
+              </div>
+            </div>
+
+            <div className="px-4 sm:px-5 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 shrink-0">
+              <div>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = activeProjectDetail;
+                      setActiveProjectDetail(null);
+                      setConfirmDeleteProj(target);
+                    }}
+                    className="inline-flex items-center gap-1 px-3 py-2 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>حذف</span>
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveProjectDetail(null)}
+                  className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg cursor-pointer"
+                >
+                  إغلاق
+                </button>
+                {canEdit && (
+                  <button
+                    type="submit"
+                    className="px-5 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
+                  >
+                    حفظ التعديلات
+                  </button>
+                )}
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Quick Schedule Modal for Course / Path / Plan items */}
       {quickSchedTarget && (
         <div
-          className="fixed inset-0 z-[75] bg-slate-950/60 flex items-center justify-center p-4"
+          className="fixed inset-0 z-[75] bg-slate-950/60 flex items-center justify-center p-2 sm:p-4"
           role="dialog"
           aria-modal="true"
           onClick={() => setQuickSchedTarget(null)}
@@ -2158,7 +2629,7 @@ export default function TasksProjectsView({
           <form
             onSubmit={handleSaveQuickSchedule}
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md bg-white rounded-2xl border border-slate-200 shadow-2xl p-5 space-y-4"
+            className="w-full max-w-md max-h-[92dvh] overflow-y-auto bg-white rounded-2xl border border-slate-200 shadow-2xl p-5 space-y-4"
           >
             <div className="flex items-center justify-between pb-2 border-b border-slate-200">
               <h3 className="text-sm font-bold text-slate-900">

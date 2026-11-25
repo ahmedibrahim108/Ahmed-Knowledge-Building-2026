@@ -5,6 +5,7 @@ import {
   ArrowUp,
   ArrowUpDown,
   BookOpen,
+  Check,
   CheckCircle2,
   CheckSquare,
   Download,
@@ -15,6 +16,7 @@ import {
   GraduationCap,
   Layers,
   Lock,
+  Minimize2,
   PenLine,
   Plus,
   Repeat,
@@ -29,6 +31,7 @@ import {
 import {
   BookNote,
   CustomCategory,
+  DEFAULT_HUB_CATEGORIES,
   EntitySortMode,
   HighlightColorKey,
   LEARNING_HUBS,
@@ -213,6 +216,14 @@ export default function NotesJournalView({
   const [draftNote, setDraftNote] = useState<NoteDraft | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
   const [showPrefs, setShowPrefs] = useState(false);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [manageCatHub, setManageCatHub] = useState<LearningHubId>('knowledge');
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [editingCategoryTarget, setEditingCategoryTarget] = useState<{
+    hubId: LearningHubId;
+    oldName: string;
+  } | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState('');
 
   // Filters
   const [localHubFilter, setLocalHubFilter] = useState<LearningHubId | 'all'>(
@@ -488,6 +499,83 @@ export default function NotesJournalView({
       return false;
     }
     return true;
+  };
+
+  const resolvedHubCategories = useMemo<Record<LearningHubId, string[]>>(() => {
+    const base = preferences.hubCategories || hubCategories || DEFAULT_HUB_CATEGORIES;
+    return {
+      marketing: base.marketing || DEFAULT_HUB_CATEGORIES.marketing,
+      dental_career: base.dental_career || DEFAULT_HUB_CATEGORIES.dental_career,
+      knowledge: base.knowledge || DEFAULT_HUB_CATEGORIES.knowledge,
+    };
+  }, [preferences.hubCategories, hubCategories]);
+
+  const handleAddCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!requireEdit()) return;
+    const trimmed = newCategoryName.trim();
+    if (!trimmed) return;
+    const currentList = resolvedHubCategories[manageCatHub] || [];
+    if (currentList.includes(trimmed)) {
+      setNewCategoryName('');
+      return;
+    }
+    onUpdatePreferences({
+      hubCategories: {
+        ...resolvedHubCategories,
+        [manageCatHub]: [...currentList, trimmed],
+      },
+    });
+    setNewCategoryName('');
+  };
+
+  const handleSaveCategoryRename = () => {
+    if (!requireEdit() || !editingCategoryTarget) return;
+    const { hubId, oldName } = editingCategoryTarget;
+    const trimmed = editingCategoryName.trim();
+    if (!trimmed || trimmed === oldName) {
+      setEditingCategoryTarget(null);
+      setEditingCategoryName('');
+      return;
+    }
+    const currentList = resolvedHubCategories[hubId] || [];
+    const nextList = Array.from(
+      new Set(currentList.map((c) => (c === oldName ? trimmed : c)))
+    );
+    onUpdatePreferences({
+      hubCategories: {
+        ...resolvedHubCategories,
+        [hubId]: nextList,
+      },
+    });
+    bookNotes.forEach((bn) => {
+      if ((bn.categoryLabel || '') === oldName) {
+        onUpdateBookNote(bn.id, { categoryLabel: trimmed });
+      }
+    });
+    if (categoryFilter === oldName) setCategoryFilter(trimmed);
+    if (categoryLabel === oldName) setCategoryLabel(trimmed);
+    setEditingCategoryTarget(null);
+    setEditingCategoryName('');
+  };
+
+  const handleDeleteCategory = (hubId: LearningHubId, catName: string) => {
+    if (!requireEdit()) return;
+    const currentList = resolvedHubCategories[hubId] || [];
+    const nextList = currentList.filter((c) => c !== catName);
+    onUpdatePreferences({
+      hubCategories: {
+        ...resolvedHubCategories,
+        [hubId]: nextList,
+      },
+    });
+    bookNotes.forEach((bn) => {
+      if ((bn.categoryLabel || '') === catName && (bn.hubId || 'knowledge') === hubId) {
+        onUpdateBookNote(bn.id, { categoryLabel: '' });
+      }
+    });
+    if (categoryFilter === catName) setCategoryFilter('all');
+    if (categoryLabel === catName) setCategoryLabel('');
   };
 
   const handleMoveNoteOrder = (
@@ -1227,6 +1315,14 @@ export default function NotesJournalView({
                 onSelectDefaultHighlight={(color) => {
                   if (canEdit) onUpdatePreferences({ noteHighlightColor: color });
                 }}
+                minimalMode={Boolean(preferences.minimalWritingMode)}
+                onToggleMinimalMode={() =>
+                  onUpdatePreferences({
+                    minimalWritingMode: !preferences.minimalWritingMode,
+                  })
+                }
+                voiceDialect={preferences.voiceDialect}
+                onLogVoiceNote={() => onLogVoiceNote?.(standaloneNote.bookTitle)}
                 minHeightClass="min-h-[280px]"
               />
             ) : (
@@ -1323,6 +1419,16 @@ export default function NotesJournalView({
                     if (canEdit)
                       onUpdatePreferences({ noteHighlightColor: color });
                   }}
+                  minimalMode={Boolean(preferences.minimalWritingMode)}
+                  onToggleMinimalMode={() =>
+                    onUpdatePreferences({
+                      minimalWritingMode: !preferences.minimalWritingMode,
+                    })
+                  }
+                  voiceDialect={preferences.voiceDialect}
+                  onLogVoiceNote={() =>
+                    onLogVoiceNote?.(`${standaloneNote.bookTitle} (اقتباسات)`)
+                  }
                   minHeightClass="min-h-[120px]"
                 />
               ) : (
@@ -1495,6 +1601,19 @@ export default function NotesJournalView({
 
           <button
             type="button"
+            onClick={() => setShowCategoryManager((v) => !v)}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              showCategoryManager
+                ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                : 'bg-white text-slate-800 border-slate-200 hover:bg-slate-50'
+            }`}
+          >
+            <Tag className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>إدارة التصنيفات</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setShowPrefs((v) => !v)}
             className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               showPrefs
@@ -1603,6 +1722,148 @@ export default function NotesJournalView({
             compact
           />
         )}
+
+      {/* Collapsible Category / Section CRUD Drawer */}
+      {showCategoryManager && (
+        <section className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">
+                إدارة أقسام وتصنيفات التلخيص
+              </h2>
+              <p className="text-xs text-slate-500">
+                أضف أقسامًا وتصنيفات جديدة أو أعد تسميتها أو احذفها؛ ينعكس التعديل تلقائيًا على الملاحظات المرتبطة.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowCategoryManager(false)}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-slate-600 hover:text-slate-900 bg-slate-100 rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>إغلاق</span>
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {LEARNING_HUBS.map((hub) => (
+              <button
+                key={hub.id}
+                type="button"
+                onClick={() => {
+                  setManageCatHub(hub.id);
+                  setEditingCategoryTarget(null);
+                }}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border cursor-pointer ${
+                  manageCatHub === hub.id
+                    ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                {hub.shortTitle}
+              </button>
+            ))}
+          </div>
+
+          {canEdit && (
+            <form onSubmit={handleAddCategory} className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                placeholder="اسم القسم أو التصنيف الجديد..."
+                className="flex-1 min-w-[200px] px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-[#1E3A5F]"
+              />
+              <button
+                type="submit"
+                disabled={!newCategoryName.trim()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg disabled:opacity-50 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>إضافة تصنيف</span>
+              </button>
+            </form>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {(resolvedHubCategories[manageCatHub] || []).map((cat) => {
+              const isEditing =
+                editingCategoryTarget?.hubId === manageCatHub &&
+                editingCategoryTarget?.oldName === cat;
+              return (
+                <div
+                  key={cat}
+                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200"
+                >
+                  {isEditing ? (
+                    <input
+                      type="text"
+                      value={editingCategoryName}
+                      onChange={(e) => setEditingCategoryName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleSaveCategoryRename();
+                        }
+                        if (e.key === 'Escape') {
+                          setEditingCategoryTarget(null);
+                          setEditingCategoryName('');
+                        }
+                      }}
+                      className="flex-1 min-w-0 px-2 py-1 text-xs bg-white border border-[#1E3A5F] rounded"
+                      autoFocus
+                    />
+                  ) : (
+                    <span className="text-xs font-medium text-slate-800 truncate">
+                      {cat}
+                    </span>
+                  )}
+
+                  {canEdit && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      {isEditing ? (
+                        <button
+                          type="button"
+                          onClick={handleSaveCategoryRename}
+                          title="حفظ الاسم الجديد"
+                          className="p-1.5 text-emerald-700 hover:bg-emerald-50 rounded cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingCategoryTarget({
+                              hubId: manageCatHub,
+                              oldName: cat,
+                            });
+                            setEditingCategoryName(cat);
+                          }}
+                          title="إعادة تسمية"
+                          aria-label={`إعادة تسمية ${cat}`}
+                          className="p-1.5 text-slate-500 hover:text-[#1E3A5F] hover:bg-slate-200/70 rounded cursor-pointer"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCategory(manageCatHub, cat)}
+                        title="حذف التصنيف"
+                        aria-label={`حذف ${cat}`}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* Collapsible Personalization Drawer */}
       {showPrefs && (

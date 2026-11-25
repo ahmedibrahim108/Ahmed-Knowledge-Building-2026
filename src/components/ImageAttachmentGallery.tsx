@@ -390,7 +390,7 @@ function ImageAttachmentGalleryInner({
                       onError={() => void handleImageLoadError(img)}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                     />
-                    <span className="absolute bottom-1.5 left-1.5 p-1 rounded-md bg-slate-900/65 text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span className="absolute bottom-1.5 left-1.5 p-1 rounded-md bg-slate-900/75 text-white opacity-90 group-hover:opacity-100 transition-opacity">
                       <ZoomIn className="w-3 h-3" aria-hidden="true" />
                     </span>
                   </button>

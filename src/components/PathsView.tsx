@@ -12,6 +12,7 @@ import {
   ListTodo,
   Lock,
   Plus,
+  Repeat,
   Square,
   Trash2,
 } from 'lucide-react';
@@ -44,6 +45,7 @@ import {
 } from './PinCollectionsBar';
 import SpacedRepetitionPanel from './SpacedRepetitionPanel';
 import TaskFormModal from './TaskFormModal';
+import { formatRecurrenceSummaryAr } from '../utils/taskRecurrence';
 
 interface PathsViewProps {
   canEdit: boolean;
@@ -668,7 +670,7 @@ export default function PathsView({
                 لا توجد مراحل مضافة بعد. أضف أول مرحلة لتحويل المسار إلى خطوات واضحة.
               </p>
             ) : (
-              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden">
+              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl max-h-[320px] overflow-y-auto thin-scrollbar">
                 {selectedPath.stages.map((stage, idx) => {
                   const canonicalKey = `path:${selectedPath.id}:${stage.id}`;
                   const linkedSched = unifiedTasks.find(
@@ -938,38 +940,79 @@ export default function PathsView({
                 لا توجد مهام مجدولة لهذا المسار بعد — أضف مهمة أدناه أو استخدم زر «جدولة» بجانب أي مرحلة.
               </p>
             ) : (
-              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden">
+              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl max-h-[320px] overflow-y-auto thin-scrollbar">
                 {linkedPathTasks.map((ut) => {
                   const isDone = ut.status === 'done';
+                  const recSummary = formatRecurrenceSummaryAr(ut.recurrence);
                   return (
                     <div
                       key={ut.id}
-                      className="px-3.5 py-2.5 bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-                    >
-                      <button
-                        type="button"
-                        disabled={!canEdit || !onUpdateUnifiedTask}
-                        onClick={() =>
-                          onUpdateUnifiedTask?.(ut.id, {
-                            status: isDone ? 'todo' : 'done',
-                          })
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => {
+                        if (!canEdit || !onUpdateUnifiedTask) {
+                          if (!canEdit) onRequireAuth();
+                          return;
                         }
-                        className="flex items-start gap-2.5 text-right flex-1 min-w-0 cursor-pointer disabled:opacity-60"
-                      >
-                        {isDone ? (
-                          <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" aria-hidden="true" />
-                        ) : (
-                          <Square className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" aria-hidden="true" />
-                        )}
-                        <span
-                          className={`text-xs leading-relaxed break-words min-w-0 ${
-                            isDone ? 'line-through text-slate-400' : 'text-slate-800 font-medium'
-                          }`}
+                        setTaskModalState({
+                          open: true,
+                          initialTask: ut,
+                        });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          if (!canEdit || !onUpdateUnifiedTask) {
+                            if (!canEdit) onRequireAuth();
+                            return;
+                          }
+                          setTaskModalState({
+                            open: true,
+                            initialTask: ut,
+                          });
+                        }
+                      }}
+                      className="px-3.5 py-2.5 bg-white hover:bg-slate-50/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#1E3A5F]"
+                    >
+                      <div className="flex items-start gap-2.5 text-right flex-1 min-w-0">
+                        <button
+                          type="button"
+                          disabled={!canEdit || !onUpdateUnifiedTask}
+                          aria-label={isDone ? 'إعادة المهمة لقيد التنفيذ' : 'تمييز المهمة كمكتملة'}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onUpdateUnifiedTask?.(ut.id, {
+                              status: isDone ? 'todo' : 'done',
+                            });
+                          }}
+                          className="mt-0.5 shrink-0 cursor-pointer disabled:opacity-60"
                         >
-                          {ut.title}
-                        </span>
-                      </button>
-                      <div className="flex items-center gap-2 pr-6 sm:pr-0 shrink-0">
+                          {isDone ? (
+                            <CheckSquare className="w-4 h-4 text-emerald-700" aria-hidden="true" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-400" aria-hidden="true" />
+                          )}
+                        </button>
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <span
+                            className={`text-xs leading-relaxed break-words block ${
+                              isDone ? 'line-through text-slate-400' : 'text-slate-800 font-medium'
+                            }`}
+                          >
+                            {ut.title}
+                          </span>
+                          {recSummary && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-[#1E3A5F]">
+                              <Repeat className="w-3 h-3" aria-hidden="true" />
+                              <span>{recSummary}</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex items-center gap-2 pr-6 sm:pr-0 shrink-0"
+                      >
                         {(ut.scheduledDate || ut.dueDate) && (
                           <span className="inline-flex items-center gap-1 text-[11px] text-[#1E3A5F] font-medium tabular-nums">
                             <Calendar className="w-3 h-3" aria-hidden="true" />
@@ -1360,13 +1403,30 @@ export default function PathsView({
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div
+          className={`grid gap-5 ${
+            filteredPaths.length === 1
+              ? 'grid-cols-1 max-w-2xl'
+              : filteredPaths.length === 2
+              ? 'grid-cols-1 md:grid-cols-2'
+              : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+          }`}
+        >
           {filteredPaths.map((path, pathIdx) => {
             const hubMeta = getHubMeta(path.hubId);
             return (
               <article
                 key={path.id}
-                className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-4 hover:border-slate-300 transition-colors"
+                role="button"
+                tabIndex={0}
+                onClick={() => setSelectedPathId(path.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setSelectedPathId(path.id);
+                  }
+                }}
+                className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-4 hover:border-[#1E3A5F]/50 transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F]"
               >
                 <div className="space-y-3">
                   <div className="flex items-start justify-between gap-2">
@@ -1386,15 +1446,9 @@ export default function PathsView({
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setSelectedPathId(path.id)}
-                    className="text-right block w-full cursor-pointer group"
-                  >
-                    <h2 className="text-base font-bold text-slate-900 group-hover:text-[#1E3A5F] transition-colors">
-                      <BidiText text={path.title} />
-                    </h2>
-                  </button>
+                  <h2 className="text-base font-bold text-slate-900 group-hover:text-[#1E3A5F] transition-colors">
+                    <BidiText text={path.title} />
+                  </h2>
 
                   {path.categoryLabel && (
                     <p className="text-[11px] text-slate-500">{path.categoryLabel}</p>
@@ -1424,14 +1478,13 @@ export default function PathsView({
                   </div>
 
                   <div className="flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPathId(path.id)}
-                      className="text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-                    >
+                    <span className="text-xs font-semibold text-[#1E3A5F] group-hover:underline">
                       فتح المسار والمراحل ←
-                    </button>
-                    <div className="flex items-center gap-1">
+                    </span>
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex items-center gap-1"
+                    >
                       {onTogglePinEntity && (
                         <PinEntityButton
                           entityType="path"

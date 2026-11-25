@@ -1,0 +1,159 @@
+import { flushQuickDropQueue } from '../services/quickDropSync';
+import { executeQueuedSupabaseMutation } from '../services/supabaseSync';
+import {
+  refreshPendingAudioCount,
+  syncPendingAudioClipsToCloud,
+} from './audioCache';
+import {
+  refreshPendingImagesCount,
+  syncPendingImagesToCloud,
+  syncPendingJournalCoversToCloud,
+} from './imageStorage';
+import {
+  getOfflineOutbox,
+  getOfflineSyncState,
+  isAppOnline,
+  isNetworkOrOfflineError,
+  removeOfflineMutation,
+  updateOfflineSyncState,
+} from './offlineQueue';
+
+let activeSyncPromise: Promise<{
+  syncedCount: number;
+  remainingCount: number;
+}> | null = null;
+
+export async function refreshAllOfflinePendingCounts(): Promise<void> {
+  await Promise.allSettled([
+    refreshPendingImagesCount(),
+    refreshPendingAudioCount(),
+  ]);
+}
+
+export async function flushSupabaseOutbox(uid: string): Promise<number> {
+  if (!uid || !isAppOnline()) return 0;
+  const queue = getOfflineOutbox(uid);
+  if (queue.length === 0) return 0;
+
+  let flushed = 0;
+  for (const mut of queue) {
+    try {
+      await executeQueuedSupabaseMutation(mut);
+      removeOfflineMutation(uid, mut.id);
+      flushed += 1;
+    } catch (err) {
+      if (isNetworkOrOfflineError(err)) {
+        break;
+      }
+      // Keep non-network failure logged and move on
+      console.warn('Offline mutation flush failed:', mut.table, err);
+    }
+  }
+  return flushed;
+}
+
+export async function syncAllPendingOfflineChanges(
+  uidOverride?: string | null
+): Promise<{ syncedCount: number; remainingCount: number }> {
+  const uid = uidOverride || getOfflineSyncState().activeUid;
+  if (!uid) {
+    return { syncedCount: 0, remainingCount: 0 };
+  }
+  if (!isAppOnline()) {
+    updateOfflineSyncState({
+      isOnline: false,
+      lastSyncError: 'لا يوجد اتصال بالإنترنت حاليًا. سيتم الاحتفاظ بالتعديلات حتى يعود الاتصال.',
+    });
+    return {
+      syncedCount: 0,
+      remainingCount: getOfflineSyncState().totalPendingCount,
+    };
+  }
+  if (activeSyncPromise) return activeSyncPromise;
+
+  activeSyncPromise = (async () => {
+    updateOfflineSyncState({
+      isSyncing: true,
+      lastSyncError: null,
+      lastSyncMessage: 'جاري مزامنة التعديلات والملفات مع قاعدة البيانات...',
+    });
+
+    let syncedCount = 0;
+    try {
+      const [outboxSynced, qdSynced, imgSynced, coverSynced, audioSynced] =
+        await Promise.all([
+          flushSupabaseOutbox(uid),
+          flushQuickDropQueue(uid).catch(() => 0),
+          syncPendingImagesToCloud(uid).catch(() => 0),
+          syncPendingJournalCoversToCloud(uid).catch(() => 0),
+          syncPendingAudioClipsToCloud(uid).catch(() => 0),
+        ]);
+
+      syncedCount =
+        outboxSynced + qdSynced + imgSynced + coverSynced + audioSynced;
+
+      await refreshAllOfflinePendingCounts();
+      const remaining = getOfflineSyncState().totalPendingCount;
+
+      updateOfflineSyncState({
+        isSyncing: false,
+        lastSyncedAtMs: Date.now(),
+        lastSyncMessage:
+          remaining === 0
+            ? syncedCount > 0
+              ? `تمت مزامنة ${syncedCount} عناصر مع قاعدة البيانات بنجاح.`
+              : 'كل بياناتك متزامنة مع قاعدة البيانات.'
+            : `تمت مزامنة ${syncedCount} عناصر وبقي ${remaining} بانتظار المزامنة.`,
+      });
+
+      return { syncedCount, remainingCount: remaining };
+    } catch (err) {
+      updateOfflineSyncState({
+        isSyncing: false,
+        lastSyncError:
+          err instanceof Error
+            ? err.message
+            : 'تعذرت المزامنة الكاملة؛ يمكنك المحاولة مرة أخرى.',
+      });
+      return {
+        syncedCount,
+        remainingCount: getOfflineSyncState().totalPendingCount,
+      };
+    } finally {
+      activeSyncPromise = null;
+    }
+  })();
+
+  return activeSyncPromise;
+}
+
+let autoListenerBound = false;
+export function initOfflineAutoSyncListener(
+  onSyncCompleted?: () => void
+): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const handleOnline = () => {
+    const state = getOfflineSyncState();
+    if (state.activeUid && state.totalPendingCount > 0) {
+      void syncAllPendingOfflineChanges(state.activeUid).then((res) => {
+        if (res.syncedCount > 0) {
+          onSyncCompleted?.();
+        }
+      });
+    }
+  };
+  const handleMediaChange = () => {
+    void refreshAllOfflinePendingCounts();
+  };
+
+  if (!autoListenerBound) {
+    autoListenerBound = true;
+    void refreshAllOfflinePendingCounts();
+  }
+  window.addEventListener('online', handleOnline);
+  window.addEventListener('mizan-offline-media-changed', handleMediaChange);
+  return () => {
+    window.removeEventListener('online', handleOnline);
+    window.removeEventListener('mizan-offline-media-changed', handleMediaChange);
+  };
+}

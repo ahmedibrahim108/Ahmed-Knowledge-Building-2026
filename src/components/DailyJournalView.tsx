@@ -7,16 +7,23 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  CloudOff,
+  Eye,
+  EyeOff,
   Layers,
   LayoutGrid,
   ListTree,
   Maximize2,
   PauseCircle,
   PenLine,
+  Quote,
+  RefreshCw,
   Save,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import {
+  ActivityEntityType,
   DEFAULT_USER_PREFERENCES,
   DailyJournalRecord,
   LearningHubMeta,
@@ -31,6 +38,11 @@ import {
   subscribeUserAudioClips,
 } from '../utils/audioCache';
 import {
+  QUOTE_COLOR_THEMES,
+  resolveEffectiveDailyQuote,
+  rotateDailyQuoteFromLibrary,
+} from '../utils/dailyQuotes';
+import {
   StoredImageRecord,
   subscribeJournalImagesSummary,
 } from '../utils/imageStorage';
@@ -40,6 +52,12 @@ import {
   WorkspaceAnalyticsInput,
   buildDailyJournalSummary,
 } from '../utils/journalAnalytics';
+import {
+  OfflineSyncState,
+  getOfflineSyncState,
+  subscribeOfflineSyncState,
+} from '../utils/offlineQueue';
+import { syncAllPendingOfflineChanges } from '../utils/offlineSync';
 import AutoResizeTextarea from './AutoResizeTextarea';
 import JournalDayModal from './JournalDayModal';
 import JournalGalleryView from './JournalGalleryView';
@@ -57,21 +75,36 @@ interface DailyJournalViewProps {
   onRequireAuth: () => void;
   onSaveDailyJournal: (rec: DailyJournalRecord) => void;
   onOpenEntity: (action: JournalNavAction) => void;
+  onDeleteActivityLog?: (entryId: string) => void;
   hubs?: LearningHubMeta[];
   externalOpenDayKey?: string | null;
   onConsumeExternalOpenDayKey?: () => void;
 }
 
-function statusPillClass(tone: DailyJournalItem['statusTone']): string {
+const TIMELINE_CATEGORY_FILTERS: Array<{
+  type: ActivityEntityType;
+  label: string;
+}> = [
+  { type: 'task', label: 'المهام' },
+  { type: 'course_task', label: 'دروس الكورسات' },
+  { type: 'book_note', label: 'التلخيصات' },
+  { type: 'reflection', label: 'الخواطر' },
+  { type: 'blog_post', label: 'المقالات' },
+  { type: 'calendar_event', label: 'التقويم' },
+  { type: 'meeting', label: 'اللقاءات' },
+  { type: 'course', label: 'الكورسات' },
+];
+
+function statusToneTextClass(tone: DailyJournalItem['statusTone']): string {
   switch (tone) {
     case 'emerald':
-      return 'bg-emerald-50 text-emerald-800 border-emerald-200';
+      return 'text-emerald-700 dark:text-emerald-400';
     case 'amber':
-      return 'bg-amber-50 text-amber-800 border-amber-200';
+      return 'text-amber-700 dark:text-amber-400';
     case 'blue':
-      return 'bg-sky-50 text-sky-900 border-sky-200';
+      return 'text-[#1E3A5F] dark:text-sky-300';
     default:
-      return 'bg-slate-100 text-slate-700 border-slate-200';
+      return 'text-slate-600 dark:text-slate-300';
   }
 }
 
@@ -85,6 +118,7 @@ export default function DailyJournalView({
   onRequireAuth,
   onSaveDailyJournal,
   onOpenEntity,
+  onDeleteActivityLog,
   externalOpenDayKey,
   onConsumeExternalOpenDayKey,
 }: DailyJournalViewProps) {
@@ -98,6 +132,9 @@ export default function DailyJournalView({
 
   const [journalImages, setJournalImages] = useState<StoredImageRecord[]>([]);
   const [savedAudioClips, setSavedAudioClips] = useState<SavedAudioClipSummary[]>([]);
+  const [syncState, setSyncState] = useState<OfflineSyncState>(() =>
+    getOfflineSyncState()
+  );
 
   useEffect(() => {
     if (!externalOpenDayKey) return;
@@ -110,9 +147,11 @@ export default function DailyJournalView({
   useEffect(() => {
     const unsubImages = subscribeJournalImagesSummary(uid, setJournalImages);
     const unsubAudio = subscribeUserAudioClips(uid, setSavedAudioClips);
+    const unsubSync = subscribeOfflineSyncState(setSyncState);
     return () => {
       unsubImages();
       unsubAudio();
+      unsubSync();
     };
   }, [uid]);
 
@@ -134,9 +173,32 @@ export default function DailyJournalView({
     setHighlightsDraft(existingRecord?.highlightsText || '');
   }, [selectedDateKey, existingRecord?.reflectionText, existingRecord?.highlightsText]);
 
+  const hiddenActivityIds = preferences?.hiddenActivityIds || [];
+  const hiddenActivityTypes = preferences?.hiddenActivityTypes || [];
+
   const summary = useMemo(
-    () => buildDailyJournalSummary(selectedDateKey, analyticsInput),
-    [selectedDateKey, analyticsInput]
+    () =>
+      buildDailyJournalSummary(selectedDateKey, analyticsInput, {
+        hiddenActivityIds,
+        hiddenActivityTypes,
+      }),
+    [selectedDateKey, analyticsInput, hiddenActivityIds, hiddenActivityTypes]
+  );
+
+  const resolvedQuote = useMemo(
+    () =>
+      resolveEffectiveDailyQuote({
+        dateKey: selectedDateKey,
+        journalQuote: existingRecord?.dailyQuote,
+        quotesLibrary: preferences?.quotesLibrary,
+        pinnedDailyQuoteId: preferences?.pinnedDailyQuoteId,
+      }),
+    [
+      selectedDateKey,
+      existingRecord?.dailyQuote,
+      preferences?.quotesLibrary,
+      preferences?.pinnedDailyQuoteId,
+    ]
   );
 
   // Recent active calendar days for quick switcher
@@ -159,10 +221,54 @@ export default function DailyJournalView({
       highlightsText: highlightsDraft,
       moodLabel: existingRecord?.moodLabel,
       energyScore: existingRecord?.energyScore,
+      dailyQuote: existingRecord?.dailyQuote || resolvedQuote.quote,
       updatedAtMs: Date.now(),
     });
     setSavedToast(true);
     window.setTimeout(() => setSavedToast(false), 2200);
+  };
+
+  const handleRotateDayQuote = () => {
+    if (!canEdit) return onRequireAuth();
+    const rotated = rotateDailyQuoteFromLibrary(
+      selectedDateKey,
+      resolvedQuote.quote.text,
+      preferences?.quotesLibrary || []
+    );
+    if (preferences?.pinnedDailyQuoteId && onUpdatePreferences) {
+      onUpdatePreferences({ pinnedDailyQuoteId: null });
+    }
+    onSaveDailyJournal({
+      ...(existingRecord || {}),
+      dateKey: selectedDateKey,
+      reflectionText: reflectionDraft,
+      highlightsText: highlightsDraft,
+      dailyQuote: rotated.quote,
+      updatedAtMs: Date.now(),
+    });
+  };
+
+  const handleToggleFilterType = (entityType: ActivityEntityType) => {
+    if (!canEdit) return onRequireAuth();
+    if (!onUpdatePreferences) return;
+    const isHidden = hiddenActivityTypes.includes(entityType);
+    const nextTypes = isHidden
+      ? hiddenActivityTypes.filter((t) => t !== entityType)
+      : [...hiddenActivityTypes, entityType];
+    onUpdatePreferences({ hiddenActivityTypes: nextTypes });
+  };
+
+  const handleHideTimelineItem = (item: DailyJournalItem) => {
+    if (!canEdit) return onRequireAuth();
+    if (!onUpdatePreferences) return;
+    const nextIds = Array.from(new Set([...hiddenActivityIds, item.key]));
+    onUpdatePreferences({ hiddenActivityIds: nextIds });
+  };
+
+  const handleResetHiddenFilters = () => {
+    if (!canEdit) return onRequireAuth();
+    if (!onUpdatePreferences) return;
+    onUpdatePreferences({ hiddenActivityIds: [], hiddenActivityTypes: [] });
   };
 
   const activeModalRecord = useMemo(
@@ -174,32 +280,41 @@ export default function DailyJournalView({
   );
 
   const renderEntryCard = (item: DailyJournalItem) => (
-    <button
+    <div
       key={item.key}
-      type="button"
+      role="button"
+      tabIndex={0}
       onClick={() => onOpenEntity(item.navAction)}
-      className="w-full text-right p-3 rounded-xl bg-[#F7F8FA] hover:bg-white border border-slate-200 hover:border-[#1E3A5F]/40 transition-colors flex flex-wrap items-center justify-between gap-2 cursor-pointer group"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpenEntity(item.navAction);
+        }
+      }}
+      className="w-full text-right p-3 rounded-xl bg-[#F7F8FA] hover:bg-white border border-slate-200 hover:border-[#1E3A5F]/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F] transition-colors flex flex-wrap items-center justify-between gap-2 cursor-pointer group"
     >
       <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
           <span
             className="w-2 h-2 rounded-full shrink-0"
             style={{ backgroundColor: item.hubAccentHex }}
           />
-          <span className="text-[11px] font-semibold text-slate-600">
-            {item.typeLabel}
-          </span>
-          <span className="text-[11px] text-slate-400">·</span>
-          <span className="text-[11px] text-slate-600">{item.hubTitle}</span>
+          <span className="font-semibold text-slate-700">{item.typeLabel}</span>
+          <span aria-hidden="true">·</span>
+          <span>{item.hubTitle}</span>
           {item.timeLabel && (
             <>
-              <span className="text-[11px] text-slate-400">·</span>
-              <span className="inline-flex items-center gap-1 text-[11px] text-slate-500 tabular-nums">
+              <span aria-hidden="true">·</span>
+              <span className="inline-flex items-center gap-1 tabular-nums">
                 <Clock className="w-3 h-3" aria-hidden="true" />
                 {item.timeLabel}
               </span>
             </>
           )}
+          <span aria-hidden="true">·</span>
+          <span className={`font-semibold ${statusToneTextClass(item.statusTone)}`}>
+            {item.statusLabel}
+          </span>
         </div>
         <p className="text-sm font-bold text-slate-900 group-hover:text-[#1E3A5F] truncate">
           {item.title}
@@ -209,24 +324,87 @@ export default function DailyJournalView({
         )}
       </div>
 
-      <div className="flex items-center gap-2 shrink-0">
-        <span
-          className={`px-2.5 py-0.5 text-[11px] font-semibold rounded-md border ${statusPillClass(
-            item.statusTone
-          )}`}
-        >
-          {item.statusLabel}
-        </span>
+      <div className="flex items-center gap-1 shrink-0">
+        {onUpdatePreferences && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleHideTimelineItem(item);
+            }}
+            title="إخفاء من السجل"
+            aria-label={`إخفاء ${item.title} من السجل`}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 transition-colors cursor-pointer"
+          >
+            <EyeOff className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        )}
+        {item.activityLogId && onDeleteActivityLog && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!canEdit) return onRequireAuth();
+              onDeleteActivityLog(item.activityLogId!);
+            }}
+            title="حذف من سجل النشاط"
+            aria-label={`حذف ${item.title} من سجل النشاط`}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        )}
         <ArrowLeft
-          className="w-4 h-4 text-slate-400 group-hover:text-[#1E3A5F] transition-transform group-hover:-translate-x-0.5"
+          className="w-4 h-4 text-slate-400 group-hover:text-[#1E3A5F] transition-transform group-hover:-translate-x-0.5 mr-1"
           aria-hidden="true"
         />
       </div>
-    </button>
+    </div>
   );
 
+  const quoteColorTheme =
+    (resolvedQuote.customQuote?.colorKey &&
+      QUOTE_COLOR_THEMES[resolvedQuote.customQuote.colorKey]) ||
+    QUOTE_COLOR_THEMES.amber;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      {/* Offline / Pending Database Sync Banner */}
+      {(!syncState.isOnline || syncState.totalPendingCount > 0) && (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 rounded-2xl border border-amber-200 bg-amber-50/90 text-amber-950">
+          <div className="flex items-center gap-2.5 text-xs">
+            <CloudOff className="w-4 h-4 text-amber-700 shrink-0" aria-hidden="true" />
+            <div>
+              <p className="font-bold">
+                {syncState.isOnline
+                  ? `يوجد ${syncState.totalPendingCount} تعديلات أو ملفات محفوظة محليًا بانتظار المزامنة`
+                  : 'أنت تعمل حاليًا دون اتصال بالإنترنت — تُحفظ اليوميات والصور محليًا'}
+              </p>
+              {syncState.lastSyncError && (
+                <p className="text-[11px] text-rose-700 mt-0.5">{syncState.lastSyncError}</p>
+              )}
+            </div>
+          </div>
+          {syncState.isOnline && uid && (
+            <button
+              type="button"
+              disabled={syncState.isSyncing}
+              onClick={() => void syncAllPendingOfflineChanges(uid)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#1E3A5F] text-white hover:bg-[#162C49] disabled:opacity-60 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${syncState.isSyncing ? 'animate-spin' : ''}`}
+                aria-hidden="true"
+              />
+              <span>
+                {syncState.isSyncing
+                  ? 'جاري المزامنة...'
+                  : 'مزامنة مع قاعدة البيانات الآن'}
+              </span>
+            </button>
+          )}
+        </div>
+      )}
       {/* Journal Mode Navigation: Dashboard vs Visual Gallery */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white border border-slate-200 rounded-2xl p-2.5 sm:px-4">
         <div
@@ -419,44 +597,90 @@ export default function DailyJournalView({
           </div>
         </div>
 
-        {/* View Mode Switcher (3 required views) */}
-        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
-          <button
-            type="button"
-            onClick={() => setViewMode('timeline')}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border cursor-pointer ${
-              viewMode === 'timeline'
-                ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-                : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
-            }`}
-          >
-            <Clock className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>التسلسل الزمني</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('by_category')}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border cursor-pointer ${
-              viewMode === 'by_category'
-                ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-                : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>حسب المسار والتصنيف</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('overview')}
-            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border cursor-pointer ${
-              viewMode === 'overview'
-                ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
-                : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
-            }`}
-          >
-            <ListTree className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>نظرة عامة لليوم</span>
-          </button>
+        {/* View Mode Switcher + Category Visibility Filter */}
+        <div className="space-y-3 pt-2 border-t border-slate-100">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setViewMode('timeline')}
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
+                  viewMode === 'timeline'
+                    ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                    : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>التسلسل الزمني</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('by_category')}
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
+                  viewMode === 'by_category'
+                    ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                    : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>حسب المسار والتصنيف</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('overview')}
+                className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border whitespace-nowrap shrink-0 cursor-pointer ${
+                  viewMode === 'overview'
+                    ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                    : 'bg-[#F7F8FA] text-slate-700 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                <ListTree className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>نظرة عامة لليوم</span>
+              </button>
+            </div>
+
+            {(hiddenActivityIds.length > 0 || hiddenActivityTypes.length > 0) &&
+              onUpdatePreferences && (
+                <button
+                  type="button"
+                  onClick={handleResetHiddenFilters}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-semibold text-[#1E3A5F] bg-[#F0F4F9] hover:bg-[#E3ECF6] whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>
+                    إظهار الكل (
+                    {hiddenActivityIds.length > 0
+                      ? `${hiddenActivityIds.length} مخفي`
+                      : `${hiddenActivityTypes.length} تصنيف`}
+                    )
+                  </span>
+                </button>
+              )}
+          </div>
+
+          {onUpdatePreferences && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-slate-500 ml-1">تخصيص السجل:</span>
+              {TIMELINE_CATEGORY_FILTERS.map((cat) => {
+                const active = !hiddenActivityTypes.includes(cat.type);
+                return (
+                  <button
+                    key={cat.type}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => handleToggleFilterType(cat.type)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      active
+                        ? 'bg-white text-slate-800 border-slate-300 hover:bg-slate-50'
+                        : 'bg-slate-100 text-slate-400 border-slate-200 line-through hover:text-slate-600'
+                    }`}
+                  >
+                    {cat.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </section>
 
@@ -580,56 +804,97 @@ export default function DailyJournalView({
           )}
         </div>
 
-        {/* Daily Reflection & Key Takeaways Panel */}
-        <aside className="lg:col-span-4 bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <PenLine className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-              <h2 className="text-base font-bold text-slate-900">
-                تأملات وخلاصة اليوم
-              </h2>
+        {/* Daily Quote + Reflection & Key Takeaways Panel */}
+        <aside className="lg:col-span-4 space-y-4">
+          {/* Quote of the Day Card */}
+          <div
+            data-custom-card-surface="light"
+            className={`border rounded-2xl p-4 space-y-2.5 ${quoteColorTheme.cardClass}`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                <Quote
+                  className={`w-3.5 h-3.5 ${quoteColorTheme.accentTextClass}`}
+                  aria-hidden="true"
+                />
+                <span>حكمة اليوم</span>
+                {resolvedQuote.quote.theme && (
+                  <>
+                    <span aria-hidden="true" className="text-slate-400">·</span>
+                    <span className="font-medium text-slate-600">
+                      {resolvedQuote.quote.theme}
+                    </span>
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={handleRotateDayQuote}
+                title="تبديل حكمة اليوم"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/80 hover:bg-white text-slate-700 border border-slate-200/80 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                <span>تبديل</span>
+              </button>
             </div>
-            {savedToast && (
-              <span className="text-[11px] font-semibold text-emerald-700">
-                تم الحفظ
-              </span>
+            <blockquote className="text-xs sm:text-sm font-semibold text-slate-900 leading-relaxed">
+              «{resolvedQuote.quote.text}»
+            </blockquote>
+            {resolvedQuote.quote.author && (
+              <p className="text-[11px] text-slate-600">— {resolvedQuote.quote.author}</p>
             )}
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-700 block">
-              أهم نقطة تعلّمتها أو أنجزتها اليوم
-            </label>
-            <AutoResizeTextarea
-              minRows={2}
-              value={highlightsDraft}
-              onChange={(e) => setHighlightsDraft(e.target.value)}
-              placeholder="مثال: أنهيت درس التسويق الثالث وطبّقت خطة العميل..."
-              className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
-            />
-          </div>
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <PenLine className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                <h2 className="text-base font-bold text-slate-900">
+                  تأملات وخلاصة اليوم
+                </h2>
+              </div>
+              {savedToast && (
+                <span className="text-[11px] font-semibold text-emerald-700">
+                  تم الحفظ
+                </span>
+              )}
+            </div>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-700 block">
-              تأملك الشخصي / ملاحظات ختام اليوم
-            </label>
-            <AutoResizeTextarea
-              minRows={5}
-              value={reflectionDraft}
-              onChange={(e) => setReflectionDraft(e.target.value)}
-              placeholder="كيف كان تركيزك؟ ما الذي ساعدك أو عطّلك اليوم؟"
-              className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
-            />
-          </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-700 block">
+                أهم نقطة تعلّمتها أو أنجزتها اليوم
+              </label>
+              <AutoResizeTextarea
+                minRows={2}
+                value={highlightsDraft}
+                onChange={(e) => setHighlightsDraft(e.target.value)}
+                placeholder="مثال: أنهيت درس التسويق الثالث وطبّقت خطة العميل..."
+                className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
+              />
+            </div>
 
-          <button
-            type="button"
-            onClick={handleSaveReflection}
-            className="w-full inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer"
-          >
-            <Save className="w-3.5 h-3.5" aria-hidden="true" />
-            <span>حفظ تأمل اليوم</span>
-          </button>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-700 block">
+                تأملك الشخصي / ملاحظات ختام اليوم
+              </label>
+              <AutoResizeTextarea
+                minRows={5}
+                value={reflectionDraft}
+                onChange={(e) => setReflectionDraft(e.target.value)}
+                placeholder="كيف كان تركيزك؟ ما الذي ساعدك أو عطّلك اليوم؟"
+                className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-slate-200 rounded-xl focus:outline-none focus:border-[#1E3A5F]"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={handleSaveReflection}
+              className="w-full inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer"
+            >
+              <Save className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>حفظ تأمل اليوم</span>
+            </button>
+          </div>
         </aside>
       </div>
         </>

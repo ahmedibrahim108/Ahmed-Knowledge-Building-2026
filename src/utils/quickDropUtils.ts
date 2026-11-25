@@ -1,12 +1,25 @@
 export type QuickDropItemType = 'url' | 'text' | 'mixed';
 export type QuickDropStatus = 'active' | 'trashed';
 
+export interface QuickDropAttachment {
+  id: string;
+  kind: 'image' | 'pdf';
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageBucket?: string;
+  storagePath?: string;
+  downloadUrl?: string;
+  dataUrl?: string;
+}
+
 export interface QuickDropItem {
   id: string;
   userId: string;
   title: string;
   content: string;
   itemType: QuickDropItemType;
+  attachments?: QuickDropAttachment[];
   createdAt: string;
   expiresAt: string;
   status: QuickDropStatus;
@@ -147,13 +160,21 @@ export function splitQuickDropTextSegments(
 
 export function buildQuickDropTitlePreview(
   title: string,
-  content: string
+  content: string,
+  attachments?: QuickDropAttachment[]
 ): string {
   const cleanTitle = (title || '').trim();
   if (cleanTitle) return cleanTitle;
 
   const trimmed = (content || '').trim();
-  if (!trimmed) return 'عنصر مؤقت';
+  if (!trimmed) {
+    if (attachments && attachments.length > 0) {
+      return attachments.length === 1
+        ? attachments[0].name
+        : `${attachments.length} ملفات مرفقة`;
+    }
+    return 'عنصر مؤقت';
+  }
 
   const firstUrl = extractSafeUrls(trimmed)[0];
   if (firstUrl && classifyQuickDropContent(trimmed) === 'url') {

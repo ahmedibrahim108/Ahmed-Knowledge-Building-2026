@@ -1015,6 +1015,7 @@ export function applyThemeToDocument(
 
   root.setAttribute('data-kb-themed', 'true');
   root.setAttribute('data-theme-mode', result.effectiveMode);
+  root.classList.toggle('dark', result.effectiveMode === 'dark');
   root.setAttribute('data-theme-preset', result.config.preset);
   root.style.colorScheme = result.effectiveMode;
 

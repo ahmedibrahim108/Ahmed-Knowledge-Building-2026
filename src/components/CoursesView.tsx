@@ -861,7 +861,15 @@ export default function CoursesView({
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            <div
+              className={`grid gap-5 ${
+                filteredCourses.length === 1
+                  ? 'grid-cols-1 max-w-2xl'
+                  : filteredCourses.length === 2
+                  ? 'grid-cols-1 md:grid-cols-2'
+                  : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+              }`}
+            >
               {filteredCourses.map((course, idx) => {
                 const hubMeta = getHubMeta(course.hubId);
                 const resolvedStage = resolveCourseStudyStage(course);
@@ -890,8 +898,16 @@ export default function CoursesView({
                 return (
                   <article
                     key={course.docId || course.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => onSelectCourse(course.id)}
-                    className={`bg-white border rounded-xl p-5 flex flex-col justify-between gap-4 transition-colors cursor-pointer group ${
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectCourse(course.id);
+                      }
+                    }}
+                    className={`bg-white border rounded-xl p-5 flex flex-col justify-between gap-4 transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F] ${
                       resolvedStage === 'focus_now'
                         ? 'border-[#1E3A5F]/50 ring-1 ring-[#1E3A5F]/15'
                         : 'border-slate-200 hover:border-[#1E3A5F]/50'

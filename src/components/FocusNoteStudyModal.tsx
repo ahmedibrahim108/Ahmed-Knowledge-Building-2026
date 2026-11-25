@@ -456,14 +456,14 @@ export default function FocusNoteStudyModal({
 
   return (
     <div
-      className="fixed inset-0 z-[60] bg-slate-950/55 backdrop-blur-md flex items-center justify-center p-0 sm:p-4 lg:p-6 transition-opacity overscroll-none"
+      className="fixed inset-0 z-[60] bg-slate-950/55 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 lg:p-6 transition-opacity overscroll-none"
       role="dialog"
       aria-modal="true"
       aria-label={`وضع المذاكرة المركّز: ${note.bookTitle}`}
       onClick={onClose}
     >
       <div
-        className="w-full max-w-[1220px] h-[100dvh] sm:h-[92dvh] bg-[#FAFBFD] sm:rounded-2xl border border-slate-200/80 shadow-2xl flex flex-col overflow-hidden overscroll-none"
+        className="w-full max-w-[1220px] max-h-[92dvh] h-[92dvh] bg-[#FAFBFD] rounded-2xl border border-slate-200/80 shadow-2xl flex flex-col overflow-hidden overscroll-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Minimal Distraction-Free Top Bar */}
@@ -1180,6 +1180,14 @@ export default function FocusNoteStudyModal({
                         if (canEdit)
                           onUpdatePreferences({ noteHighlightColor: color });
                       }}
+                      minimalMode={Boolean(preferences.minimalWritingMode)}
+                      onToggleMinimalMode={() =>
+                        onUpdatePreferences({
+                          minimalWritingMode: !preferences.minimalWritingMode,
+                        })
+                      }
+                      voiceDialect={preferences.voiceDialect}
+                      onLogVoiceNote={() => onLogVoiceNote?.(note.bookTitle)}
                       minHeightClass="min-h-[280px]"
                     />
                   </div>
@@ -1330,6 +1338,16 @@ export default function FocusNoteStudyModal({
                         if (canEdit)
                           onUpdatePreferences({ noteHighlightColor: color });
                       }}
+                      minimalMode={Boolean(preferences.minimalWritingMode)}
+                      onToggleMinimalMode={() =>
+                        onUpdatePreferences({
+                          minimalWritingMode: !preferences.minimalWritingMode,
+                        })
+                      }
+                      voiceDialect={preferences.voiceDialect}
+                      onLogVoiceNote={() =>
+                        onLogVoiceNote?.(`${note.bookTitle} (نقاش)`)
+                      }
                       minHeightClass="min-h-[200px]"
                     />
 

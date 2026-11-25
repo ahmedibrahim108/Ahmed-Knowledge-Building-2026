@@ -6,6 +6,11 @@ import {
   supabase,
   withFirebaseTokenRetry,
 } from '../services/supabaseClient';
+import {
+  isAppOnline,
+  notifyOfflineMediaChanged,
+  reportPendingMediaCounts,
+} from './offlineQueue';
 
 const DB_NAME = 'mizan_tts_audio_cache_v2';
 const STORE_NAME = 'audio_clips';
@@ -65,6 +70,9 @@ interface LocalRecord {
   entityType?: AudioEntityType;
   title?: string;
   contentHash?: string;
+  voiceName?: ReadAloudVoiceName;
+  speed?: 'normal' | 'calm';
+  cloudSaved?: boolean;
 }
 
 interface EntityIndexRecord {
@@ -840,6 +848,9 @@ export async function saveAudioClipToCache(
     entityType: meta?.entityType,
     title: meta?.title,
     contentHash,
+    voiceName,
+    speed,
+    cloudSaved: false,
   });
 
   let cloudSaved = false;
@@ -847,7 +858,7 @@ export async function saveAudioClipToCache(
     ? undefined
     : 'NO_AUTH';
 
-  if (uid && isSupabaseConfigured && supabase) {
+  if (uid && isSupabaseConfigured && supabase && isAppOnline()) {
     const ext = compacted.mimeType.includes('mpeg') ? 'mp3' : 'wav';
     const storagePath = `${uid}/audio/${cacheId}.${ext}`;
     const safeSizeBytes = Math.max(0, Math.round(blob.size));
@@ -897,6 +908,22 @@ export async function saveAudioClipToCache(
         if (rowErr) throw rowErr;
       });
       cloudSaved = true;
+      await putLocalClip({
+        id: cacheId,
+        mimeType: compacted.mimeType,
+        blob,
+        updatedAtMs: Date.now(),
+        durationSeconds: compacted.durationSeconds,
+        lastPositionSeconds: 0,
+        playbackRate: 1,
+        entityId: meta?.entityId,
+        entityType: meta?.entityType,
+        title: meta?.title,
+        contentHash,
+        voiceName,
+        speed,
+        cloudSaved: true,
+      });
     } catch (err) {
       const msg =
         err && typeof err === 'object' && 'message' in err
@@ -909,9 +936,12 @@ export async function saveAudioClipToCache(
       cloudErrorCode = isPerm ? 'PERMISSION' : 'NETWORK';
       console.warn('Supabase audioCache write failed:', err);
     }
-  } else if (uid && !isSupabaseConfigured) {
+  } else if (uid) {
     cloudErrorCode = 'NETWORK';
   }
+
+  void refreshPendingAudioCount();
+  notifyOfflineMediaChanged();
 
   return {
     cacheId,
@@ -1050,16 +1080,21 @@ export async function saveVoiceRecordingToCache(
     entityType: meta?.entityType || 'other',
     title: cleanTitle,
     contentHash: cacheId,
+    voiceName: 'Kore',
+    speed: 'normal',
+    cloudSaved: false,
   });
 
-  if (!uid || !isSupabaseConfigured || !supabase) {
+  if (!uid || !isSupabaseConfigured || !supabase || !isAppOnline()) {
+    void refreshPendingAudioCount();
+    notifyOfflineMediaChanged();
     return {
       cacheId,
       storagePath: '',
       cloudSaved: false,
       errorMessage: !uid
         ? 'يجب تسجيل الدخول لحفظ التسجيل في السحابة.'
-        : 'إعدادات Supabase غير مكتملة.',
+        : 'تم حفظ التسجيل محليًا وسيتم رفعه عند عودة الاتصال.',
     };
   }
 
@@ -1109,9 +1144,30 @@ export async function saveVoiceRecordingToCache(
       if (rowErr) throw rowErr;
     });
 
+    await putLocalClip({
+      id: cacheId,
+      mimeType: cleanMime,
+      blob,
+      updatedAtMs: Date.now(),
+      durationSeconds: safeDuration,
+      lastPositionSeconds: 0,
+      playbackRate: 1,
+      entityId: meta?.entityId,
+      entityType: meta?.entityType || 'other',
+      title: cleanTitle,
+      contentHash: cacheId,
+      voiceName: 'Kore',
+      speed: 'normal',
+      cloudSaved: true,
+    });
+    void refreshPendingAudioCount();
+    notifyOfflineMediaChanged();
+
     return { cacheId, storagePath, cloudSaved: true };
   } catch (err) {
     console.warn('Supabase voice recording upload failed:', err);
+    void refreshPendingAudioCount();
+    notifyOfflineMediaChanged();
     return {
       cacheId,
       storagePath: '',
@@ -1120,6 +1176,92 @@ export async function saveVoiceRecordingToCache(
         err instanceof Error ? err.message : 'تعذر حفظ التسجيل الصوتي في السحابة.',
     };
   }
+}
+
+export async function getPendingLocalAudioCount(): Promise<number> {
+  try {
+    const database = await openAudioDb();
+    return await new Promise<number>((resolve) => {
+      const tx = database.transaction(STORE_NAME, 'readonly');
+      const req = tx.objectStore(STORE_NAME).getAll();
+      req.onsuccess = () => {
+        const list = (req.result as LocalRecord[]) || [];
+        resolve(list.filter((r) => r.cloudSaved === false).length);
+      };
+      req.onerror = () => resolve(0);
+    });
+  } catch {
+    return 0;
+  }
+}
+
+export async function refreshPendingAudioCount(): Promise<number> {
+  const count = await getPendingLocalAudioCount();
+  reportPendingMediaCounts({ audio: count });
+  return count;
+}
+
+export async function syncPendingAudioClipsToCloud(uid: string): Promise<number> {
+  if (!uid || !isSupabaseConfigured || !supabase || !isAppOnline()) return 0;
+  let synced = 0;
+  try {
+    const database = await openAudioDb();
+    const list = await new Promise<LocalRecord[]>((resolve) => {
+      const tx = database.transaction(STORE_NAME, 'readonly');
+      const req = tx.objectStore(STORE_NAME).getAll();
+      req.onsuccess = () => resolve((req.result as LocalRecord[]) || []);
+      req.onerror = () => resolve([]);
+    });
+    const pending = list.filter((r) => r.cloudSaved === false && r.blob);
+    for (const rec of pending) {
+      const ext = getAudioExtensionFromMime(rec.mimeType || 'audio/webm');
+      const storagePath = `${uid}/audio/${rec.id}.${ext}`;
+      try {
+        await withFirebaseTokenRetry(async (client) => {
+          const { error: uploadErr } = await client.storage
+            .from(AUDIO_BUCKET)
+            .upload(storagePath, rec.blob, {
+              contentType: rec.mimeType || 'audio/webm',
+              upsert: true,
+            });
+          if (uploadErr) throw uploadErr;
+
+          const { error: rowErr } = await client.from('audio_cache').upsert(
+            {
+              owner_id: uid,
+              id: rec.id,
+              entity_type: rec.entityType || 'other',
+              entity_id: (rec.entityId || '').slice(0, 128),
+              title: (rec.title || 'مقطع صوتي').slice(0, 200),
+              content_hash: rec.contentHash || rec.id,
+              voice_name: rec.voiceName || 'Kore',
+              speed: rec.speed || 'normal',
+              mime_type: (rec.mimeType || 'audio/webm').slice(0, 80),
+              size_bytes: Math.max(0, Math.round(rec.blob.size)),
+              duration_seconds: rec.durationSeconds || 0,
+              last_position_seconds: rec.lastPositionSeconds || 0,
+              playback_rate: rec.playbackRate || 1,
+              storage_bucket: AUDIO_BUCKET,
+              storage_path: storagePath,
+              download_url: '',
+              created_at_ms: rec.updatedAtMs || Date.now(),
+            },
+            { onConflict: 'owner_id,id' }
+          );
+          if (rowErr) throw rowErr;
+        });
+        await putLocalClip({ ...rec, cloudSaved: true });
+        synced += 1;
+      } catch {
+        // Retry next sync
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+  await refreshPendingAudioCount();
+  if (synced > 0) notifyOfflineMediaChanged();
+  return synced;
 }
 
 /**
@@ -1142,6 +1284,8 @@ export async function deleteAudioClipFromCache(
   } catch {
     // Non-fatal
   }
+
+  void refreshPendingAudioCount();
 
   if (!uid || !isSupabaseConfigured || !supabase) {
     return true;

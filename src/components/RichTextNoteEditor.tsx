@@ -16,12 +16,17 @@ import {
   ListOrdered,
   Lock,
   Maximize2,
+  Mic,
+  MicOff,
   Minimize2,
+  Pause,
+  Play,
   Plus,
   Quote,
   Redo2,
   Rows3,
   SlidersHorizontal,
+  Sparkles,
   Table2,
   Trash2,
   Type,
@@ -34,7 +39,9 @@ import {
   NoteMarginMode,
   NoteWidthMode,
   UserPreferences,
+  VoiceDialectMode,
 } from '../data/curriculumData';
+import { useSpeechDictation } from '../hooks/useSpeechDictation';
 import { TextDir, detectTextDirection } from '../utils/bidi';
 import {
   HIGHLIGHT_SWATCHES,
@@ -59,6 +66,10 @@ interface RichTextNoteEditorProps {
   onUpdatePreferences?: (updates: Partial<UserPreferences>) => void;
   onSelectDefaultHighlight?: (color: HighlightColorKey) => void;
   minHeightClass?: string;
+  minimalMode?: boolean;
+  onToggleMinimalMode?: () => void;
+  voiceDialect?: VoiceDialectMode;
+  onLogVoiceNote?: () => void;
 }
 
 const FONT_SIZE_CLASS: Record<UserPreferences['noteFontSize'], string> = {
@@ -136,6 +147,10 @@ export default function RichTextNoteEditor({
   onUpdatePreferences,
   onSelectDefaultHighlight,
   minHeightClass = 'min-h-[220px]',
+  minimalMode,
+  onToggleMinimalMode,
+  voiceDialect,
+  onLogVoiceNote,
 }: RichTextNoteEditorProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
@@ -173,6 +188,10 @@ export default function RichTextNoteEditor({
     ol: false,
   });
 
+  const isMinimalMode = Boolean(
+    minimalMode !== undefined ? minimalMode : preferences.minimalWritingMode
+  );
+
   // Floating Word-style contextual bubble toolbar on word click / text selection
   const floatingToolbarRef = useRef<HTMLDivElement | null>(null);
   const [floatingBubble, setFloatingBubble] = useState<{
@@ -192,7 +211,7 @@ export default function RichTextNoteEditor({
   }, [preferences.noteMargin]);
 
   useEffect(() => {
-    setLocalWidth(preferences.noteWidth ?? 'full');
+    setLocalWidth(preferences.noteWidth ?? 'focused');
   }, [preferences.noteWidth]);
 
   useEffect(() => {
@@ -623,6 +642,70 @@ export default function RichTextNoteEditor({
       return false;
     }
     return true;
+  };
+
+  const insertDictatedSegment = (segment: string) => {
+    const cleanText = segment.trim();
+    if (!cleanText || !canEdit) return;
+    const el = editorRef.current;
+    if (!el) return;
+
+    const sel = window.getSelection();
+    let range: Range | null = null;
+    if (sel && sel.rangeCount > 0 && el.contains(sel.anchorNode)) {
+      range = sel.getRangeAt(0);
+    } else if (
+      savedRangeRef.current &&
+      el.contains(savedRangeRef.current.commonAncestorContainer)
+    ) {
+      range = savedRangeRef.current.cloneRange();
+    }
+
+    if (range) {
+      range.deleteContents();
+      const textToInsert = `${cleanText} `;
+      const textNode = document.createTextNode(textToInsert);
+      range.insertNode(textNode);
+      range.setStartAfter(textNode);
+      range.collapse(true);
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+      savedRangeRef.current = range.cloneRange();
+    } else {
+      const p = document.createElement('p');
+      p.setAttribute('dir', detectTextDirection(cleanText, 'rtl'));
+      p.textContent = cleanText;
+      el.appendChild(p);
+      const nextRange = document.createRange();
+      nextRange.selectNodeContents(p);
+      nextRange.collapse(false);
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(nextRange);
+      }
+      savedRangeRef.current = nextRange.cloneRange();
+    }
+
+    emitChange(false);
+    onLogVoiceNote?.();
+  };
+
+  const speech = useSpeechDictation({
+    dialect: voiceDialect || preferences.voiceDialect || 'egyptian_arabic',
+    onTranscriptSegment: insertDictatedSegment,
+  });
+
+  const handleToggleMinimal = () => {
+    setShowHighlightMenu(false);
+    setShowTableMenu(false);
+    setShowLayoutMenu(false);
+    if (onToggleMinimalMode) {
+      onToggleMinimalMode();
+    } else {
+      onUpdatePreferences?.({ minimalWritingMode: !isMinimalMode });
+    }
   };
 
   const saveCurrentRange = () => {
@@ -1254,38 +1337,42 @@ export default function RichTextNoteEditor({
             <span>عريض</span>
           </button>
 
-          <button
-            type="button"
-            disabled={!canEdit}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              runExec('italic');
-            }}
-            title="نص مائل (Italic)"
-            aria-label="نص مائل"
-            aria-pressed={activeFormats.italic}
-            className={`min-h-[34px] min-w-[34px] inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
-              activeFormats.italic
-                ? 'bg-[#1E3A5F] text-white'
-                : 'text-slate-700 hover:bg-slate-200/80'
-            }`}
-          >
-            <Italic className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
+          {!isMinimalMode && (
+            <>
+              <button
+                type="button"
+                disabled={!canEdit}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  runExec('italic');
+                }}
+                title="نص مائل (Italic)"
+                aria-label="نص مائل"
+                aria-pressed={activeFormats.italic}
+                className={`min-h-[34px] min-w-[34px] inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
+                  activeFormats.italic
+                    ? 'bg-[#1E3A5F] text-white'
+                    : 'text-slate-700 hover:bg-slate-200/80'
+                }`}
+              >
+                <Italic className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
 
-          <button
-            type="button"
-            disabled={!canEdit}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              toggleSubheading();
-            }}
-            title="عنوان فرعي"
-            aria-label="عنوان فرعي"
-            className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center p-1.5 text-slate-700 hover:bg-slate-200/80 rounded-md transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
-          >
-            <Heading3 className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
+              <button
+                type="button"
+                disabled={!canEdit}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  toggleSubheading();
+                }}
+                title="عنوان فرعي"
+                aria-label="عنوان فرعي"
+                className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center p-1.5 text-slate-700 hover:bg-slate-200/80 rounded-md transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+              >
+                <Heading3 className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </>
+          )}
 
           <span aria-hidden="true" className="w-px h-4 bg-slate-300 mx-0.5 sm:mx-1" />
 
@@ -1309,40 +1396,46 @@ export default function RichTextNoteEditor({
             <span>نقاط</span>
           </button>
 
-          <button
-            type="button"
-            disabled={!canEdit}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              runExec('insertOrderedList');
-            }}
-            title="قائمة مرقمة"
-            aria-label="قائمة مرقمة"
-            aria-pressed={activeFormats.ol}
-            className={`min-h-[34px] min-w-[34px] inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
-              activeFormats.ol
-                ? 'bg-[#1E3A5F] text-white'
-                : 'text-slate-700 hover:bg-slate-200/80'
-            }`}
-          >
-            <ListOrdered className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
+          {!isMinimalMode && (
+            <>
+              <button
+                type="button"
+                disabled={!canEdit}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  runExec('insertOrderedList');
+                }}
+                title="قائمة مرقمة"
+                aria-label="قائمة مرقمة"
+                aria-pressed={activeFormats.ol}
+                className={`min-h-[34px] min-w-[34px] inline-flex items-center justify-center p-1.5 rounded-md transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
+                  activeFormats.ol
+                    ? 'bg-[#1E3A5F] text-white'
+                    : 'text-slate-700 hover:bg-slate-200/80'
+                }`}
+              >
+                <ListOrdered className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
 
-          <button
-            type="button"
-            disabled={!canEdit}
-            onMouseDown={(e) => {
-              e.preventDefault();
-              toggleQuote();
-            }}
-            title="اقتباس"
-            aria-label="اقتباس"
-            className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center p-1.5 text-slate-700 hover:bg-slate-200/80 rounded-md transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
-          >
-            <Quote className="w-3.5 h-3.5" aria-hidden="true" />
-          </button>
+              <button
+                type="button"
+                disabled={!canEdit}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  toggleQuote();
+                }}
+                title="اقتباس"
+                aria-label="اقتباس"
+                className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center p-1.5 text-slate-700 hover:bg-slate-200/80 rounded-md transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+              >
+                <Quote className="w-3.5 h-3.5" aria-hidden="true" />
+              </button>
+            </>
+          )}
 
-          <span aria-hidden="true" className="w-px h-4 bg-slate-300 mx-0.5 sm:mx-1" />
+          {!isMinimalMode && (
+            <>
+              <span aria-hidden="true" className="w-px h-4 bg-slate-300 mx-0.5 sm:mx-1" />
 
           {/* Alignment & Indentation Controls (Right / Center / Left + Indent In / Out) */}
           <div className="inline-flex items-center gap-0.5 bg-white border border-slate-200 rounded-md p-0.5">
@@ -1530,6 +1623,8 @@ export default function RichTextNoteEditor({
               </div>
             )}
           </div>
+          </>
+          )}
 
           <span aria-hidden="true" className="w-px h-4 bg-slate-300 mx-0.5 sm:mx-1" />
 
@@ -1610,6 +1705,8 @@ export default function RichTextNoteEditor({
             )}
           </div>
 
+          {!isMinimalMode && (
+            <>
           <span aria-hidden="true" className="w-px h-4 bg-slate-300 mx-0.5 sm:mx-1" />
 
           {/* Bilingual Arabic + English Direction Controls */}
@@ -1838,23 +1935,76 @@ export default function RichTextNoteEditor({
               </div>
             )}
           </div>
+            </>
+          )}
         </div>
 
-        {/* Right Controls: Clear / Undo / Redo */}
+        {/* Right Controls: Voice Dictation / Minimal Mode / Clear / Undo / Redo */}
         <div className="flex items-center gap-1">
+          {speech.isSupported && (
+            <button
+              type="button"
+              disabled={!canEdit}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                saveCurrentRange();
+                if (!guardEdit()) return;
+                speech.toggle();
+              }}
+              title={speech.isListening ? 'إيقاف الإملاء الصوتي' : 'إملاء صوتي مباشر داخل الملاحظة'}
+              aria-label="الإملاء الصوتي"
+              aria-pressed={speech.isListening}
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 min-h-[34px] text-xs font-semibold rounded-md border transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed ${
+                speech.isListening
+                  ? 'bg-rose-600 text-white border-rose-600'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              {speech.isListening ? (
+                <MicOff className="w-3.5 h-3.5" aria-hidden="true" />
+              ) : (
+                <Mic className="w-3.5 h-3.5 text-[#1E3A5F]" aria-hidden="true" />
+              )}
+              <span className="hidden sm:inline">
+                {speech.isListening ? 'إيقاف الصوت' : 'إملاء'}
+              </span>
+            </button>
+          )}
+
           <button
             type="button"
-            disabled={!canEdit}
             onMouseDown={(e) => {
               e.preventDefault();
-              runExec('removeFormat');
+              handleToggleMinimal();
             }}
-            title="مسح التنسيق"
-            aria-label="مسح التنسيق"
-            className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-200/80 rounded-md cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+            title={isMinimalMode ? 'إظهار كامل أدوات التنسيق' : 'وضع الكتابة الهادئ (إخفاء الأدوات الثانوية)'}
+            aria-label="وضع الكتابة الهادئ"
+            aria-pressed={isMinimalMode}
+            className={`inline-flex items-center gap-1 px-2 py-1.5 min-h-[34px] text-xs font-medium rounded-md border transition-colors cursor-pointer ${
+              isMinimalMode
+                ? 'bg-[#1E3A5F] text-white border-[#1E3A5F]'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+            }`}
           >
-            <Eraser className="w-3.5 h-3.5" aria-hidden="true" />
+            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+            <span className="hidden sm:inline">{isMinimalMode ? 'وضع كامل' : 'كتابة هادئة'}</span>
           </button>
+
+          {!isMinimalMode && (
+            <button
+              type="button"
+              disabled={!canEdit}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                runExec('removeFormat');
+              }}
+              title="مسح التنسيق"
+              aria-label="مسح التنسيق"
+              className="min-h-[34px] min-w-[34px] inline-flex items-center justify-center p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-200/80 rounded-md cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              <Eraser className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          )}
           <button
             type="button"
             disabled={!canEdit}
@@ -1883,6 +2033,72 @@ export default function RichTextNoteEditor({
           </button>
         </div>
       </div>
+
+      {/* Inline Speech Dictation Live Status */}
+      {(speech.isListening || speech.error) && (
+        <div className="px-3 py-2 bg-rose-50/70 border-b border-rose-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            {speech.error ? (
+              <span className="text-rose-800">{speech.error}</span>
+            ) : (
+              <>
+                <span className="inline-flex items-center gap-1.5 font-semibold text-rose-700 shrink-0">
+                  <Mic className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{speech.isPaused ? 'الإملاء متوقف مؤقتًا' : 'يستمع الآن...'}</span>
+                </span>
+                {speech.interimText && (
+                  <span className="text-slate-700 truncate italic">{speech.interimText}</span>
+                )}
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {speech.isListening && (
+              <>
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    speech.pauseToggle();
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white border border-slate-200 text-[11px] font-medium text-slate-700 hover:bg-slate-100 cursor-pointer"
+                >
+                  {speech.isPaused ? (
+                    <>
+                      <Play className="w-3 h-3" aria-hidden="true" />
+                      <span>استئناف</span>
+                    </>
+                  ) : (
+                    <>
+                      <Pause className="w-3 h-3" aria-hidden="true" />
+                      <span>إيقاف مؤقت</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    speech.stop();
+                  }}
+                  className="px-2 py-1 rounded-md bg-rose-600 text-white text-[11px] font-semibold hover:bg-rose-700 cursor-pointer"
+                >
+                  إنهاء
+                </button>
+              </>
+            )}
+            {speech.error && (
+              <button
+                type="button"
+                onClick={() => speech.clearError()}
+                className="text-[11px] font-semibold text-rose-700 underline cursor-pointer"
+              >
+                إغلاق
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Contextual Table Row/Column Tools when caret is inside a table */}
       {insideTable && canEdit && (

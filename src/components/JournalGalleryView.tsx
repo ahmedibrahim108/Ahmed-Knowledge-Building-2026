@@ -647,7 +647,7 @@ export default function JournalGalleryView({
                         }}
                         title="تخصيص لون البطاقة وصورة الغلاف"
                         aria-label={`تخصيص مظهر بطاقة ${day.shortLabel}`}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-[#1E3A5F] hover:bg-black/5 opacity-80 sm:opacity-65 sm:group-hover:opacity-100 focus:opacity-100 transition-opacity cursor-pointer shrink-0"
+                        className="p-1.5 rounded-lg text-slate-600 hover:text-[#1E3A5F] hover:bg-black/5 opacity-95 transition-colors cursor-pointer shrink-0"
                       >
                         <Palette className="w-3.5 h-3.5" aria-hidden="true" />
                       </button>

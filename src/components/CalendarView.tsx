@@ -51,6 +51,12 @@ import {
   getHubMeta,
   getTodayDateKey,
 } from '../data/curriculumData';
+import {
+  expandTaskOccurrenceDates,
+  formatRecurrenceSummaryAr,
+  isRecurringTask,
+  isTaskCompletedOnDate,
+} from '../utils/taskRecurrence';
 import TaskFormModal from './TaskFormModal';
 
 interface CalendarViewProps {
@@ -73,6 +79,7 @@ interface CalendarViewProps {
   onAddUnifiedTask: (payload: Omit<UnifiedTask, 'id'>) => void;
   onUpdateUnifiedTask: (id: string, updates: Partial<UnifiedTask>) => void;
   onDeleteUnifiedTask: (id: string) => void;
+  onToggleTaskOccurrence?: (taskId: string, dateKey: string) => void;
   onUpdateWeeklyMeeting?: (id: string, updates: Partial<WeeklyMeeting>) => void;
   onToggleCourseTask?: (courseId: number, taskId: string) => void;
   onTogglePathStage?: (pathId: string, stageId: string) => void;
@@ -327,6 +334,7 @@ export default function CalendarView({
   onAddUnifiedTask,
   onUpdateUnifiedTask,
   onDeleteUnifiedTask,
+  onToggleTaskOccurrence,
   onUpdateWeeklyMeeting,
   onToggleCourseTask,
   onTogglePathStage,
@@ -673,7 +681,10 @@ export default function CalendarView({
     const q = taskSearch.trim().toLowerCase();
     return unifiedTasks
       .filter((t) => {
-        if (t.scheduledDate && /^\d{4}-\d{2}-\d{2}$/.test(t.scheduledDate)) {
+        if (
+          (t.scheduledDate && /^\d{4}-\d{2}-\d{2}$/.test(t.scheduledDate)) ||
+          isRecurringTask(t)
+        ) {
           return false;
         }
         if (!showCompleted && t.status === 'done') return false;
@@ -706,48 +717,59 @@ export default function CalendarView({
     filterStatus,
   ]);
 
-  // Combine Scheduled UnifiedTasks + CalendarEvents + ExpandedWeeklyMeetings into a single normalized array
+  // Combine Scheduled & Recurring UnifiedTasks + CalendarEvents + ExpandedWeeklyMeetings into a single normalized array
   const allCalendarItems = useMemo(() => {
     const items: UnifiedCalendarItem[] = [];
 
     for (const t of unifiedTasks) {
-      const dateKey =
-        t.scheduledDate && /^\d{4}-\d{2}-\d{2}$/.test(t.scheduledDate)
-          ? t.scheduledDate
-          : '';
-      if (!dateKey) continue;
-      const done = t.status === 'done';
-      if (!showCompleted && done) continue;
       if (filterHub !== 'all' && t.hubId !== filterHub) continue;
       if (filterPriority !== 'all' && t.priority !== filterPriority) continue;
-      if (filterStatus === 'pending' && done) continue;
-      if (filterStatus === 'done' && !done) continue;
+
+      const recurring = isRecurringTask(t);
+      const dateKeys: string[] = recurring
+        ? expandTaskOccurrenceDates(t, rangeBounds.startKey, rangeBounds.endKey)
+        : t.scheduledDate && /^\d{4}-\d{2}-\d{2}$/.test(t.scheduledDate)
+        ? [t.scheduledDate]
+        : [];
+
+      if (dateKeys.length === 0) continue;
 
       const dur = t.durationMinutes && t.durationMinutes > 0 ? t.durationMinutes : 60;
       const end =
         t.endTime ||
         (t.startTime ? computeEndTimeFromMinutes(t.startTime, dur) : '');
-      const overdue =
-        !done &&
-        ((t.deadline && t.deadline < todayKey) || dateKey < todayKey);
 
-      items.push({
-        kind: 'task',
-        uid: `task-${t.id}`,
-        id: t.id,
-        dateKey,
-        startTime: t.startTime || '',
-        endTime: end,
-        durationMinutes: dur,
-        title: t.title,
-        done,
-        overdue,
-        priority: t.priority,
-        hubId: t.hubId,
-        categoryLabel: t.categoryLabel || 'مهمة',
-        deadline: t.deadline,
-        raw: t,
-      });
+      for (const dateKey of dateKeys) {
+        const done = recurring
+          ? isTaskCompletedOnDate(t, dateKey)
+          : t.status === 'done';
+        if (!showCompleted && done) continue;
+        if (filterStatus === 'pending' && done) continue;
+        if (filterStatus === 'done' && !done) continue;
+
+        const overdue =
+          !done &&
+          ((!recurring && Boolean(t.deadline) && t.deadline! < todayKey) ||
+            dateKey < todayKey);
+
+        items.push({
+          kind: 'task',
+          uid: recurring ? `task-${t.id}-${dateKey}` : `task-${t.id}`,
+          id: t.id,
+          dateKey,
+          startTime: t.startTime || '',
+          endTime: end,
+          durationMinutes: dur,
+          title: t.title,
+          done,
+          overdue,
+          priority: t.priority,
+          hubId: t.hubId,
+          categoryLabel: t.categoryLabel || 'مهمة',
+          deadline: t.deadline,
+          raw: t,
+        });
+      }
     }
 
     for (const ev of events) {
@@ -811,6 +833,8 @@ export default function CalendarView({
     unifiedTasks,
     events,
     expandedMeetings,
+    rangeBounds.startKey,
+    rangeBounds.endKey,
     showCompleted,
     filterHub,
     filterPriority,
@@ -1277,9 +1301,13 @@ export default function CalendarView({
       return;
     }
     if (item.kind === 'task') {
-      onUpdateUnifiedTask(item.id, {
-        status: item.done ? 'todo' : 'done',
-      });
+      if (onToggleTaskOccurrence) {
+        onToggleTaskOccurrence(item.id, item.dateKey);
+      } else {
+        onUpdateUnifiedTask(item.id, {
+          status: item.done ? 'todo' : 'done',
+        });
+      }
     } else if (item.kind === 'event') {
       onUpdateEvent(item.id, { done: !item.done });
     } else if (item.kind === 'meeting' && onUpdateWeeklyMeeting) {
@@ -1459,7 +1487,7 @@ export default function CalendarView({
               }`}
               title={`إضافة أو إفلات عند ${hourStr}`}
             >
-              <span className="opacity-0 group-hover:opacity-100 text-[10px] text-slate-400 px-1.5 pt-0.5 block">
+              <span className="opacity-45 group-hover:opacity-100 text-[10px] text-slate-400 px-1.5 pt-0.5 block transition-opacity">
                 + {hourStr}
               </span>
             </div>
@@ -1543,8 +1571,11 @@ export default function CalendarView({
                     )}
                   </button>
                   <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-semibold leading-tight truncate">
-                      {item.title}
+                    <p className="text-[11px] font-semibold leading-tight truncate flex items-center gap-1">
+                      {item.kind === 'task' && isRecurringTask(item.raw) && (
+                        <Repeat className="w-2.5 h-2.5 text-[#1E3A5F] shrink-0" aria-hidden="true" />
+                      )}
+                      <span className="truncate">{item.title}</span>
                     </p>
                     {heightPx >= 36 && (
                       <p className="text-[10px] opacity-75 tabular-nums truncate">
@@ -2510,137 +2541,305 @@ export default function CalendarView({
             </div>
           )}
 
-          {/* VIEW 2: WEEK VIEW (Hourly Grid) */}
+          {/* VIEW 2: WEEK VIEW (Mobile Agenda + Desktop Hourly Grid) */}
           {viewMode === 'week' && (
-            <div className="overflow-x-auto">
-              <div className="min-w-[660px]">
-                {/* Day Headers + Untimed Tray */}
-                <div
-                  className="grid border-b border-slate-200 bg-slate-50"
-                  style={{
-                    gridTemplateColumns: `60px repeat(${weekDays.length}, minmax(0, 1fr))`,
-                  }}
-                >
-                  <div className="p-2 text-[10px] font-semibold text-slate-500 border-l border-slate-200 flex items-center justify-center">
-                    الوقت
-                  </div>
-                  {weekDays.map((wd) => {
-                    const isToday = wd.dateKey === todayKey;
-                    const isSel = wd.dateKey === selectedDateKey;
-                    const untimed = (itemsByDate[wd.dateKey] ?? []).filter(
-                      (it) => parseMinutesFromTime(it.startTime) === null
-                    );
-                    const dlCount = (deadlinesByDate[wd.dateKey] ?? []).length;
+            <>
+              {/* Mobile Responsive Week Day Switcher + Vertical Agenda (< md) */}
+              <div className="md:hidden p-3 space-y-3">
+                {(() => {
+                  const activeMobileDay =
+                    weekDays.find((d) => d.dateKey === selectedDateKey) ?? weekDays[0];
+                  const activeDayKey = activeMobileDay?.dateKey || selectedDateKey;
+                  const activeDayItems = itemsByDate[activeDayKey] ?? [];
+                  const activeDayDeadlines = deadlinesByDate[activeDayKey] ?? [];
 
-                    return (
-                      <div
-                        key={wd.dateKey}
-                        onDragOver={(e) => {
-                          if (!canEdit) return;
-                          e.preventDefault();
-                          setDropHighlightKey(`wk-allday-${wd.dateKey}`);
-                        }}
-                        onDragLeave={() => setDropHighlightKey(null)}
-                        onDrop={(e) => handleDropOnCalendar(e, wd.dateKey, '')}
-                        className={`p-2 border-l last:border-l-0 border-slate-200 space-y-1.5 ${
-                          dropHighlightKey === `wk-allday-${wd.dateKey}`
-                            ? 'bg-[#1E3A5F]/10'
-                            : isSel
-                            ? 'bg-slate-100/80'
-                            : ''
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedDateKey(wd.dateKey);
-                            handleSelectViewMode('day');
-                          }}
-                          className="w-full text-right flex items-center justify-between gap-1 cursor-pointer"
-                        >
-                          <span
-                            className={`text-xs font-bold px-2 py-0.5 rounded-md tabular-nums ${
-                              isToday
-                                ? 'bg-[#1E3A5F] text-white'
-                                : 'text-slate-800 hover:bg-slate-200'
-                            }`}
-                          >
-                            {wd.dayName} {wd.date.getDate()}
-                          </span>
-                          {dlCount > 0 && (
-                            <span
-                              title={`${dlCount} موعد نهائي`}
-                              className="text-[10px] font-bold px-1.5 rounded bg-amber-100 text-amber-900 tabular-nums"
+                  return (
+                    <>
+                      <div className="grid grid-cols-7 gap-1 bg-slate-50 p-1.5 rounded-xl border border-slate-200">
+                        {weekDays.map((wd) => {
+                          const isSelected = wd.dateKey === activeDayKey;
+                          const isToday = wd.dateKey === todayKey;
+                          const count = (itemsByDate[wd.dateKey] ?? []).length;
+                          return (
+                            <button
+                              key={wd.dateKey}
+                              type="button"
+                              onClick={() => setSelectedDateKey(wd.dateKey)}
+                              className={`py-2 px-1 rounded-lg flex flex-col items-center justify-center gap-0.5 text-center transition-colors cursor-pointer ${
+                                isSelected
+                                  ? 'bg-[#1E3A5F] text-white'
+                                  : isToday
+                                  ? 'bg-slate-200/80 text-[#1E3A5F] font-bold'
+                                  : 'text-slate-700 hover:bg-slate-200/50'
+                              }`}
                             >
-                              {dlCount}!
-                            </span>
-                          )}
-                        </button>
+                              <span className="text-[10px] truncate max-w-full">
+                                {wd.dayName.slice(0, 4)}
+                              </span>
+                              <span className="text-xs font-bold tabular-nums">
+                                {wd.date.getDate()}
+                              </span>
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  count > 0
+                                    ? isSelected
+                                      ? 'bg-white'
+                                      : 'bg-[#1E3A5F]'
+                                    : 'bg-transparent'
+                                }`}
+                              />
+                            </button>
+                          );
+                        })}
+                      </div>
 
-                        {untimed.length > 0 && (
-                          <div className="space-y-1">
-                            {untimed.slice(0, density === 'compact' ? 2 : 4).map((it) => (
-                              <div
-                                key={it.uid}
-                                draggable={canEdit}
-                                onDragStart={(e) => {
-                                  if (it.kind === 'task') {
-                                    startDrag(e, { kind: 'task', id: it.id });
-                                  } else if (it.kind === 'event') {
-                                    startDrag(e, { kind: 'event', id: it.id });
-                                  }
-                                }}
-                                onClick={() => openItemDetails(it)}
-                                className={`px-1.5 py-0.5 text-[10px] rounded border border-r-2 truncate cursor-pointer ${itemStyleClasses(
-                                  it
-                                )}`}
-                              >
-                                {it.title}
+                      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                        <div className="min-w-0">
+                          <h3 className="text-xs font-bold text-slate-900 truncate">
+                            {formatArabicFullDate(activeDayKey)}
+                          </h3>
+                          <p className="text-[11px] text-slate-500 tabular-nums">
+                            {activeDayItems.length} نشاط
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedDateKey(activeDayKey);
+                              handleSelectViewMode('day');
+                            }}
+                            className="px-2.5 py-1.5 text-[11px] font-medium text-[#1E3A5F] bg-slate-100 rounded-lg cursor-pointer"
+                          >
+                            عرض بالساعة
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openCreateAtSlot(activeDayKey)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" aria-hidden="true" />
+                            <span>إضافة</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {activeDayDeadlines.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {activeDayDeadlines.map((dt) => (
+                            <span
+                              key={`m-dl-${dt.id}`}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold bg-amber-50 text-amber-900 border border-amber-200 rounded-md"
+                            >
+                              <AlertTriangle className="w-3 h-3" aria-hidden="true" />
+                              تسليم: {dt.title}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {activeDayItems.length === 0 ? (
+                        <div className="p-6 text-center bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-500">
+                          لا توجد مهام أو مواعيد مجدولة في هذا اليوم.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {activeDayItems.map((item) => (
+                            <div
+                              key={item.uid}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => openItemDetails(item)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  openItemDetails(item);
+                                }
+                              }}
+                              className={`p-3 rounded-xl border border-r-4 flex items-center justify-between gap-2.5 cursor-pointer ${itemStyleClasses(
+                                item
+                              )}`}
+                            >
+                              <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleItemDone(item);
+                                  }}
+                                  aria-label={item.done ? 'إلغاء الإتمام' : 'تحديد كمكتمل'}
+                                  className="mt-0.5 shrink-0 cursor-pointer"
+                                >
+                                  {item.done ? (
+                                    <CheckSquare className="w-4 h-4 text-emerald-700" />
+                                  ) : (
+                                    <Square className="w-4 h-4 opacity-60" />
+                                  )}
+                                </button>
+                                <div className="min-w-0 flex-1 space-y-0.5">
+                                  <p className="text-xs font-semibold flex items-center gap-1">
+                                    {item.kind === 'task' && isRecurringTask(item.raw) && (
+                                      <Repeat className="w-3 h-3 text-[#1E3A5F] shrink-0" aria-hidden="true" />
+                                    )}
+                                    <span className="truncate">{item.title}</span>
+                                  </p>
+                                  <p className="text-[11px] opacity-75 tabular-nums truncate">
+                                    {item.startTime
+                                      ? `${item.startTime}${item.endTime ? `–${item.endTime}` : ''}`
+                                      : 'طوال اليوم'}{' '}
+                                    · {item.kind === 'meeting' ? 'لقاء أسبوعي' : item.categoryLabel}
+                                    {item.kind === 'task' && isRecurringTask(item.raw)
+                                      ? ` · ${formatRecurrenceSummaryAr(item.raw.recurrence)}`
+                                      : ''}
+                                  </p>
+                                </div>
                               </div>
-                            ))}
-                            {untimed.length > (density === 'compact' ? 2 : 4) && (
-                              <span className="text-[9px] text-[#1E3A5F] font-semibold">
-                                +{untimed.length - (density === 'compact' ? 2 : 4)}
+                              {item.overdue && (
+                                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* Desktop 7-Column Hourly Grid (>= md) */}
+              <div className="hidden md:block overflow-x-auto">
+                <div className="min-w-[660px]">
+                  {/* Day Headers + Untimed Tray */}
+                  <div
+                    className="grid border-b border-slate-200 bg-slate-50"
+                    style={{
+                      gridTemplateColumns: `60px repeat(${weekDays.length}, minmax(0, 1fr))`,
+                    }}
+                  >
+                    <div className="p-2 text-[10px] font-semibold text-slate-500 border-l border-slate-200 flex items-center justify-center">
+                      الوقت
+                    </div>
+                    {weekDays.map((wd) => {
+                      const isToday = wd.dateKey === todayKey;
+                      const isSel = wd.dateKey === selectedDateKey;
+                      const untimed = (itemsByDate[wd.dateKey] ?? []).filter(
+                        (it) => parseMinutesFromTime(it.startTime) === null
+                      );
+                      const dlCount = (deadlinesByDate[wd.dateKey] ?? []).length;
+
+                      return (
+                        <div
+                          key={wd.dateKey}
+                          onDragOver={(e) => {
+                            if (!canEdit) return;
+                            e.preventDefault();
+                            setDropHighlightKey(`wk-allday-${wd.dateKey}`);
+                          }}
+                          onDragLeave={() => setDropHighlightKey(null)}
+                          onDrop={(e) => handleDropOnCalendar(e, wd.dateKey, '')}
+                          className={`p-2 border-l last:border-l-0 border-slate-200 space-y-1.5 ${
+                            dropHighlightKey === `wk-allday-${wd.dateKey}`
+                              ? 'bg-[#1E3A5F]/10'
+                              : isSel
+                              ? 'bg-slate-100/80'
+                              : ''
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedDateKey(wd.dateKey);
+                              handleSelectViewMode('day');
+                            }}
+                            className="w-full text-right flex items-center justify-between gap-1 cursor-pointer"
+                          >
+                            <span
+                              className={`text-xs font-bold px-2 py-0.5 rounded-md tabular-nums ${
+                                isToday
+                                  ? 'bg-[#1E3A5F] text-white'
+                                  : 'text-slate-800 hover:bg-slate-200'
+                              }`}
+                            >
+                              {wd.dayName} {wd.date.getDate()}
+                            </span>
+                            {dlCount > 0 && (
+                              <span
+                                title={`${dlCount} موعد نهائي`}
+                                className="text-[10px] font-bold px-1.5 rounded bg-amber-100 text-amber-900 tabular-nums"
+                              >
+                                {dlCount}!
                               </span>
                             )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                          </button>
 
-                {/* Shared Hourly Grid */}
-                <div
-                  className="grid max-h-[600px] overflow-y-auto"
-                  style={{
-                    gridTemplateColumns: `60px repeat(${weekDays.length}, minmax(0, 1fr))`,
-                  }}
-                >
-                  <div className="bg-slate-50 border-l border-slate-200 select-none">
-                    {visibleHours.map((hour) => (
-                      <div
-                        key={hour}
-                        style={{ height: `${HOUR_HEIGHT}px` }}
-                        className="px-1.5 pt-1 text-[10px] font-medium text-slate-500 border-b border-slate-200 tabular-nums text-center"
-                      >
-                        {formatHourLabel(hour)}
-                      </div>
+                          {untimed.length > 0 && (
+                            <div className="space-y-1">
+                              {untimed.slice(0, density === 'compact' ? 2 : 4).map((it) => (
+                                <div
+                                  key={it.uid}
+                                  draggable={canEdit}
+                                  onDragStart={(e) => {
+                                    if (it.kind === 'task') {
+                                      startDrag(e, { kind: 'task', id: it.id });
+                                    } else if (it.kind === 'event') {
+                                      startDrag(e, { kind: 'event', id: it.id });
+                                    }
+                                  }}
+                                  onClick={() => openItemDetails(it)}
+                                  className={`px-1.5 py-0.5 text-[10px] rounded border border-r-2 truncate flex items-center gap-1 cursor-pointer ${itemStyleClasses(
+                                    it
+                                  )}`}
+                                >
+                                  {it.kind === 'task' && isRecurringTask(it.raw) && (
+                                    <Repeat className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                                  )}
+                                  <span className="truncate">{it.title}</span>
+                                </div>
+                              ))}
+                              {untimed.length > (density === 'compact' ? 2 : 4) && (
+                                <span className="text-[9px] text-[#1E3A5F] font-semibold">
+                                  +{untimed.length - (density === 'compact' ? 2 : 4)}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Shared Hourly Grid */}
+                  <div
+                    className="grid max-h-[600px] overflow-y-auto"
+                    style={{
+                      gridTemplateColumns: `60px repeat(${weekDays.length}, minmax(0, 1fr))`,
+                    }}
+                  >
+                    <div className="bg-slate-50 border-l border-slate-200 select-none">
+                      {visibleHours.map((hour) => (
+                        <div
+                          key={hour}
+                          style={{ height: `${HOUR_HEIGHT}px` }}
+                          className="px-1.5 pt-1 text-[10px] font-medium text-slate-500 border-b border-slate-200 tabular-nums text-center"
+                        >
+                          {formatHourLabel(hour)}
+                        </div>
+                      ))}
+                    </div>
+                    {weekDays.map((wd) => (
+                      <React.Fragment key={wd.dateKey}>
+                        {renderTimeGridColumn(wd.dateKey, wd.dateKey === todayKey)}
+                      </React.Fragment>
                     ))}
                   </div>
-                  {weekDays.map((wd) => (
-                    <React.Fragment key={wd.dateKey}>
-                      {renderTimeGridColumn(wd.dateKey, wd.dateKey === todayKey)}
-                    </React.Fragment>
-                  ))}
                 </div>
               </div>
-            </div>
+            </>
           )}
 
           {/* VIEW 3: MONTH VIEW */}
           {viewMode === 'month' && (
-            <div>
+            <div className="min-w-0 overflow-hidden">
               <div
                 className="grid border-b border-slate-200 bg-slate-50"
                 style={{
@@ -2650,9 +2849,10 @@ export default function CalendarView({
                 {orderedWeekDaysMeta.map((wd) => (
                   <div
                     key={wd.jsDay}
-                    className="py-2.5 text-center text-[11px] font-semibold text-slate-600 border-l last:border-l-0 border-slate-200"
+                    className="py-2 sm:py-2.5 px-0.5 text-center text-[10px] sm:text-[11px] font-semibold text-slate-600 border-l last:border-l-0 border-slate-200 truncate"
                   >
-                    {wd.label}
+                    <span className="hidden sm:inline">{wd.label}</span>
+                    <span className="sm:hidden">{wd.label.slice(0, 4)}</span>
                   </div>
                 ))}
               </div>
@@ -2690,7 +2890,7 @@ export default function CalendarView({
                         if (!cell.inCurrentMonth) setCursorDate(cell.date);
                       }}
                       onDoubleClick={() => openCreateAtSlot(cell.dateKey)}
-                      className={`min-h-[96px] sm:min-h-[118px] p-1.5 border-b border-l border-slate-200 flex flex-col justify-between transition-colors cursor-pointer ${
+                      className={`min-w-0 min-h-[58px] sm:min-h-[118px] p-1 sm:p-1.5 border-b border-l border-slate-200 flex flex-col justify-between transition-colors cursor-pointer overflow-hidden ${
                         isDropOver
                           ? 'bg-[#1E3A5F]/15 ring-2 ring-inset ring-[#1E3A5F]'
                           : isSelected
@@ -2700,9 +2900,9 @@ export default function CalendarView({
                           : 'bg-slate-50/60 text-slate-400'
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-1">
+                      <div className="flex items-center justify-between gap-0.5 min-w-0">
                         <span
-                          className={`inline-flex items-center justify-center w-6 h-6 text-xs font-semibold rounded-full tabular-nums ${
+                          className={`inline-flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6 text-[11px] sm:text-xs font-semibold rounded-full tabular-nums shrink-0 ${
                             isToday
                               ? 'bg-[#1E3A5F] text-white'
                               : cell.inCurrentMonth
@@ -2713,11 +2913,11 @@ export default function CalendarView({
                           {cell.date.getDate()}
                         </span>
 
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-0.5 shrink-0">
                           {dayDeadlines.length > 0 && (
                             <span
                               title={`${dayDeadlines.length} موعد نهائي`}
-                              className="px-1 rounded text-[9px] font-bold bg-amber-100 text-amber-900"
+                              className="hidden sm:inline px-1 rounded text-[9px] font-bold bg-amber-100 text-amber-900"
                             >
                               تسليم {dayDeadlines.length}
                             </span>
@@ -2725,13 +2925,23 @@ export default function CalendarView({
                           {overdueCount > 0 && (
                             <span
                               title="مهام متأخرة"
-                              className="w-2 h-2 rounded-full bg-rose-600"
+                              className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-rose-600"
                             />
                           )}
                         </div>
                       </div>
 
-                      <div className="space-y-1 mt-1">
+                      {/* Compact Mobile Indicator */}
+                      {dayItems.length > 0 && (
+                        <div className="sm:hidden flex items-center justify-center gap-1 mt-1">
+                          <span className="text-[10px] font-bold text-[#1E3A5F] tabular-nums">
+                            {dayItems.length}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Desktop Item Chips */}
+                      <div className="hidden sm:block space-y-1 mt-1 min-w-0">
                         {dayItems.slice(0, maxVisible).map((item) => (
                           <div
                             key={item.uid}
@@ -2754,12 +2964,15 @@ export default function CalendarView({
                               e.stopPropagation();
                               openItemDetails(item);
                             }}
-                            className={`px-1.5 py-0.5 text-[10px] font-medium rounded border border-r-2 truncate flex items-center gap-1 cursor-pointer ${itemStyleClasses(
+                            className={`px-1.5 py-0.5 text-[10px] font-medium rounded border border-r-2 truncate flex items-center gap-1 cursor-pointer min-w-0 ${itemStyleClasses(
                               item
                             )}`}
                           >
                             {item.kind === 'meeting' && (
                               <Users className="w-2.5 h-2.5 shrink-0" />
+                            )}
+                            {item.kind === 'task' && isRecurringTask(item.raw) && (
+                              <Repeat className="w-2.5 h-2.5 shrink-0" />
                             )}
                             <span className="truncate">
                               {item.startTime ? `${item.startTime} ` : ''}
@@ -2955,11 +3168,11 @@ export default function CalendarView({
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4"
         >
           <form
             onSubmit={handleCreateSubmit}
-            className="bg-white border border-slate-200 rounded-xl w-full max-w-md p-5 space-y-4 shadow-xl"
+            className="bg-white border border-slate-200 rounded-xl w-full max-w-md max-h-[92dvh] overflow-y-auto p-4 sm:p-5 space-y-4 shadow-xl"
           >
             <div className="flex items-center justify-between pb-2 border-b border-slate-200">
               <h3 className="text-sm font-bold text-slate-900">
@@ -3160,11 +3373,11 @@ export default function CalendarView({
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4"
         >
           <form
             onSubmit={handleSaveActiveItem}
-            className="bg-white border border-slate-200 rounded-xl w-full max-w-lg p-5 space-y-4 shadow-xl max-h-[90vh] overflow-y-auto"
+            className="bg-white border border-slate-200 rounded-xl w-full max-w-lg p-4 sm:p-5 space-y-4 shadow-xl max-h-[92dvh] overflow-y-auto"
           >
             <div className="flex items-center justify-between pb-2.5 border-b border-slate-200">
               <div className="flex items-center gap-2">

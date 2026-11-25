@@ -8,14 +8,19 @@ import {
   CloudOff,
   Copy,
   ExternalLink,
+  Eye,
+  FileText,
+  Image as ImageIcon,
   Inbox,
   Link2,
   Loader2,
   MessageCircle,
+  Paperclip,
   RefreshCw,
   Send,
   Share2,
   Trash2,
+  X,
 } from 'lucide-react';
 import {
   QuickDropSyncState,
@@ -25,10 +30,15 @@ import {
   emptyQuickDropTrash,
   generateQuickDropId,
   moveQuickDropItemToTrash,
+  removeQuickDropAttachmentStorage,
+  resolveQuickDropAttachmentUrl,
   restoreQuickDropItem,
   subscribeQuickDropInbox,
+  updateQuickDropItem,
+  uploadQuickDropAttachmentFile,
 } from '../services/quickDropSync';
 import {
+  QuickDropAttachment,
   QuickDropItem,
   buildQuickDropTitlePreview,
   buildWhatsAppShareUrl,
@@ -40,17 +50,20 @@ import {
 } from '../utils/quickDropUtils';
 import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
+import PDFViewerModal, { ActivePdfTarget } from './PDFViewerModal';
 
 interface QuickDropSectionProps {
   uid?: string | null;
   canEdit: boolean;
   onRequireAuth: () => void;
+  onOpenPdf?: (target: ActivePdfTarget) => void;
 }
 
 export default function QuickDropSection({
   uid,
   canEdit,
   onRequireAuth,
+  onOpenPdf,
 }: QuickDropSectionProps) {
   const [items, setItems] = useState<QuickDropItem[]>([]);
   const [viewTab, setViewTab] = useState<'active' | 'trash'>('active');
@@ -60,6 +73,8 @@ export default function QuickDropSection({
   // Composer state
   const [titleInput, setTitleInput] = useState('');
   const [contentInput, setContentInput] = useState('');
+  const [composerAttachments, setComposerAttachments] = useState<QuickDropAttachment[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [pasteError, setPasteError] = useState<string | null>(null);
@@ -67,10 +82,22 @@ export default function QuickDropSection({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [confirmEmptyTrash, setConfirmEmptyTrash] = useState(false);
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
+  const [previewImage, setPreviewImage] = useState<{
+    url: string;
+    name: string;
+    isObjectUrl: boolean;
+  } | null>(null);
+  const [localPdfTarget, setLocalPdfTarget] = useState<ActivePdfTarget | null>(null);
+  const [replacingTarget, setReplacingTarget] = useState<{
+    itemId: string;
+    attId: string;
+  } | null>(null);
 
   const submitLockRef = useRef(false);
   const refreshFnRef = useRef<(() => Promise<void>) | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
+  const composerFileRef = useRef<HTMLInputElement | null>(null);
+  const replaceFileRef = useRef<HTMLInputElement | null>(null);
 
   const showTransientNotice = (msg: string) => {
     setActionNotice(msg);
@@ -195,6 +222,42 @@ export default function QuickDropSection({
     }
   };
 
+  const formatBytesShort = (bytes: number): string => {
+    if (!bytes || bytes < 1024) return `${Math.max(1, bytes || 0)} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const handleComposerFilesSelected = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    if (!uid || !canEdit) {
+      onRequireAuth();
+      return;
+    }
+    setUploadingFiles(true);
+    setPasteError(null);
+    try {
+      const uploaded: QuickDropAttachment[] = [];
+      for (const file of Array.from(files).slice(0, 6)) {
+        const isImage = file.type.startsWith('image/');
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+        if (!isImage && !isPdf) continue;
+        const att = await uploadQuickDropAttachmentFile(uid, file);
+        uploaded.push(att);
+      }
+      if (uploaded.length === 0) {
+        setPasteError('يرجى اختيار صور أو ملفات PDF فقط.');
+      } else {
+        setComposerAttachments((prev) => [...prev, ...uploaded].slice(0, 8));
+      }
+    } catch {
+      setPasteError('تعذر إرفاق الملف مؤقتًا؛ حاول مرة أخرى.');
+    } finally {
+      setUploadingFiles(false);
+      if (composerFileRef.current) composerFileRef.current.value = '';
+    }
+  };
+
   const handleCreateItem = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!uid || !canEdit) {
@@ -202,7 +265,7 @@ export default function QuickDropSection({
       return;
     }
     const cleanContent = contentInput.trim();
-    if (!cleanContent || submitLockRef.current) return;
+    if ((!cleanContent && composerAttachments.length === 0) || submitLockRef.current) return;
 
     submitLockRef.current = true;
     setSubmitting(true);
@@ -217,6 +280,7 @@ export default function QuickDropSection({
         id: pendingId,
         title: cleanTitle,
         content: cleanContent,
+        attachments: composerAttachments,
       });
 
       setItems((prev) => [
@@ -225,6 +289,7 @@ export default function QuickDropSection({
       ]);
       setTitleInput('');
       setContentInput('');
+      setComposerAttachments([]);
       setViewTab('active');
       showTransientNotice(
         res.offlineQueued
@@ -247,6 +312,102 @@ export default function QuickDropSection({
     } finally {
       submitLockRef.current = false;
       setSubmitting(false);
+    }
+  };
+
+  const handleOpenAttachment = async (att: QuickDropAttachment) => {
+    const resolved = await resolveQuickDropAttachmentUrl(att);
+    if (!resolved) {
+      showTransientNotice('تعذر فتح المرفق حاليًا.');
+      return;
+    }
+    if (att.kind === 'image') {
+      if (previewImage?.isObjectUrl) {
+        URL.revokeObjectURL(previewImage.url);
+      }
+      setPreviewImage({
+        url: resolved.url,
+        name: att.name,
+        isObjectUrl: resolved.isObjectUrl,
+      });
+      return;
+    }
+
+    const target: ActivePdfTarget = {
+      title: att.name,
+      fileName: att.name,
+      storagePath: att.storagePath,
+      downloadUrl: resolved.url,
+      mimeType: att.mimeType || 'application/pdf',
+      contextLabel: 'مرفق النقل السريع',
+      uid: uid || undefined,
+    };
+    if (onOpenPdf) {
+      onOpenPdf(target);
+    } else {
+      setLocalPdfTarget(target);
+    }
+  };
+
+  const handleDeleteAttachment = async (
+    item: QuickDropItem,
+    att: QuickDropAttachment
+  ) => {
+    if (!uid || !canEdit) return onRequireAuth();
+    const nextAttachments = (item.attachments || []).filter((a) => a.id !== att.id);
+    const updatedItem: QuickDropItem = {
+      ...item,
+      attachments: nextAttachments,
+    };
+    setItems((prev) => prev.map((x) => (x.id === item.id ? updatedItem : x)));
+    try {
+      await updateQuickDropItem(uid, updatedItem);
+      void removeQuickDropAttachmentStorage(att);
+      showTransientNotice('تم حذف المرفق بنجاح.');
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : 'تعذر حذف المرفق.');
+      void refreshFnRef.current?.();
+    }
+  };
+
+  const handleReplaceAttachmentPicked = async (files: FileList | null) => {
+    const target = replacingTarget;
+    if (!target || !files || files.length === 0 || !uid || !canEdit) {
+      setReplacingTarget(null);
+      return;
+    }
+    const file = files[0];
+    const isImage = file.type.startsWith('image/');
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+    if (!isImage && !isPdf) {
+      setReplacingTarget(null);
+      showTransientNotice('يرجى اختيار صورة أو ملف PDF للاستبدال.');
+      return;
+    }
+    const item = items.find((x) => x.id === target.itemId);
+    const oldAtt = item?.attachments?.find((a) => a.id === target.attId);
+    if (!item || !oldAtt) {
+      setReplacingTarget(null);
+      return;
+    }
+
+    setUploadingFiles(true);
+    try {
+      const nextAtt = await uploadQuickDropAttachmentFile(uid, file);
+      const nextAttachments = (item.attachments || []).map((a) =>
+        a.id === oldAtt.id ? nextAtt : a
+      );
+      const updatedItem: QuickDropItem = { ...item, attachments: nextAttachments };
+      setItems((prev) => prev.map((x) => (x.id === item.id ? updatedItem : x)));
+      await updateQuickDropItem(uid, updatedItem);
+      void removeQuickDropAttachmentStorage(oldAtt);
+      showTransientNotice('تم استبدال المرفق بنجاح.');
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : 'تعذر استبدال المرفق.');
+    } finally {
+      setUploadingFiles(false);
+      setReplacingTarget(null);
+      if (replaceFileRef.current) replaceFileRef.current.value = '';
     }
   };
 
@@ -546,8 +707,86 @@ export default function QuickDropSection({
             <p className="text-[11px] text-amber-800">{pasteError}</p>
           )}
 
+          {/* Staged Attachments Preview */}
+          {composerAttachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {composerAttachments.map((att) => (
+                <div
+                  key={att.id}
+                  className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-xs max-w-full"
+                >
+                  {att.kind === 'image' && att.dataUrl ? (
+                    <img
+                      src={att.dataUrl}
+                      alt={att.name}
+                      className="w-7 h-7 rounded object-cover shrink-0 border border-slate-200"
+                    />
+                  ) : att.kind === 'image' ? (
+                    <ImageIcon className="w-4 h-4 text-[#1E3A5F] shrink-0" aria-hidden="true" />
+                  ) : (
+                    <FileText className="w-4 h-4 text-rose-700 shrink-0" aria-hidden="true" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold text-slate-800 truncate max-w-[140px]">
+                      {att.name}
+                    </p>
+                    <p className="text-[10px] text-slate-500 tabular-nums">
+                      {formatBytesShort(att.sizeBytes)}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setComposerAttachments((prev) =>
+                        prev.filter((a) => a.id !== att.id)
+                      )
+                    }
+                    title="إزالة المرفق"
+                    aria-label="إزالة المرفق"
+                    className="p-1 text-slate-400 hover:text-rose-700 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <input
+            ref={composerFileRef}
+            type="file"
+            accept="image/*,application/pdf,.pdf"
+            multiple
+            className="hidden"
+            onChange={(e) => void handleComposerFilesSelected(e.target.files)}
+          />
+          <input
+            ref={replaceFileRef}
+            type="file"
+            accept="image/*,application/pdf,.pdf"
+            className="hidden"
+            onChange={(e) => void handleReplaceAttachmentPicked(e.target.files)}
+          />
+
           <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 min-w-0">
+              <button
+                type="button"
+                disabled={uploadingFiles}
+                onClick={() => {
+                  if (!uid || !canEdit) return onRequireAuth();
+                  composerFileRef.current?.click();
+                }}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-[34px] text-xs font-semibold text-[#1E3A5F] bg-white hover:bg-slate-100 border border-slate-200 rounded-lg cursor-pointer disabled:opacity-50 transition-colors"
+              >
+                {uploadingFiles ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Paperclip className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+                <span>{uploadingFiles ? 'جاري الرفع...' : 'إرفاق صورة / PDF'}</span>
+              </button>
+
               {detectedComposerUrls.length > 0 ? (
                 <span className="inline-flex items-center gap-1 text-[#1E3A5F] font-medium truncate max-w-full">
                   <Link2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
@@ -556,13 +795,13 @@ export default function QuickDropSection({
                   </span>
                 </span>
               ) : (
-                <span>تلميح: اضغط Ctrl+Enter للإضافة الفورية</span>
+                <span className="hidden sm:inline">Ctrl+Enter للإضافة الفورية</span>
               )}
             </div>
 
             <button
               type="submit"
-              disabled={!contentInput.trim() || submitting}
+              disabled={(!contentInput.trim() && composerAttachments.length === 0) || submitting || uploadingFiles}
               className="inline-flex items-center justify-center gap-1.5 px-4 py-2 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-xl cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
             >
               {submitting ? (
@@ -576,7 +815,7 @@ export default function QuickDropSection({
         </form>
       )}
 
-      {/* Active Inbox Items */}
+      {/* Active Inbox Items (capped height <= ~5 items + thin scrollbar) */}
       {viewTab === 'active' && (
         activeItems.length === 0 ? (
           <div className="p-6 rounded-xl bg-[#F7F8FA] border border-dashed border-slate-200 text-center space-y-1.5">
@@ -584,17 +823,18 @@ export default function QuickDropSection({
               صندوق النقل السريع فارغ حاليًا
             </p>
             <p className="text-xs text-slate-500">
-              أضف رابطًا أو نصًا من جوالك أو حاسوبك ليظهر فورًا على بقية أجهزتك لمدة 24 ساعة.
+              أضف رابطًا أو نصًا أو صورة أو ملف PDF ليظهر فورًا على بقية أجهزتك لمدة 24 ساعة.
             </p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="max-h-[430px] overflow-y-auto thin-scrollbar pr-0.5 space-y-3">
             {activeItems.map((item) => {
               const urls = extractSafeUrls(item.content);
               const primaryUrl = urls[0] || null;
               const previewHeading = buildQuickDropTitlePreview(
                 item.title,
-                item.content
+                item.content,
+                item.attachments
               );
               const countdown = getQuickDropCountdown(item.expiresAt, nowTick);
               const segments = splitQuickDropTextSegments(item.content);
@@ -651,24 +891,109 @@ export default function QuickDropSection({
                   </div>
 
                   {/* Body with Safe Clickable URLs */}
-                  <div className="p-3 rounded-lg bg-[#F7F8FA] text-xs sm:text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words">
-                    {segments.map((seg, idx) =>
-                      seg.type === 'url' && seg.href ? (
-                        <a
-                          key={idx}
-                          href={seg.href}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          dir="ltr"
-                          className="text-[#1E3A5F] underline font-medium hover:opacity-80 break-all inline-block"
-                        >
-                          {seg.value}
-                        </a>
-                      ) : (
-                        <span key={idx}>{seg.value}</span>
-                      )
-                    )}
-                  </div>
+                  {item.content.trim().length > 0 && (
+                    <div className="p-3 rounded-lg bg-[#F7F8FA] text-xs sm:text-sm text-slate-800 leading-relaxed whitespace-pre-wrap break-words">
+                      {segments.map((seg, idx) =>
+                        seg.type === 'url' && seg.href ? (
+                          <a
+                            key={idx}
+                            href={seg.href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            dir="ltr"
+                            className="text-[#1E3A5F] underline font-medium hover:opacity-80 break-all inline-block"
+                          >
+                            {seg.value}
+                          </a>
+                        ) : (
+                          <span key={idx}>{seg.value}</span>
+                        )
+                      )}
+                    </div>
+                  )}
+
+                  {/* Image & PDF Attachments Grid */}
+                  {item.attachments && item.attachments.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {item.attachments.map((att) => {
+                        const thumbUrl = att.dataUrl || att.downloadUrl;
+                        return (
+                          <div
+                            key={att.id}
+                            className="p-2.5 rounded-xl bg-[#F7F8FA] border border-slate-200 flex items-center justify-between gap-2"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => void handleOpenAttachment(att)}
+                              className="flex items-center gap-2.5 min-w-0 flex-1 text-right cursor-pointer group"
+                            >
+                              {att.kind === 'image' && thumbUrl ? (
+                                <img
+                                  src={thumbUrl}
+                                  alt={att.name}
+                                  className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0"
+                                />
+                              ) : att.kind === 'image' ? (
+                                <div className="w-10 h-10 rounded-lg bg-slate-200/70 flex items-center justify-center shrink-0">
+                                  <ImageIcon className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
+                                </div>
+                              ) : (
+                                <div className="w-10 h-10 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-center shrink-0">
+                                  <FileText className="w-4 h-4 text-rose-700" aria-hidden="true" />
+                                </div>
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-semibold text-slate-800 group-hover:text-[#1E3A5F] truncate">
+                                  {att.name}
+                                </p>
+                                <p className="text-[11px] text-slate-500 tabular-nums">
+                                  {att.kind === 'pdf' ? 'ملف PDF' : 'صورة'} ·{' '}
+                                  {formatBytesShort(att.sizeBytes)}
+                                </p>
+                              </div>
+                            </button>
+
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => void handleOpenAttachment(att)}
+                                title="معاينة"
+                                aria-label="معاينة المرفق"
+                                className="p-1.5 text-slate-600 hover:text-[#1E3A5F] hover:bg-white rounded-md cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5" aria-hidden="true" />
+                              </button>
+                              {canEdit && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setReplacingTarget({ itemId: item.id, attId: att.id });
+                                      replaceFileRef.current?.click();
+                                    }}
+                                    title="استبدال المرفق"
+                                    aria-label="استبدال المرفق"
+                                    className="p-1.5 text-slate-600 hover:text-[#1E3A5F] hover:bg-white rounded-md cursor-pointer"
+                                  >
+                                    <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDeleteAttachment(item, att)}
+                                    title="حذف المرفق"
+                                    aria-label="حذف المرفق"
+                                    className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {/* Item Actions */}
                   <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
@@ -792,11 +1117,12 @@ export default function QuickDropSection({
               </p>
             </div>
           ) : (
-            <div className="space-y-2.5">
+            <div className="max-h-[380px] overflow-y-auto thin-scrollbar pr-0.5 space-y-2.5">
               {trashedItems.map((item) => {
                 const previewHeading = buildQuickDropTitlePreview(
                   item.title,
-                  item.content
+                  item.content,
+                  item.attachments
                 );
                 const autoArchived =
                   Date.parse(item.expiresAt) <=
@@ -884,6 +1210,54 @@ export default function QuickDropSection({
             </div>
           )}
         </div>
+      )}
+      {/* Inline Image Preview Lightbox */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => {
+            if (previewImage.isObjectUrl) URL.revokeObjectURL(previewImage.url);
+            setPreviewImage(null);
+          }}
+        >
+          <div
+            className="bg-white border border-slate-200 rounded-2xl max-w-3xl w-full max-h-[92dvh] flex flex-col overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-2">
+              <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">
+                {previewImage.name}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (previewImage.isObjectUrl) URL.revokeObjectURL(previewImage.url);
+                  setPreviewImage(null);
+                }}
+                aria-label="إغلاق المعاينة"
+                className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="p-4 overflow-auto flex items-center justify-center bg-[#F7F8FA]">
+              <img
+                src={previewImage.url}
+                alt={previewImage.name}
+                className="max-h-[75dvh] max-w-full rounded-xl object-contain"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Local PDF Fallback Viewer if parent did not supply onOpenPdf */}
+      {localPdfTarget && (
+        <PDFViewerModal
+          uid={uid || undefined}
+          target={localPdfTarget}
+          onClose={() => setLocalPdfTarget(null)}
+        />
       )}
     </section>
   );

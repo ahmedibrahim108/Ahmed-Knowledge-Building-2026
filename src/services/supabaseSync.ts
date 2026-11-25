@@ -80,6 +80,7 @@ import {
   UnifiedTaskStatus,
   UserPreferences,
   UserProfileItem,
+  UserQuoteItem,
   WEEKLY_RHYTHM_DAYS,
   WeeklyMeeting,
   WeeklyMeetingException,
@@ -94,6 +95,17 @@ import {
   toLocalDateKey,
 } from '../data/curriculumData';
 import { sanitizeThemeConfig } from '../utils/themeEngine';
+import { normalizeRecurrenceRule } from '../utils/taskRecurrence';
+import {
+  QueuedSupabaseMutation,
+  enqueueSupabaseDelete,
+  enqueueSupabaseUpsert,
+  getOfflineOutboxMapForTable,
+  isAppOnline,
+  isNetworkOrOfflineError,
+  loadCachedUserProfile,
+  saveCachedUserProfile,
+} from '../utils/offlineQueue';
 import {
   ensureSupabaseRealtimeAuth,
   formatSupabaseErrorMessage,
@@ -754,6 +766,48 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
         }
       : {};
 
+  const validStatuses: UnifiedTaskStatus[] = ['todo', 'in_progress', 'postponed', 'done'];
+  const sanitizedHiddenStatuses = Array.isArray(prefs.hiddenTaskStatuses)
+    ? Array.from(
+        new Set(
+          prefs.hiddenTaskStatuses.filter((s): s is UnifiedTaskStatus =>
+            validStatuses.includes(s)
+          )
+        )
+      )
+    : [];
+  const sanitizedQuotesLibrary: UserQuoteItem[] = Array.isArray(prefs.quotesLibrary)
+    ? prefs.quotesLibrary
+        .filter((q): q is UserQuoteItem => Boolean(q && typeof q.text === 'string' && q.text.trim()))
+        .slice(0, 200)
+        .map((q) => ({
+          id: sanitizeId(q.id || `q_${Date.now()}`),
+          text: clip(q.text.trim(), 600),
+          author: clip((q.author || '').trim(), 120),
+          theme: q.theme ? clip(q.theme.trim(), 80) : undefined,
+          dateKey: sanitizeDateKeyOrEmpty(q.dateKey) || toLocalDateKey(),
+          colorKey: q.colorKey ? clip(q.colorKey, 40) : undefined,
+          reflection: q.reflection ? clip(q.reflection, 4000) : undefined,
+          isDailyPinned: Boolean(q.isDailyPinned),
+          createdAtMs: Number(q.createdAtMs) || Date.now(),
+          updatedAtMs: Number(q.updatedAtMs) || Date.now(),
+        }))
+    : [];
+  const extraPrefsObj = {
+    hiddenTaskStatuses: sanitizedHiddenStatuses,
+    quotesLibrary: sanitizedQuotesLibrary,
+    pinnedDailyQuoteId: prefs.pinnedDailyQuoteId
+      ? clip(String(prefs.pinnedDailyQuoteId), 128)
+      : null,
+    hiddenActivityIds: Array.isArray(prefs.hiddenActivityIds)
+      ? sanitizeStringList(prefs.hiddenActivityIds, 300, 128)
+      : [],
+    hiddenActivityTypes: Array.isArray(prefs.hiddenActivityTypes)
+      ? sanitizeStringList(prefs.hiddenActivityTypes, 20, 40)
+      : [],
+    minimalWritingMode: Boolean(prefs.minimalWritingMode),
+  };
+
   return {
     owner_id: uid,
     id: 'settings',
@@ -780,6 +834,7 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
         ? clip(String(prefs.activeFocusPinCollectionId), 128)
         : null,
       themeConfigMirror: sanitizeThemeConfig(prefs.themeConfig ?? DEFAULT_THEME_CONFIG),
+      extraPrefsMirror: extraPrefsObj,
     },
     weekly_rhythm: sanitizeWeeklyRhythm(prefs.weeklyRhythm),
     reflection_categories: sanitizeStringList(
@@ -793,6 +848,7 @@ export function buildUserPreferencesRow(uid: string, prefs: UserPreferences) {
     pinned_nav_tabs: sanitizedPins,
     custom_hubs: sanitizedHubs,
     dashboard_hero: dashboardHeroObj,
+    extra_prefs: extraPrefsObj,
   };
 }
 
@@ -957,6 +1013,16 @@ export function buildPracticalProjectRow(uid: string, proj: PracticalProject) {
 
 export function buildUnifiedTaskRow(uid: string, task: UnifiedTask) {
   const courseIdNum = Number(task.linkedCourseId);
+  const cleanRecurrence = normalizeRecurrenceRule(task.recurrence) ?? null;
+  const cleanCompletedDates = Array.isArray(task.completedOccurrenceDates)
+    ? Array.from(
+        new Set(
+          task.completedOccurrenceDates.filter(
+            (d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)
+          )
+        )
+      ).slice(-180)
+    : [];
   return {
     owner_id: uid,
     id: sanitizeId(task.id),
@@ -981,6 +1047,8 @@ export function buildUnifiedTaskRow(uid: string, task: UnifiedTask) {
       Number.isFinite(courseIdNum) && courseIdNum > 0 ? Math.round(courseIdNum) : null,
     linked_path_id: clip(task.linkedPathId, 160),
     linked_book_id: clip(task.linkedBookId, 160),
+    recurrence: cleanRecurrence,
+    completed_occurrence_dates: cleanCompletedDates,
   };
 }
 
@@ -1402,6 +1470,60 @@ function mapPreferencesRow(raw: Record<string, unknown>): UserPreferences {
       }
       return undefined;
     })(),
+    ...(() => {
+      const colExtra =
+        raw.extra_prefs &&
+        typeof raw.extra_prefs === 'object' &&
+        Object.keys(raw.extra_prefs as Record<string, unknown>).length > 0
+          ? (raw.extra_prefs as Record<string, unknown>)
+          : undefined;
+      const mirrorExtra =
+        raw.calendar_prefs && typeof raw.calendar_prefs === 'object'
+          ? ((raw.calendar_prefs as Record<string, unknown>).extraPrefsMirror as
+              | Record<string, unknown>
+              | undefined)
+          : undefined;
+      const ex = colExtra || mirrorExtra || {};
+      const validStatuses: UnifiedTaskStatus[] = ['todo', 'in_progress', 'postponed', 'done'];
+      const hiddenTaskStatuses = Array.isArray(ex.hiddenTaskStatuses)
+        ? (ex.hiddenTaskStatuses.filter((s): s is UnifiedTaskStatus =>
+            validStatuses.includes(s as UnifiedTaskStatus)
+          ))
+        : undefined;
+      const quotesLibrary = Array.isArray(ex.quotesLibrary)
+        ? (ex.quotesLibrary.filter(
+            (q): q is UserQuoteItem =>
+              Boolean(q && typeof q === 'object' && typeof (q as UserQuoteItem).text === 'string')
+          ))
+        : undefined;
+      return {
+        ...(hiddenTaskStatuses ? { hiddenTaskStatuses } : {}),
+        ...(quotesLibrary ? { quotesLibrary } : {}),
+        ...(ex.pinnedDailyQuoteId !== undefined
+          ? {
+              pinnedDailyQuoteId:
+                typeof ex.pinnedDailyQuoteId === 'string' && ex.pinnedDailyQuoteId
+                  ? ex.pinnedDailyQuoteId
+                  : null,
+            }
+          : {}),
+        ...(Array.isArray(ex.hiddenActivityIds)
+          ? { hiddenActivityIds: sanitizeStringList(ex.hiddenActivityIds, 300, 128) }
+          : {}),
+        ...(Array.isArray(ex.hiddenActivityTypes)
+          ? {
+              hiddenActivityTypes: sanitizeStringList(
+                ex.hiddenActivityTypes,
+                20,
+                40
+              ) as ActivityEntityType[],
+            }
+          : {}),
+        ...(typeof ex.minimalWritingMode === 'boolean'
+          ? { minimalWritingMode: ex.minimalWritingMode }
+          : {}),
+      };
+    })(),
   };
 }
 
@@ -1628,6 +1750,10 @@ function mapUnifiedTaskRow(raw: Record<string, unknown>): UnifiedTask {
         : undefined,
     linkedPathId: raw.linked_path_id ? String(raw.linked_path_id) : undefined,
     linkedBookId: raw.linked_book_id ? String(raw.linked_book_id) : undefined,
+    recurrence: normalizeRecurrenceRule(raw.recurrence),
+    completedOccurrenceDates: Array.isArray(raw.completed_occurrence_dates)
+      ? raw.completed_occurrence_dates.filter((d): d is string => typeof d === 'string')
+      : [],
   };
 }
 
@@ -1775,6 +1901,13 @@ export async function ensureUserProfileExists(
     return existingPromise;
   }
 
+  if (!isAppOnline()) {
+    const cached = loadCachedUserProfile(user.uid);
+    if (cached) {
+      return cached;
+    }
+  }
+
   const run = withFirebaseTokenRetry(async (client): Promise<UserProfileRecord> => {
     const profileColumns =
       'uid, display_name, email, photo_url, role, approval_status, created_at, updated_at';
@@ -1805,6 +1938,7 @@ export async function ensureUserProfileExists(
           `PROFILE_UID_MISMATCH: Expected UID ${user.uid}, got ${existing.uid}.`
         );
       }
+      saveCachedUserProfile(existing);
       return existing;
     }
 
@@ -1864,10 +1998,19 @@ export async function ensureUserProfileExists(
       );
     }
 
+    saveCachedUserProfile(verified);
     return verified;
-  }).finally(() => {
-    inFlightProfilePromises.delete(user.uid);
-  });
+  })
+    .catch((err) => {
+      if (isNetworkOrOfflineError(err)) {
+        const cached = loadCachedUserProfile(user.uid);
+        if (cached) return cached;
+      }
+      throw err;
+    })
+    .finally(() => {
+      inFlightProfilePromises.delete(user.uid);
+    });
 
   inFlightProfilePromises.set(user.uid, run);
   return run;
@@ -2114,6 +2257,29 @@ export function subscribeUserWorkspace(
 
   let disposed = false;
 
+  const overlayOutboxOnRows = (
+    table: string,
+    rows: Record<string, unknown>[],
+    keyCol: string
+  ): Record<string, unknown>[] => {
+    const outboxMap = getOfflineOutboxMapForTable(uid, table);
+    if (outboxMap.size === 0) return rows;
+    const byKey = new Map<string, Record<string, unknown>>();
+    for (const r of rows) {
+      const k = String(r[keyCol] ?? '');
+      if (k) byKey.set(k, r);
+    }
+    for (const [k, mut] of outboxMap.entries()) {
+      if (mut.op === 'delete') {
+        byKey.delete(k);
+      } else if (mut.op === 'upsert' && mut.row) {
+        const prev = byKey.get(k) || {};
+        byKey.set(k, { ...prev, ...mut.row });
+      }
+    }
+    return Array.from(byKey.values());
+  };
+
   const fetchQuarters = async () => {
     if (!callbacks.onQuarters || disposed) return;
     const { data, error } = await withFirebaseTokenRetry(async (c) =>
@@ -2124,7 +2290,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onQuarters((data || []).map((r) => mapQuarterRow(r as Record<string, unknown>)));
+      const rows = overlayOutboxOnRows('quarters', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onQuarters(rows.map((r) => mapQuarterRow(r)));
     }
   };
 
@@ -2138,7 +2305,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onMonths((data || []).map((r) => mapMonthRow(r as Record<string, unknown>)));
+      const rows = overlayOutboxOnRows('months', (data || []) as Record<string, unknown>[], 'doc_id');
+      callbacks.onMonths(rows.map((r) => mapMonthRow(r)));
     }
   };
 
@@ -2152,7 +2320,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onDomains((data || []).map((r) => mapDomainRow(r as Record<string, unknown>)));
+      const rows = overlayOutboxOnRows('domains', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onDomains(rows.map((r) => mapDomainRow(r)));
     }
   };
 
@@ -2166,7 +2335,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onCourses((data || []).map((r) => mapCourseRow(r as Record<string, unknown>)));
+      const rows = overlayOutboxOnRows('courses', (data || []) as Record<string, unknown>[], 'doc_id');
+      callbacks.onCourses(rows.map((r) => mapCourseRow(r)));
     }
   };
 
@@ -2180,7 +2350,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onBookNotes((data || []).map((r) => mapBookNoteRow(r as Record<string, unknown>)));
+      const rows = overlayOutboxOnRows('book_notes', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onBookNotes(rows.map((r) => mapBookNoteRow(r)));
     }
   };
 
@@ -2194,9 +2365,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onCustomCategories(
-        (data || []).map((r) => mapCustomCategoryRow(r as Record<string, unknown>))
-      );
+      const rows = overlayOutboxOnRows('custom_categories', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onCustomCategories(rows.map((r) => mapCustomCategoryRow(r)));
     }
   };
 
@@ -2215,7 +2385,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onHistory((data || []).map((r) => mapHistoryRow(r as Record<string, unknown>)));
+      const rows = overlayOutboxOnRows('study_history', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onHistory(rows.map((r) => mapHistoryRow(r)));
     }
   };
 
@@ -2233,8 +2404,15 @@ export function subscribeUserWorkspace(
       console.warn('Supabase user_preferences load error:', error);
       return;
     }
-    if (!disposed && data) {
-      callbacks.onPreferences(mapPreferencesRow(data as Record<string, unknown>));
+    if (!disposed) {
+      const outboxPref = getOfflineOutboxMapForTable(uid, 'user_preferences').get('settings');
+      const effectiveRow =
+        outboxPref?.op === 'upsert' && outboxPref.row
+          ? { ...(data || {}), ...outboxPref.row }
+          : data;
+      if (effectiveRow) {
+        callbacks.onPreferences(mapPreferencesRow(effectiveRow as Record<string, unknown>));
+      }
     }
   };
 
@@ -2253,9 +2431,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onReflections(
-        (data || []).map((r) => mapReflectionRow(r as Record<string, unknown>))
-      );
+      const rows = overlayOutboxOnRows('reflections', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onReflections(rows.map((r) => mapReflectionRow(r)));
     }
   };
 
@@ -2278,9 +2455,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onBlogPosts(
-        (data || []).map((r) => mapBlogPostRow(r as Record<string, unknown>))
-      );
+      const rows = overlayOutboxOnRows('blog_posts', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onBlogPosts(rows.map((r) => mapBlogPostRow(r)));
     }
   };
 
@@ -2299,9 +2475,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onCalendarEvents(
-        (data || []).map((r) => mapCalendarEventRow(r as Record<string, unknown>))
-      );
+      const rows = overlayOutboxOnRows('calendar_events', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onCalendarEvents(rows.map((r) => mapCalendarEventRow(r)));
     }
   };
 
@@ -2315,9 +2490,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onLearningPaths(
-        (data || []).map((r) => mapLearningPathRow(r as Record<string, unknown>))
-      );
+      const rows = overlayOutboxOnRows('learning_paths', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onLearningPaths(rows.map((r) => mapLearningPathRow(r)));
     }
   };
 
@@ -2331,9 +2505,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onReadingItems(
-        (data || []).map((r) => mapReadingItemRow(r as Record<string, unknown>))
-      );
+      const rows = overlayOutboxOnRows('reading_items', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onReadingItems(rows.map((r) => mapReadingItemRow(r)));
     }
   };
 
@@ -2347,9 +2520,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onProjects(
-        (data || []).map((r) => mapPracticalProjectRow(r as Record<string, unknown>))
-      );
+      const rows = overlayOutboxOnRows('practical_projects', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onProjects(rows.map((r) => mapPracticalProjectRow(r)));
     }
   };
 
@@ -2364,13 +2536,26 @@ export function subscribeUserWorkspace(
     }
     if (!disposed) {
       const postponedSet = readLocalPostponedTaskSet(uid);
-      const mapped = (data || []).map((r) => {
-        const task = mapUnifiedTaskRow(r as Record<string, unknown>);
+      const localRecurrenceMap = readLocalTaskRecurrenceMap(uid);
+      const rows = overlayOutboxOnRows('unified_tasks', (data || []) as Record<string, unknown>[], 'id');
+      const mapped = rows.map((r) => {
+        let task = mapUnifiedTaskRow(r);
         if (task.status === 'postponed' && postponedSet.has(task.id)) {
           postponedSet.delete(task.id);
           writeLocalPostponedTaskSet(uid, postponedSet);
         } else if (task.status === 'todo' && postponedSet.has(task.id)) {
-          return { ...task, status: 'postponed' as UnifiedTaskStatus };
+          task = { ...task, status: 'postponed' as UnifiedTaskStatus };
+        }
+        const localRec = localRecurrenceMap[task.id];
+        if (localRec) {
+          task = {
+            ...task,
+            recurrence: task.recurrence || localRec.recurrence,
+            completedOccurrenceDates:
+              task.completedOccurrenceDates && task.completedOccurrenceDates.length > 0
+                ? task.completedOccurrenceDates
+                : localRec.completedOccurrenceDates || [],
+          };
         }
         return task;
       });
@@ -2392,9 +2577,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onWeeklyMeetings(
-        (data || []).map((r) => mapWeeklyMeetingRow(r as Record<string, unknown>))
-      );
+      const rows = overlayOutboxOnRows('weekly_meetings', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onWeeklyMeetings(rows.map((r) => mapWeeklyMeetingRow(r)));
     }
   };
 
@@ -2412,9 +2596,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      callbacks.onDentalCases(
-        (data || []).map((r) => mapDentalCaseRow(r as Record<string, unknown>))
-      );
+      const rows = overlayOutboxOnRows('dental_cases', (data || []) as Record<string, unknown>[], 'id');
+      callbacks.onDentalCases(rows.map((r) => mapDentalCaseRow(r)));
     }
   };
 
@@ -2436,8 +2619,13 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      const remote = (data || []).map((r) => mapActivityLogRow(r as Record<string, unknown>));
-      const local = readLocalFallbackList<ActivityLogEntry>(uid, 'activity_logs');
+      const outboxMap = getOfflineOutboxMapForTable(uid, 'activity_logs');
+      const remote = (data || [])
+        .map((r) => mapActivityLogRow(r as Record<string, unknown>))
+        .filter((item) => outboxMap.get(item.id)?.op !== 'delete');
+      const local = readLocalFallbackList<ActivityLogEntry>(uid, 'activity_logs').filter(
+        (item) => outboxMap.get(item.id)?.op !== 'delete'
+      );
       callbacks.onActivityLogs(mergeByKey(remote, local, (x) => x.id, (x) => x.occurredAtMs));
     }
   };
@@ -2460,7 +2648,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      const remote = (data || []).map((r) => mapDailyJournalRow(r as Record<string, unknown>));
+      const rows = overlayOutboxOnRows('daily_journals', (data || []) as Record<string, unknown>[], 'date_key');
+      const remote = rows.map((r) => mapDailyJournalRow(r));
       const local = readLocalFallbackList<DailyJournalRecord>(uid, 'daily_journals');
       callbacks.onDailyJournals(mergeByKey(remote, local, (x) => x.dateKey, (x) => x.updatedAtMs));
     }
@@ -2483,7 +2672,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      const remote = (data || []).map((r) => mapPeriodReviewRow(r as Record<string, unknown>));
+      const rows = overlayOutboxOnRows('period_reviews', (data || []) as Record<string, unknown>[], 'id');
+      const remote = rows.map((r) => mapPeriodReviewRow(r));
       const local = readLocalFallbackList<PeriodReviewRecord>(uid, 'period_reviews');
       callbacks.onPeriodReviews(mergeByKey(remote, local, (x) => x.id, (x) => x.updatedAtMs));
     }
@@ -2506,7 +2696,8 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      const remote = (data || []).map((r) => mapWeeklyPlanRow(r as Record<string, unknown>));
+      const rows = overlayOutboxOnRows('weekly_plans', (data || []) as Record<string, unknown>[], 'week_key');
+      const remote = rows.map((r) => mapWeeklyPlanRow(r));
       const local = readLocalFallbackList<WeeklyPlanRecord>(uid, 'weekly_plans');
       callbacks.onWeeklyPlans(mergeByKey(remote, local, (x) => x.weekKey, (x) => x.updatedAtMs));
     }
@@ -2529,8 +2720,13 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      const remote = (data || []).map((r) => mapPinCollectionRow(r as Record<string, unknown>));
-      const local = readLocalFallbackList<PinCollection>(uid, 'pin_collections');
+      const outboxMap = getOfflineOutboxMapForTable(uid, 'pin_collections');
+      const remote = (data || [])
+        .map((r) => mapPinCollectionRow(r as Record<string, unknown>))
+        .filter((item) => outboxMap.get(item.id)?.op !== 'delete');
+      const local = readLocalFallbackList<PinCollection>(uid, 'pin_collections').filter(
+        (item) => outboxMap.get(item.id)?.op !== 'delete'
+      );
       callbacks.onPinCollections(mergeByKey(remote, local, (x) => x.id, (x) => x.updatedAtMs));
     }
   };
@@ -2745,7 +2941,13 @@ const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
   learning_paths: ['learning_objectives', 'sort_order', 'is_public'],
   reading_items: ['learning_objectives', 'sort_order', 'is_public'],
   book_notes: ['resources', 'sort_order', 'created_at_ms'],
-  unified_tasks: ['linked_course_id', 'linked_path_id', 'linked_book_id'],
+  unified_tasks: [
+    'linked_course_id',
+    'linked_path_id',
+    'linked_book_id',
+    'recurrence',
+    'completed_occurrence_dates',
+  ],
   user_preferences: [
     'weekly_rhythm',
     'reflection_categories',
@@ -2753,6 +2955,7 @@ const OPTIONAL_007_COLUMNS_BY_TABLE: Record<string, string[]> = {
     'pinned_nav_tabs',
     'custom_hubs',
     'dashboard_hero',
+    'extra_prefs',
   ],
   reflections: [
     'category_tag',
@@ -2841,32 +3044,131 @@ async function runUpsertWith007Fallback(
   });
 }
 
+async function runQueuedUpsert(params: {
+  uid: string;
+  table: string;
+  keyCol: string;
+  keyVal: string;
+  onConflict: string;
+  row: Record<string, unknown>;
+  use007Fallback?: boolean;
+}): Promise<void> {
+  const { uid, table, keyCol, keyVal, onConflict, row, use007Fallback } = params;
+  if (!isAppOnline() || !isSupabaseConfigured || !supabase) {
+    enqueueSupabaseUpsert(uid, { table, keyCol, keyVal, onConflict, row });
+    return;
+  }
+  try {
+    if (use007Fallback) {
+      await runUpsertWith007Fallback(table, row, onConflict);
+    } else {
+      await runWrite((c) => c.from(table).upsert(row, { onConflict }));
+    }
+  } catch (err) {
+    if (isNetworkOrOfflineError(err)) {
+      enqueueSupabaseUpsert(uid, { table, keyCol, keyVal, onConflict, row });
+      return;
+    }
+    throw err;
+  }
+}
+
+async function runQueuedDelete(params: {
+  uid: string;
+  table: string;
+  keyCol: string;
+  keyVal: string;
+}): Promise<void> {
+  const { uid, table, keyCol, keyVal } = params;
+  if (!isAppOnline() || !isSupabaseConfigured || !supabase) {
+    enqueueSupabaseDelete(uid, { table, keyCol, keyVal });
+    return;
+  }
+  try {
+    await runWrite((c) =>
+      c.from(table).delete().eq('owner_id', uid).eq(keyCol, keyVal)
+    );
+  } catch (err) {
+    if (isNetworkOrOfflineError(err)) {
+      enqueueSupabaseDelete(uid, { table, keyCol, keyVal });
+      return;
+    }
+    throw err;
+  }
+}
+
+export async function executeQueuedSupabaseMutation(
+  mut: QueuedSupabaseMutation
+): Promise<void> {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error('Supabase not configured');
+  }
+  if (mut.op === 'delete') {
+    await runWrite((c) =>
+      c.from(mut.table).delete().eq('owner_id', mut.uid).eq(mut.keyCol, mut.keyVal)
+    );
+    return;
+  }
+  const row = mut.row || {};
+  if (mut.table === 'daily_journals') {
+    try {
+      await runWrite((c) =>
+        c.from('daily_journals').upsert(row, { onConflict: mut.onConflict || 'owner_id,date_key' })
+      );
+    } catch (err) {
+      if (isMissingColumnError(err)) {
+        const clone = { ...row };
+        delete clone.daily_quote;
+        await runWrite((c) =>
+          c.from('daily_journals').upsert(clone, { onConflict: mut.onConflict || 'owner_id,date_key' })
+        );
+        return;
+      }
+      throw err;
+    }
+    return;
+  }
+  if (OPTIONAL_007_COLUMNS_BY_TABLE[mut.table]) {
+    await runUpsertWith007Fallback(mut.table, row, mut.onConflict || 'owner_id,id');
+  } else {
+    await runWrite((c) =>
+      c.from(mut.table).upsert(row, { onConflict: mut.onConflict || 'owner_id,id' })
+    );
+  }
+}
+
 export async function saveQuarterDoc(uid: string, q: QuarterInfo): Promise<void> {
   const row = buildQuarterRow(uid, q);
-  await runWrite((c) =>
-    c.from('quarters').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runQueuedUpsert({
+    uid,
+    table: 'quarters',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+  });
 }
 
 export async function deleteQuarterDoc(uid: string, quarterId: string): Promise<void> {
   const id = sanitizeId(quarterId);
-  await runWrite((c) =>
-    c.from('quarters').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'quarters', keyCol: 'id', keyVal: id });
 }
 
 export async function saveMonthDoc(uid: string, m: MonthPlan): Promise<void> {
   const row = buildMonthRow(uid, m);
-  await runWrite((c) =>
-    c.from('months').upsert(row, { onConflict: 'owner_id,doc_id' })
-  );
+  await runQueuedUpsert({
+    uid,
+    table: 'months',
+    keyCol: 'doc_id',
+    keyVal: row.doc_id,
+    onConflict: 'owner_id,doc_id',
+    row,
+  });
 }
 
 export async function deleteMonthDoc(uid: string, docId: string): Promise<void> {
   const id = sanitizeId(docId);
-  await runWrite((c) =>
-    c.from('months').delete().eq('owner_id', uid).eq('doc_id', id)
-  );
+  await runQueuedDelete({ uid, table: 'months', keyCol: 'doc_id', keyVal: id });
 }
 
 export async function saveDomainDoc(
@@ -2875,40 +3177,55 @@ export async function saveDomainDoc(
   order: number
 ): Promise<void> {
   const row = buildDomainRow(uid, d, order);
-  await runWrite((c) =>
-    c.from('domains').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runQueuedUpsert({
+    uid,
+    table: 'domains',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+  });
 }
 
 export async function deleteDomainDoc(uid: string, domainId: string): Promise<void> {
   const id = sanitizeId(domainId);
-  await runWrite((c) =>
-    c.from('domains').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'domains', keyCol: 'id', keyVal: id });
 }
 
 export async function saveCourseDoc(uid: string, cItem: PersonalCourse): Promise<void> {
   const row = buildCourseRow(uid, cItem);
-  await runUpsertWith007Fallback('courses', row, 'owner_id,doc_id');
+  await runQueuedUpsert({
+    uid,
+    table: 'courses',
+    keyCol: 'doc_id',
+    keyVal: row.doc_id,
+    onConflict: 'owner_id,doc_id',
+    row,
+    use007Fallback: true,
+  });
 }
 
 export async function deleteCourseDoc(uid: string, docId: string): Promise<void> {
   const id = sanitizeId(docId);
-  await runWrite((c) =>
-    c.from('courses').delete().eq('owner_id', uid).eq('doc_id', id)
-  );
+  await runQueuedDelete({ uid, table: 'courses', keyCol: 'doc_id', keyVal: id });
 }
 
 export async function saveBookNoteDoc(uid: string, bn: BookNote): Promise<void> {
   const row = buildBookNoteRow(uid, bn);
-  await runUpsertWith007Fallback('book_notes', row, 'owner_id,id');
+  await runQueuedUpsert({
+    uid,
+    table: 'book_notes',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+    use007Fallback: true,
+  });
 }
 
 export async function deleteBookNoteDoc(uid: string, noteId: string): Promise<void> {
   const id = sanitizeId(noteId);
-  await runWrite((c) =>
-    c.from('book_notes').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'book_notes', keyCol: 'id', keyVal: id });
 }
 
 export async function saveCustomCategoryDoc(
@@ -2916,9 +3233,14 @@ export async function saveCustomCategoryDoc(
   cat: CustomCategory
 ): Promise<void> {
   const row = buildCustomCategoryRow(uid, cat);
-  await runWrite((c) =>
-    c.from('custom_categories').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runQueuedUpsert({
+    uid,
+    table: 'custom_categories',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+  });
 }
 
 export async function deleteCustomCategoryDoc(
@@ -2926,9 +3248,7 @@ export async function deleteCustomCategoryDoc(
   categoryId: string
 ): Promise<void> {
   const id = sanitizeId(categoryId);
-  await runWrite((c) =>
-    c.from('custom_categories').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'custom_categories', keyCol: 'id', keyVal: id });
 }
 
 export async function saveHistoryEntryDoc(
@@ -2936,9 +3256,14 @@ export async function saveHistoryEntryDoc(
   entry: StudyHistoryEntry
 ): Promise<void> {
   const row = buildHistoryRow(uid, entry);
-  await runWrite((c) =>
-    c.from('study_history').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runQueuedUpsert({
+    uid,
+    table: 'study_history',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+  });
 }
 
 export async function deleteHistoryEntryDoc(
@@ -2946,9 +3271,7 @@ export async function deleteHistoryEntryDoc(
   entryId: string
 ): Promise<void> {
   const id = sanitizeId(entryId);
-  await runWrite((c) =>
-    c.from('study_history').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'study_history', keyCol: 'id', keyVal: id });
 }
 
 export async function saveUserPreferencesDoc(
@@ -2956,7 +3279,7 @@ export async function saveUserPreferencesDoc(
   prefs: UserPreferences
 ): Promise<void> {
   const row = buildUserPreferencesRow(uid, prefs);
-  if (!prefs.themeConfig && isSupabaseConfigured && supabase) {
+  if (!prefs.themeConfig && isSupabaseConfigured && supabase && isAppOnline()) {
     try {
       const existing = await withFirebaseTokenRetry(async (c) =>
         c
@@ -2983,7 +3306,15 @@ export async function saveUserPreferencesDoc(
       // Non-blocking fallback
     }
   }
-  await runUpsertWith007Fallback('user_preferences', row, 'owner_id,id');
+  await runQueuedUpsert({
+    uid,
+    table: 'user_preferences',
+    keyCol: 'id',
+    keyVal: 'settings',
+    onConflict: 'owner_id,id',
+    row,
+    use007Fallback: true,
+  });
 }
 
 function isRlsPermissionError(err: unknown): boolean {
@@ -3156,7 +3487,15 @@ export async function saveReflectionDoc(
   reflection: PersonalReflection
 ): Promise<void> {
   const row = buildReflectionRow(uid, reflection);
-  await runUpsertWith007Fallback('reflections', row, 'owner_id,id');
+  await runQueuedUpsert({
+    uid,
+    table: 'reflections',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+    use007Fallback: true,
+  });
 }
 
 export async function deleteReflectionDoc(
@@ -3164,25 +3503,26 @@ export async function deleteReflectionDoc(
   reflectionId: string
 ): Promise<void> {
   const id = sanitizeId(reflectionId);
-  await runWrite((c) =>
-    c.from('reflections').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'reflections', keyCol: 'id', keyVal: id });
 }
 
 export async function saveBlogPostDoc(
   uid: string,
   post: BlogPost
 ): Promise<void> {
-  if (!isSupabaseConfigured || !supabase) return;
   const row = buildBlogPostRow(uid, post);
   try {
-    await runWrite((c) =>
-      c.from('blog_posts').upsert(row, { onConflict: 'owner_id,id' })
-    );
+    await runQueuedUpsert({
+      uid,
+      table: 'blog_posts',
+      keyCol: 'id',
+      keyVal: row.id,
+      onConflict: 'owner_id,id',
+      row,
+    });
   } catch (err) {
     if (isMissingTableError(err)) {
       hasPending010Migration = true;
-      console.warn('Supabase table "blog_posts" requires migration 010.');
       return;
     }
     throw err;
@@ -3193,12 +3533,9 @@ export async function deleteBlogPostDoc(
   uid: string,
   postId: string
 ): Promise<void> {
-  if (!isSupabaseConfigured || !supabase) return;
   const id = sanitizeId(postId);
   try {
-    await runWrite((c) =>
-      c.from('blog_posts').delete().eq('owner_id', uid).eq('id', id)
-    );
+    await runQueuedDelete({ uid, table: 'blog_posts', keyCol: 'id', keyVal: id });
   } catch (err) {
     if (isMissingTableError(err)) {
       hasPending010Migration = true;
@@ -3213,9 +3550,14 @@ export async function saveCalendarEventDoc(
   event: CalendarEvent
 ): Promise<void> {
   const row = buildCalendarEventRow(uid, event);
-  await runWrite((c) =>
-    c.from('calendar_events').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runQueuedUpsert({
+    uid,
+    table: 'calendar_events',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+  });
 }
 
 export async function deleteCalendarEventDoc(
@@ -3223,9 +3565,7 @@ export async function deleteCalendarEventDoc(
   eventId: string
 ): Promise<void> {
   const id = sanitizeId(eventId);
-  await runWrite((c) =>
-    c.from('calendar_events').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'calendar_events', keyCol: 'id', keyVal: id });
 }
 
 export async function saveLearningPathDoc(
@@ -3233,7 +3573,15 @@ export async function saveLearningPathDoc(
   pathItem: LearningPath
 ): Promise<void> {
   const row = buildLearningPathRow(uid, pathItem);
-  await runUpsertWith007Fallback('learning_paths', row, 'owner_id,id');
+  await runQueuedUpsert({
+    uid,
+    table: 'learning_paths',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+    use007Fallback: true,
+  });
 }
 
 export async function deleteLearningPathDoc(
@@ -3241,9 +3589,7 @@ export async function deleteLearningPathDoc(
   pathId: string
 ): Promise<void> {
   const id = sanitizeId(pathId);
-  await runWrite((c) =>
-    c.from('learning_paths').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'learning_paths', keyCol: 'id', keyVal: id });
 }
 
 export async function saveReadingItemDoc(
@@ -3251,7 +3597,15 @@ export async function saveReadingItemDoc(
   item: ReadingLibraryItem
 ): Promise<void> {
   const row = buildReadingItemRow(uid, item);
-  await runUpsertWith007Fallback('reading_items', row, 'owner_id,id');
+  await runQueuedUpsert({
+    uid,
+    table: 'reading_items',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+    use007Fallback: true,
+  });
 }
 
 export async function deleteReadingItemDoc(
@@ -3259,9 +3613,7 @@ export async function deleteReadingItemDoc(
   itemId: string
 ): Promise<void> {
   const id = sanitizeId(itemId);
-  await runWrite((c) =>
-    c.from('reading_items').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'reading_items', keyCol: 'id', keyVal: id });
 }
 
 export async function savePracticalProjectDoc(
@@ -3269,9 +3621,14 @@ export async function savePracticalProjectDoc(
   proj: PracticalProject
 ): Promise<void> {
   const row = buildPracticalProjectRow(uid, proj);
-  await runWrite((c) =>
-    c.from('practical_projects').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runQueuedUpsert({
+    uid,
+    table: 'practical_projects',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+  });
 }
 
 export async function deletePracticalProjectDoc(
@@ -3279,9 +3636,7 @@ export async function deletePracticalProjectDoc(
   projectId: string
 ): Promise<void> {
   const id = sanitizeId(projectId);
-  await runWrite((c) =>
-    c.from('practical_projects').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'practical_projects', keyCol: 'id', keyVal: id });
 }
 
 function readLocalPostponedTaskSet(uid: string): Set<string> {
@@ -3307,11 +3662,59 @@ function writeLocalPostponedTaskSet(uid: string, set: Set<string>): void {
   }
 }
 
+type LocalTaskRecurrenceMap = Record<
+  string,
+  { recurrence?: UnifiedTask['recurrence']; completedOccurrenceDates?: string[] }
+>;
+
+function readLocalTaskRecurrenceMap(uid: string): LocalTaskRecurrenceMap {
+  if (typeof window === 'undefined' || !uid) return {};
+  try {
+    const raw = window.localStorage.getItem(`kb_task_recurrence_${uid}`);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? (parsed as LocalTaskRecurrenceMap) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLocalTaskRecurrenceEntry(
+  uid: string,
+  taskId: string,
+  recurrence?: UnifiedTask['recurrence'],
+  completedOccurrenceDates?: string[]
+): void {
+  if (typeof window === 'undefined' || !uid) return;
+  try {
+    const map = readLocalTaskRecurrenceMap(uid);
+    const cleanRule = normalizeRecurrenceRule(recurrence);
+    if (!cleanRule && (!completedOccurrenceDates || completedOccurrenceDates.length === 0)) {
+      delete map[taskId];
+    } else {
+      map[taskId] = {
+        ...(cleanRule ? { recurrence: cleanRule } : {}),
+        ...(completedOccurrenceDates && completedOccurrenceDates.length > 0
+          ? { completedOccurrenceDates }
+          : {}),
+      };
+    }
+    window.localStorage.setItem(`kb_task_recurrence_${uid}`, JSON.stringify(map));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
 export async function saveUnifiedTaskDoc(
   uid: string,
   task: UnifiedTask
 ): Promise<void> {
   const row = buildUnifiedTaskRow(uid, task);
+  writeLocalTaskRecurrenceEntry(
+    uid,
+    row.id,
+    task.recurrence,
+    task.completedOccurrenceDates
+  );
   const postponedSet = readLocalPostponedTaskSet(uid);
   if (task.status !== 'postponed' && postponedSet.has(row.id)) {
     postponedSet.delete(row.id);
@@ -3319,7 +3722,15 @@ export async function saveUnifiedTaskDoc(
   }
 
   try {
-    await runUpsertWith007Fallback('unified_tasks', row, 'owner_id,id');
+    await runQueuedUpsert({
+      uid,
+      table: 'unified_tasks',
+      keyCol: 'id',
+      keyVal: row.id,
+      onConflict: 'owner_id,id',
+      row,
+      use007Fallback: true,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const isStatusCheckError =
@@ -3329,11 +3740,15 @@ export async function saveUnifiedTaskDoc(
       hasPending012Migration = true;
       postponedSet.add(row.id);
       writeLocalPostponedTaskSet(uid, postponedSet);
-      await runUpsertWith007Fallback(
-        'unified_tasks',
-        { ...row, status: 'todo' },
-        'owner_id,id'
-      );
+      await runQueuedUpsert({
+        uid,
+        table: 'unified_tasks',
+        keyCol: 'id',
+        keyVal: row.id,
+        onConflict: 'owner_id,id',
+        row: { ...row, status: 'todo' },
+        use007Fallback: true,
+      });
       return;
     }
     throw err;
@@ -3345,9 +3760,8 @@ export async function deleteUnifiedTaskDoc(
   taskId: string
 ): Promise<void> {
   const id = sanitizeId(taskId);
-  await runWrite((c) =>
-    c.from('unified_tasks').delete().eq('owner_id', uid).eq('id', id)
-  );
+  writeLocalTaskRecurrenceEntry(uid, id, undefined, undefined);
+  await runQueuedDelete({ uid, table: 'unified_tasks', keyCol: 'id', keyVal: id });
 }
 
 export async function saveDentalCaseDoc(
@@ -3355,9 +3769,14 @@ export async function saveDentalCaseDoc(
   dentalCase: DentalCase
 ): Promise<void> {
   const row = buildDentalCaseRow(uid, dentalCase);
-  await runWrite((c) =>
-    c.from('dental_cases').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runQueuedUpsert({
+    uid,
+    table: 'dental_cases',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+  });
 }
 
 export async function deleteDentalCaseDoc(
@@ -3365,9 +3784,7 @@ export async function deleteDentalCaseDoc(
   caseId: string
 ): Promise<void> {
   const id = sanitizeId(caseId);
-  await runWrite((c) =>
-    c.from('dental_cases').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'dental_cases', keyCol: 'id', keyVal: id });
 }
 
 export async function saveWeeklyMeetingDoc(
@@ -3375,9 +3792,14 @@ export async function saveWeeklyMeetingDoc(
   meeting: WeeklyMeeting
 ): Promise<void> {
   const row = buildWeeklyMeetingRow(uid, meeting);
-  await runWrite((c) =>
-    c.from('weekly_meetings').upsert(row, { onConflict: 'owner_id,id' })
-  );
+  await runQueuedUpsert({
+    uid,
+    table: 'weekly_meetings',
+    keyCol: 'id',
+    keyVal: row.id,
+    onConflict: 'owner_id,id',
+    row,
+  });
 }
 
 export async function deleteWeeklyMeetingDoc(
@@ -3385,9 +3807,7 @@ export async function deleteWeeklyMeetingDoc(
   meetingId: string
 ): Promise<void> {
   const id = sanitizeId(meetingId);
-  await runWrite((c) =>
-    c.from('weekly_meetings').delete().eq('owner_id', uid).eq('id', id)
-  );
+  await runQueuedDelete({ uid, table: 'weekly_meetings', keyCol: 'id', keyVal: id });
 }
 
 // ============================================================================
@@ -4350,18 +4770,39 @@ export async function saveActivityLogDoc(
   entry: ActivityLogEntry
 ): Promise<void> {
   upsertLocalFallbackItem(uid, 'activity_logs', entry, (x) => x.id, 600);
-  if (!isSupabaseConfigured || !supabase) return;
   const row = buildActivityLogRow(uid, entry);
   try {
-    await runWrite((c) =>
-      c.from('activity_logs').upsert(row, { onConflict: 'owner_id,id' })
-    );
+    await runQueuedUpsert({
+      uid,
+      table: 'activity_logs',
+      keyCol: 'id',
+      keyVal: row.id,
+      onConflict: 'owner_id,id',
+      row,
+    });
   } catch (err) {
     if (isMissingTableError(err)) {
       hasPending012Migration = true;
       return;
     }
     console.warn('saveActivityLogDoc fallback kept locally:', err);
+  }
+}
+
+export async function deleteActivityLogDoc(
+  uid: string,
+  entryId: string
+): Promise<void> {
+  removeLocalFallbackItem<ActivityLogEntry>(uid, 'activity_logs', entryId, (x) => x.id);
+  const id = sanitizeId(entryId);
+  try {
+    await runQueuedDelete({ uid, table: 'activity_logs', keyCol: 'id', keyVal: id });
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      hasPending012Migration = true;
+      return;
+    }
+    console.warn('deleteActivityLogDoc fallback removed locally:', err);
   }
 }
 
@@ -4508,13 +4949,32 @@ export async function saveDailyJournalDoc(
   rec: DailyJournalRecord
 ): Promise<void> {
   upsertLocalFallbackItem(uid, 'daily_journals', rec, (x) => x.dateKey, 500);
-  if (!isSupabaseConfigured || !supabase) return;
   const fullRow = buildDailyJournalRow(uid, rec);
+  if (!isAppOnline() || !isSupabaseConfigured || !supabase) {
+    enqueueSupabaseUpsert(uid, {
+      table: 'daily_journals',
+      keyCol: 'date_key',
+      keyVal: fullRow.date_key,
+      onConflict: 'owner_id,date_key',
+      row: fullRow,
+    });
+    return;
+  }
   try {
     await runWrite((c) =>
       c.from('daily_journals').upsert(fullRow, { onConflict: 'owner_id,date_key' })
     );
   } catch (err) {
+    if (isNetworkOrOfflineError(err)) {
+      enqueueSupabaseUpsert(uid, {
+        table: 'daily_journals',
+        keyCol: 'date_key',
+        keyVal: fullRow.date_key,
+        onConflict: 'owner_id,date_key',
+        row: fullRow,
+      });
+      return;
+    }
     if (isMissingTableError(err)) {
       hasPending012Migration = true;
       return;
@@ -4589,12 +5049,16 @@ export async function savePeriodReviewDoc(
   rev: PeriodReviewRecord
 ): Promise<void> {
   upsertLocalFallbackItem(uid, 'period_reviews', rev, (x) => x.id, 300);
-  if (!isSupabaseConfigured || !supabase) return;
   const row = buildPeriodReviewRow(uid, rev);
   try {
-    await runWrite((c) =>
-      c.from('period_reviews').upsert(row, { onConflict: 'owner_id,id' })
-    );
+    await runQueuedUpsert({
+      uid,
+      table: 'period_reviews',
+      keyCol: 'id',
+      keyVal: row.id,
+      onConflict: 'owner_id,id',
+      row,
+    });
   } catch (err) {
     if (isMissingTableError(err)) {
       hasPending012Migration = true;
@@ -4658,12 +5122,16 @@ export async function saveWeeklyPlanDoc(
   plan: WeeklyPlanRecord
 ): Promise<void> {
   upsertLocalFallbackItem(uid, 'weekly_plans', plan, (x) => x.weekKey, 150);
-  if (!isSupabaseConfigured || !supabase) return;
   const row = buildWeeklyPlanRow(uid, plan);
   try {
-    await runWrite((c) =>
-      c.from('weekly_plans').upsert(row, { onConflict: 'owner_id,week_key' })
-    );
+    await runQueuedUpsert({
+      uid,
+      table: 'weekly_plans',
+      keyCol: 'week_key',
+      keyVal: row.week_key,
+      onConflict: 'owner_id,week_key',
+      row,
+    });
   } catch (err) {
     if (isMissingTableError(err)) {
       hasPending012Migration = true;
@@ -4715,12 +5183,16 @@ export async function savePinCollectionDoc(
   col: PinCollection
 ): Promise<void> {
   upsertLocalFallbackItem(uid, 'pin_collections', col, (x) => x.id, 100);
-  if (!isSupabaseConfigured || !supabase) return;
   const row = buildPinCollectionRow(uid, col);
   try {
-    await runWrite((c) =>
-      c.from('pin_collections').upsert(row, { onConflict: 'owner_id,id' })
-    );
+    await runQueuedUpsert({
+      uid,
+      table: 'pin_collections',
+      keyCol: 'id',
+      keyVal: row.id,
+      onConflict: 'owner_id,id',
+      row,
+    });
   } catch (err) {
     if (isMissingTableError(err)) {
       hasPending012Migration = true;
@@ -4735,12 +5207,9 @@ export async function deletePinCollectionDoc(
   colId: string
 ): Promise<void> {
   removeLocalFallbackItem<PinCollection>(uid, 'pin_collections', colId, (x) => x.id);
-  if (!isSupabaseConfigured || !supabase) return;
   const id = sanitizeId(colId);
   try {
-    await runWrite((c) =>
-      c.from('pin_collections').delete().eq('owner_id', uid).eq('id', id)
-    );
+    await runQueuedDelete({ uid, table: 'pin_collections', keyCol: 'id', keyVal: id });
   } catch (err) {
     if (isMissingTableError(err)) {
       hasPending012Migration = true;

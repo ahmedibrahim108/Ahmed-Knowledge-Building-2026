@@ -10,6 +10,13 @@ import {
   supabase,
   withFirebaseTokenRetry,
 } from '../services/supabaseClient';
+import {
+  isAppOnline,
+  isNetworkOrOfflineError,
+  notifyOfflineMediaChanged,
+  patchQueuedDailyJournalCover,
+  reportPendingMediaCounts,
+} from './offlineQueue';
 
 export interface StoredImageRecord {
   id: string;
@@ -481,14 +488,20 @@ export async function compressAndSaveImages(
 
     await putLocalImageRecord(record);
 
-    if (uid && isSupabaseConfigured && supabase) {
-      const synced = await uploadImageRecordToCloud(uid, record, blob);
-      saved.push(synced);
-      continue;
+    if (uid && isSupabaseConfigured && supabase && isAppOnline()) {
+      try {
+        const synced = await uploadImageRecordToCloud(uid, record, blob);
+        saved.push(synced);
+        continue;
+      } catch (err) {
+        if (!isNetworkOrOfflineError(err)) throw err;
+      }
     }
     saved.push(record);
   }
 
+  void refreshPendingImagesCount();
+  notifyOfflineMediaChanged();
   return saved;
 }
 
@@ -1189,24 +1202,62 @@ export async function replaceStoredImage(
   };
   await putLocalImageRecord(updatedRecord);
 
-  if (uid && isSupabaseConfigured && supabase) {
-    const synced = await uploadImageRecordToCloud(uid, updatedRecord, compressed.blob);
-    if (
-      oldStoragePath &&
-      oldStoragePath !== synced.storagePath &&
-      !oldStoragePath.startsWith('users/')
-    ) {
-      try {
-        await withFirebaseTokenRetry(async (client) =>
-          client.storage.from(USER_IMAGES_BUCKET).remove([oldStoragePath])
-        );
-      } catch {
-        // Non-fatal cleanup
+  if (uid && isSupabaseConfigured && supabase && isAppOnline()) {
+    try {
+      const synced = await uploadImageRecordToCloud(uid, updatedRecord, compressed.blob);
+      if (
+        oldStoragePath &&
+        oldStoragePath !== synced.storagePath &&
+        !oldStoragePath.startsWith('users/')
+      ) {
+        try {
+          await withFirebaseTokenRetry(async (client) =>
+            client.storage.from(USER_IMAGES_BUCKET).remove([oldStoragePath])
+          );
+        } catch {
+          // Non-fatal cleanup
+        }
       }
+      void refreshPendingImagesCount();
+      notifyOfflineMediaChanged();
+      return synced;
+    } catch (err) {
+      if (!isNetworkOrOfflineError(err)) throw err;
     }
-    return synced;
   }
+  void refreshPendingImagesCount();
+  notifyOfflineMediaChanged();
   return updatedRecord;
+}
+
+const PENDING_JOURNAL_COVERS_KEY = 'mizan_pending_journal_covers_v1';
+
+interface PendingJournalCoverEntry {
+  dateKey: string;
+  fileName: string;
+  mimeType: string;
+  dataUrl: string;
+  updatedAtMs: number;
+}
+
+function readPendingJournalCovers(): PendingJournalCoverEntry[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(PENDING_JOURNAL_COVERS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? (parsed as PendingJournalCoverEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingJournalCovers(list: PendingJournalCoverEntry[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(PENDING_JOURNAL_COVERS_KEY, JSON.stringify(list));
+  } catch {
+    // Non-fatal quota guard
+  }
 }
 
 export async function uploadJournalCoverImage(
@@ -1217,6 +1268,7 @@ export async function uploadJournalCoverImage(
   imageUrl: string;
   imageStoragePath: string;
   localObjectUrl: string;
+  pendingCloudUpload?: boolean;
 }> {
   const check = validateImageFileForUpload(file);
   if (!check.valid) {
@@ -1227,33 +1279,167 @@ export async function uploadJournalCoverImage(
   const localObjectUrl = URL.createObjectURL(compressed.blob);
   let imageStoragePath = '';
   let imageUrl = '';
+  let pendingCloudUpload = false;
 
-  if (uid && isSupabaseConfigured && supabase) {
-    const safeId = sanitizeImageId(dateKey);
-    const safeName = sanitizeStorageImageName(file.name || 'journal-cover.jpg');
-    const storagePath = `${uid}/images/journal_cover_${safeId}/${safeName}`;
-    await withFirebaseTokenRetry(async (client) => {
-      const { error: uploadErr } = await client.storage
-        .from(USER_IMAGES_BUCKET)
-        .upload(storagePath, compressed.blob, {
-          contentType: compressed.mimeType || 'image/jpeg',
-          upsert: true,
-        });
-      if (uploadErr) throw uploadErr;
+  if (uid && isSupabaseConfigured && supabase && isAppOnline()) {
+    try {
+      const safeId = sanitizeImageId(dateKey);
+      const safeName = sanitizeStorageImageName(file.name || 'journal-cover.jpg');
+      const storagePath = `${uid}/images/journal_cover_${safeId}/${safeName}`;
+      await withFirebaseTokenRetry(async (client) => {
+        const { error: uploadErr } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .upload(storagePath, compressed.blob, {
+            contentType: compressed.mimeType || 'image/jpeg',
+            upsert: true,
+          });
+        if (uploadErr) throw uploadErr;
 
-      const { data: signed } = await client.storage
-        .from(USER_IMAGES_BUCKET)
-        .createSignedUrl(storagePath, 3600);
-      imageStoragePath = storagePath;
-      imageUrl = signed?.signedUrl || '';
+        const { data: signed } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .createSignedUrl(storagePath, 3600);
+        imageStoragePath = storagePath;
+        imageUrl = signed?.signedUrl || '';
+      });
+    } catch (err) {
+      if (!isNetworkOrOfflineError(err)) throw err;
+      pendingCloudUpload = true;
+    }
+  } else {
+    pendingCloudUpload = Boolean(uid && isSupabaseConfigured);
+  }
+
+  if (pendingCloudUpload && compressed.dataUrl) {
+    const list = readPendingJournalCovers().filter((c) => c.dateKey !== dateKey);
+    list.push({
+      dateKey,
+      fileName: file.name || 'journal-cover.jpg',
+      mimeType: compressed.mimeType || 'image/jpeg',
+      dataUrl: compressed.dataUrl,
+      updatedAtMs: Date.now(),
     });
+    writePendingJournalCovers(list);
+    void refreshPendingImagesCount();
+    notifyOfflineMediaChanged();
   }
 
   return {
     imageUrl: imageUrl || compressed.dataUrl || localObjectUrl,
     imageStoragePath,
     localObjectUrl,
+    pendingCloudUpload,
   };
+}
+
+export async function getPendingLocalImageCount(): Promise<number> {
+  try {
+    const idb = await openImagesDb();
+    const tx = idb.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).getAll();
+    const all = await new Promise<StoredImageRecord[]>((resolve) => {
+      req.onsuccess = () => resolve((req.result as StoredImageRecord[]) ?? []);
+      req.onerror = () => resolve([]);
+    });
+    const unsyncedIdb = all.filter((r) => r.cloudSynced === false).length;
+    return unsyncedIdb + readPendingJournalCovers().length;
+  } catch {
+    return readPendingJournalCovers().length;
+  }
+}
+
+export async function refreshPendingImagesCount(): Promise<number> {
+  const count = await getPendingLocalImageCount();
+  reportPendingMediaCounts({ images: count });
+  return count;
+}
+
+export async function syncPendingImagesToCloud(uid: string): Promise<number> {
+  if (!uid || !isSupabaseConfigured || !supabase || !isAppOnline()) return 0;
+  let syncedCount = 0;
+  try {
+    const idb = await openImagesDb();
+    const tx = idb.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).getAll();
+    const all = await new Promise<StoredImageRecord[]>((resolve) => {
+      req.onsuccess = () => resolve((req.result as StoredImageRecord[]) ?? []);
+      req.onerror = () => resolve([]);
+    });
+    const pending = all.filter((r) => r.cloudSynced === false);
+    for (const rec of pending) {
+      let blob = rec.blob;
+      if (!blob && rec.dataUrl) {
+        try {
+          const res = await fetch(rec.dataUrl);
+          blob = await res.blob();
+        } catch {
+          blob = undefined;
+        }
+      }
+      if (!blob) continue;
+      try {
+        await uploadImageRecordToCloud(uid, rec, blob);
+        syncedCount += 1;
+      } catch (err) {
+        if (isNetworkOrOfflineError(err)) break;
+      }
+    }
+  } catch {
+    // non-fatal
+  }
+  await refreshPendingImagesCount();
+  if (syncedCount > 0) notifyOfflineMediaChanged();
+  return syncedCount;
+}
+
+export async function syncPendingJournalCoversToCloud(uid: string): Promise<number> {
+  if (!uid || !isSupabaseConfigured || !supabase || !isAppOnline()) return 0;
+  const list = readPendingJournalCovers();
+  if (list.length === 0) return 0;
+
+  let synced = 0;
+  const remaining: PendingJournalCoverEntry[] = [];
+  for (const item of list) {
+    try {
+      const res = await fetch(item.dataUrl);
+      const blob = await res.blob();
+      const safeId = sanitizeImageId(item.dateKey);
+      const safeName = sanitizeStorageImageName(item.fileName || 'journal-cover.jpg');
+      const storagePath = `${uid}/images/journal_cover_${safeId}/${safeName}`;
+      let downloadUrl = '';
+      await withFirebaseTokenRetry(async (client) => {
+        const { error: uploadErr } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .upload(storagePath, blob, {
+            contentType: item.mimeType || 'image/jpeg',
+            upsert: true,
+          });
+        if (uploadErr) throw uploadErr;
+        const { data: signed } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .createSignedUrl(storagePath, 3600);
+        downloadUrl = signed?.signedUrl || '';
+      });
+      patchQueuedDailyJournalCover(uid, item.dateKey, storagePath, downloadUrl);
+      // Also update daily_journals row directly if present
+      await withFirebaseTokenRetry(async (client) =>
+        client
+          .from('daily_journals')
+          .update({
+            cover_image_storage_path: storagePath,
+            cover_image_url: downloadUrl,
+          })
+          .eq('owner_id', uid)
+          .eq('date_key', item.dateKey)
+      );
+      synced += 1;
+    } catch {
+      remaining.push(item);
+    }
+  }
+  writePendingJournalCovers(remaining);
+  await refreshPendingImagesCount();
+  if (synced > 0) notifyOfflineMediaChanged();
+  return synced;
 }
 
 export async function deleteJournalCoverStorage(

@@ -26,6 +26,7 @@ import {
   PenLine,
   Plus,
   RefreshCw,
+  Repeat,
   Save,
   Square,
   Trash2,
@@ -57,6 +58,7 @@ import {
   resolveCourseStudyStage,
   sortBookNotesList,
 } from '../data/curriculumData';
+import { formatRecurrenceSummaryAr } from '../utils/taskRecurrence';
 
 const COURSE_DURATION_OPTIONS = [15, 30, 45, 60, 90, 120, 180];
 
@@ -1361,100 +1363,111 @@ export default function CourseDetailPage({
       {/* SECTION 1: Learning Objectives, Course Details, Complementary Book, Links & Spaced Repetition */}
       {showInfo && (
         <div className="space-y-6">
-          <LearningObjectivesPanel
-            objectives={course.learningObjectives}
-            canEdit={canEdit}
-            onChange={(next) =>
-              onUpdateCourse(course.id, { learningObjectives: next })
-            }
-            title={`أهداف التعلّم — ${course.title}`}
-            subtitle="حدّد لماذا تدرس هذا الكورس والنتائج أو المهارات العملية التي تستهدف تحقيقها."
-          />
+          {(() => {
+            const hasMetaDetails = Boolean(
+              course.complementaryBook ||
+                course.applicationMilestone ||
+                course.linkedMonths.length > 0 ||
+                linkedPaths.length > 0
+            );
+            return (
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                <div className={hasMetaDetails ? 'lg:col-span-6' : 'lg:col-span-12'}>
+                  <LearningObjectivesPanel
+                    objectives={course.learningObjectives}
+                    canEdit={canEdit}
+                    onChange={(next) =>
+                      onUpdateCourse(course.id, { learningObjectives: next })
+                    }
+                    title={`أهداف التعلّم — ${course.title}`}
+                    subtitle="حدّد لماذا تدرس هذا الكورس والنتائج أو المهارات العملية التي تستهدف تحقيقها."
+                  />
+                </div>
 
-          {(course.complementaryBook ||
-            course.applicationMilestone ||
-            course.linkedMonths.length > 0 ||
-            linkedPaths.length > 0) && (
-            <section className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-              <h2 className="text-base font-bold text-slate-900">
-                تفاصيل المنهج والتطبيق والروابط
-              </h2>
+                {hasMetaDetails && (
+                  <section className="lg:col-span-6 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+                    <h2 className="text-base font-bold text-slate-900">
+                      تفاصيل المنهج والتطبيق والروابط
+                    </h2>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                {(course.complementaryBook || course.bookAuthor) && (
-                  <div className="p-4 bg-slate-50/75 border border-slate-200 rounded-lg space-y-1">
-                    <span className="font-semibold text-slate-500 block">
-                      المرجع المكمل
-                    </span>
-                    <p className="text-sm font-semibold text-slate-900">
-                      <BidiText text={course.complementaryBook || '—'} />
-                    </p>
-                    {course.bookAuthor && (
-                      <p className="text-slate-600">{course.bookAuthor}</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                      {(course.complementaryBook || course.bookAuthor) && (
+                        <div className="p-4 bg-slate-50/75 border border-slate-200 rounded-lg space-y-1">
+                          <span className="font-semibold text-slate-500 block">
+                            المرجع المكمل
+                          </span>
+                          <p className="text-sm font-semibold text-slate-900">
+                            <BidiText text={course.complementaryBook || '—'} />
+                          </p>
+                          {course.bookAuthor && (
+                            <p className="text-slate-600">{course.bookAuthor}</p>
+                          )}
+                        </div>
+                      )}
+
+                      {course.applicationMilestone && (
+                        <div className="p-4 bg-slate-50/75 border border-slate-200 rounded-lg space-y-1">
+                          <span className="font-semibold text-slate-500 block">
+                            هدف التطبيق العملي
+                          </span>
+                          <BidiText
+                            text={course.applicationMilestone}
+                            as="div"
+                            multiline
+                            className="text-slate-800 leading-relaxed"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {(course.linkedMonths.length > 0 || linkedPaths.length > 0) && (
+                      <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-4 text-xs text-slate-600">
+                        {course.linkedMonths.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-slate-500">
+                              الوحدات المرتبطة:
+                            </span>
+                            {course.linkedMonths.map((monthNum) => {
+                              const mObj = allMonths.find((m) => m.id === monthNum);
+                              return (
+                                <button
+                                  key={monthNum}
+                                  type="button"
+                                  onClick={() => onJumpToMonth(monthNum)}
+                                  className="px-2.5 py-1 font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-md tabular-nums cursor-pointer"
+                                >
+                                  {mObj ? `الوحدة ${monthNum}: ${mObj.theme}` : `الوحدة ${monthNum}`}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {linkedPaths.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-slate-500">
+                              مسارات التعلّم:
+                            </span>
+                            {linkedPaths.map((p) => (
+                              <button
+                                key={p.id}
+                                type="button"
+                                onClick={onOpenPaths}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
+                              >
+                                <Compass className="w-3 h-3 text-[#1E3A5F]" aria-hidden="true" />
+                                <span>{p.title}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     )}
-                  </div>
-                )}
-
-                {course.applicationMilestone && (
-                  <div className="p-4 bg-slate-50/75 border border-slate-200 rounded-lg space-y-1">
-                    <span className="font-semibold text-slate-500 block">
-                      هدف التطبيق العملي
-                    </span>
-                    <BidiText
-                      text={course.applicationMilestone}
-                      as="div"
-                      multiline
-                      className="text-slate-800 leading-relaxed"
-                    />
-                  </div>
+                  </section>
                 )}
               </div>
-
-              {(course.linkedMonths.length > 0 || linkedPaths.length > 0) && (
-                <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-4 text-xs text-slate-600">
-                  {course.linkedMonths.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-slate-500">
-                        الوحدات المرتبطة:
-                      </span>
-                      {course.linkedMonths.map((monthNum) => {
-                        const mObj = allMonths.find((m) => m.id === monthNum);
-                        return (
-                          <button
-                            key={monthNum}
-                            type="button"
-                            onClick={() => onJumpToMonth(monthNum)}
-                            className="px-2.5 py-1 font-semibold text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-md tabular-nums cursor-pointer"
-                          >
-                            {mObj ? `الوحدة ${monthNum}: ${mObj.theme}` : `الوحدة ${monthNum}`}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {linkedPaths.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-slate-500">
-                        مسارات التعلّم:
-                      </span>
-                      {linkedPaths.map((p) => (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={onOpenPaths}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
-                        >
-                          <Compass className="w-3 h-3 text-[#1E3A5F]" aria-hidden="true" />
-                          <span>{p.title}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </section>
-          )}
+            );
+          })()}
 
           <SpacedRepetitionPanel
             canEdit={canEdit}
@@ -1662,7 +1675,7 @@ export default function CourseDetailPage({
                 onChange={(e) => void handleReplaceCourseResourceFile(e)}
               />
 
-              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl bg-slate-50/40 max-h-[380px] overflow-y-auto thin-scrollbar">
+              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl bg-slate-50/40 max-h-[310px] overflow-y-auto thin-scrollbar">
                 {course.resources.length === 0 ? (
                   <p className="p-4 text-xs text-slate-500">
                     لا توجد مصادر أو ملفات PDF أو Word مضافة لهذا الكورس بعد.
@@ -1988,7 +2001,7 @@ export default function CourseDetailPage({
                   </div>
                 )}
 
-                <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl max-h-[340px] sm:max-h-[380px] overflow-y-auto thin-scrollbar">
+                <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl max-h-[310px] overflow-y-auto thin-scrollbar">
                   {course.tasks.length === 0 ? (
                     <p className="p-4 text-xs text-slate-500">
                       لا توجد مهام مضافة بعد. أضف أول مهمة عملية للكورس.
@@ -2331,11 +2344,13 @@ export default function CourseDetailPage({
                     <span className="text-xs font-semibold text-slate-500 block">
                       مشاريع تطبيقية مرتبطة
                     </span>
-                    <div className="space-y-2">
+                    <div className="space-y-2 max-h-[240px] overflow-y-auto thin-scrollbar">
                       {linkedProjects.map((proj) => (
-                        <div
+                        <button
                           key={proj.id}
-                          className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between gap-3"
+                          type="button"
+                          onClick={onOpenTasksTab}
+                          className="w-full text-right p-3 bg-slate-50 hover:bg-white border border-slate-200 hover:border-[#1E3A5F]/40 rounded-lg flex items-center justify-between gap-3 transition-colors cursor-pointer"
                         >
                           <div className="min-w-0">
                             <p className="text-xs font-bold text-slate-900 truncate">
@@ -2350,42 +2365,71 @@ export default function CourseDetailPage({
                           <span className="text-xs font-semibold text-[#1E3A5F] tabular-nums shrink-0">
                             {proj.progressPct}%
                           </span>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </div>
                 )}
 
                 {linkedUnifiedTasks.length > 0 ? (
-                  <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl max-h-[340px] sm:max-h-[380px] overflow-y-auto thin-scrollbar">
+                  <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl max-h-[310px] overflow-y-auto thin-scrollbar">
                     {linkedUnifiedTasks.map((ut) => {
                       const isDone = ut.status === 'done';
                       const utSchedDate = ut.scheduledDate || ut.dueDate || '';
                       const isSchedulingUt = schedUnifiedTaskId === ut.id;
+                      const recSummary = formatRecurrenceSummaryAr(ut.recurrence);
                       return (
-                        <div key={ut.id} className="px-3.5 py-2.5 bg-white space-y-2">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              disabled={!canEdit}
-                              onClick={() =>
-                                onUpdateUnifiedTask(ut.id, {
-                                  status: isDone ? 'todo' : 'done',
-                                })
+                        <div
+                          key={ut.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => {
+                            if (!canEdit) {
+                              onRequireAuth();
+                              return;
+                            }
+                            setEditingUnifiedTask(ut);
+                            setTaskModalOpen(true);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              if (!canEdit) {
+                                onRequireAuth();
+                                return;
                               }
-                              className="flex items-start gap-2.5 text-right flex-1 min-w-0 cursor-pointer disabled:cursor-not-allowed"
-                            >
-                              {isDone ? (
-                                <CheckSquare
-                                  className="w-4 h-4 text-emerald-700 mt-0.5 shrink-0"
-                                  aria-hidden="true"
-                                />
-                              ) : (
-                                <Square
-                                  className="w-4 h-4 text-slate-400 mt-0.5 shrink-0"
-                                  aria-hidden="true"
-                                />
-                              )}
+                              setEditingUnifiedTask(ut);
+                              setTaskModalOpen(true);
+                            }
+                          }}
+                          className="px-3.5 py-2.5 bg-white hover:bg-slate-50/80 transition-colors space-y-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#1E3A5F]"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div className="flex items-start gap-2.5 text-right flex-1 min-w-0">
+                              <button
+                                type="button"
+                                disabled={!canEdit}
+                                aria-label={isDone ? 'إعادة المهمة لقيد التنفيذ' : 'تمييز المهمة كمكتملة'}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onUpdateUnifiedTask(ut.id, {
+                                    status: isDone ? 'todo' : 'done',
+                                  });
+                                }}
+                                className="mt-0.5 shrink-0 cursor-pointer disabled:cursor-not-allowed"
+                              >
+                                {isDone ? (
+                                  <CheckSquare
+                                    className="w-4 h-4 text-emerald-700"
+                                    aria-hidden="true"
+                                  />
+                                ) : (
+                                  <Square
+                                    className="w-4 h-4 text-slate-400"
+                                    aria-hidden="true"
+                                  />
+                                )}
+                              </button>
                               <div className="min-w-0 flex-1 space-y-1">
                                 <span
                                   className={`text-xs block break-words ${
@@ -2396,22 +2440,35 @@ export default function CourseDetailPage({
                                 >
                                   <BidiText text={ut.title} />
                                 </span>
-                                {utSchedDate && (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-slate-100 border border-slate-200 text-[#1E3A5F] rounded tabular-nums">
-                                    <Clock className="w-3 h-3" aria-hidden="true" />
-                                    <span>
-                                      {utSchedDate}
-                                      {ut.startTime ? ` · ${ut.startTime}` : ''}
-                                      {ut.durationMinutes
-                                        ? ` · ${ut.durationMinutes}د`
-                                        : ''}
-                                    </span>
-                                  </span>
+                                {(utSchedDate || recSummary) && (
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    {utSchedDate && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-slate-100 border border-slate-200 text-[#1E3A5F] rounded tabular-nums">
+                                        <Clock className="w-3 h-3" aria-hidden="true" />
+                                        <span>
+                                          {utSchedDate}
+                                          {ut.startTime ? ` · ${ut.startTime}` : ''}
+                                          {ut.durationMinutes
+                                            ? ` · ${ut.durationMinutes}د`
+                                            : ''}
+                                        </span>
+                                      </span>
+                                    )}
+                                    {recSummary && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-slate-100 border border-slate-200 text-[#1E3A5F] rounded">
+                                        <Repeat className="w-3 h-3" aria-hidden="true" />
+                                        <span>{recSummary}</span>
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                               </div>
-                            </button>
+                            </div>
 
-                            <div className="flex items-center gap-1.5 shrink-0">
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex items-center gap-1.5 shrink-0"
+                            >
                               {utSchedDate && onOpenCalendar && (
                                 <button
                                   type="button"
@@ -2804,7 +2861,7 @@ export default function CourseDetailPage({
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
               {/* Course Notes List Sidebar */}
-              <div className="lg:col-span-4 space-y-2 max-h-[460px] overflow-y-auto thin-scrollbar pl-0.5">
+              <div className="lg:col-span-4 space-y-2 max-h-[360px] overflow-y-auto thin-scrollbar pl-0.5">
                 {sortedCourseNotes.map((bn, idx) => {
                   const isSelected = activeNote?.id === bn.id;
                   const snippet = richHtmlToPlainText(bn.content).slice(0, 90);

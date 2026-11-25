@@ -1,10 +1,63 @@
-import type { JournalQuoteMeta } from '../data/curriculumData';
+import type { JournalQuoteMeta, UserQuoteItem } from '../data/curriculumData';
 
 interface QuoteTemplate {
   text: string;
   author: string;
   theme: string;
 }
+
+export interface QuoteColorTheme {
+  key: string;
+  label: string;
+  cardClass: string;
+  accentTextClass: string;
+  swatchClass: string;
+}
+
+export const QUOTE_COLOR_THEMES: Record<string, QuoteColorTheme> = {
+  amber: {
+    key: 'amber',
+    label: 'عنبري دافئ',
+    cardClass: 'bg-amber-50/75 border-amber-200/80',
+    accentTextClass: 'text-amber-700',
+    swatchClass: 'bg-amber-100 border-amber-300',
+  },
+  navy: {
+    key: 'navy',
+    label: 'أزرق معرفي',
+    cardClass: 'bg-sky-50/70 border-sky-200/80',
+    accentTextClass: 'text-[#1E3A5F]',
+    swatchClass: 'bg-sky-100 border-sky-300',
+  },
+  sage: {
+    key: 'sage',
+    label: 'أخضر هادئ',
+    cardClass: 'bg-emerald-50/70 border-emerald-200/80',
+    accentTextClass: 'text-emerald-700',
+    swatchClass: 'bg-emerald-100 border-emerald-300',
+  },
+  lavender: {
+    key: 'lavender',
+    label: 'بنفسجي ناعم',
+    cardClass: 'bg-violet-50/70 border-violet-200/80',
+    accentTextClass: 'text-violet-700',
+    swatchClass: 'bg-violet-100 border-violet-300',
+  },
+  rose: {
+    key: 'rose',
+    label: 'وردي دافئ',
+    cardClass: 'bg-rose-50/70 border-rose-200/80',
+    accentTextClass: 'text-rose-700',
+    swatchClass: 'bg-rose-100 border-rose-300',
+  },
+  slate: {
+    key: 'slate',
+    label: 'رمادي كلاسيكي',
+    cardClass: 'bg-slate-50/90 border-slate-200',
+    accentTextClass: 'text-slate-700',
+    swatchClass: 'bg-slate-200 border-slate-300',
+  },
+};
 
 export const PERSONAL_GROWTH_QUOTES: QuoteTemplate[] = [
   {
@@ -235,3 +288,103 @@ export function pickNextPersonalGrowthQuote(
     savedAtMs: Date.now(),
   };
 }
+
+export function resolveEffectiveDailyQuote(params: {
+  dateKey: string;
+  journalQuote?: JournalQuoteMeta;
+  quotesLibrary?: UserQuoteItem[];
+  pinnedDailyQuoteId?: string | null;
+}): {
+  quote: JournalQuoteMeta;
+  customQuote?: UserQuoteItem;
+  isPinnedFromLibrary: boolean;
+} {
+  const library = params.quotesLibrary || [];
+  if (params.pinnedDailyQuoteId) {
+    const pinned = library.find((q) => q.id === params.pinnedDailyQuoteId);
+    if (pinned) {
+      return {
+        quote: {
+          text: pinned.text,
+          author: pinned.author,
+          theme: pinned.theme || 'اقتباسي',
+          dateKey: params.dateKey,
+          savedAtMs: pinned.updatedAtMs,
+        },
+        customQuote: pinned,
+        isPinnedFromLibrary: true,
+      };
+    }
+  }
+  const datedCustom = library.find(
+    (q) => q.isDailyPinned || q.dateKey === params.dateKey
+  );
+  if (datedCustom && !params.journalQuote?.text) {
+    return {
+      quote: {
+        text: datedCustom.text,
+        author: datedCustom.author,
+        theme: datedCustom.theme || 'اقتباسي',
+        dateKey: params.dateKey,
+        savedAtMs: datedCustom.updatedAtMs,
+      },
+      customQuote: datedCustom,
+      isPinnedFromLibrary: Boolean(datedCustom.isDailyPinned),
+    };
+  }
+  if (params.journalQuote?.text) {
+    const matching = library.find((q) => q.text === params.journalQuote?.text);
+    return {
+      quote: params.journalQuote,
+      customQuote: matching,
+      isPinnedFromLibrary: false,
+    };
+  }
+  return {
+    quote: getPersonalGrowthQuoteForDate(params.dateKey),
+    isPinnedFromLibrary: false,
+  };
+}
+
+export function rotateDailyQuoteFromLibrary(
+  dateKey: string,
+  currentText: string | undefined,
+  quotesLibrary: UserQuoteItem[] = []
+): { quote: JournalQuoteMeta; customQuote?: UserQuoteItem } {
+  const combined: Array<{
+    text: string;
+    author: string;
+    theme: string;
+    custom?: UserQuoteItem;
+  }> = [
+    ...quotesLibrary.map((q) => ({
+      text: q.text,
+      author: q.author,
+      theme: q.theme || 'اقتباسي',
+      custom: q,
+    })),
+    ...PERSONAL_GROWTH_QUOTES.map((q) => ({
+      text: q.text,
+      author: q.author,
+      theme: q.theme,
+    })),
+  ];
+
+  const idx = combined.findIndex((item) => item.text === currentText);
+  const next =
+    idx >= 0
+      ? combined[(idx + 1) % combined.length]
+      : combined[(hashDateKey(dateKey) + 1) % combined.length];
+
+  return {
+    quote: {
+      text: next.text,
+      author: next.author,
+      theme: next.theme,
+      dateKey,
+      savedAtMs: Date.now(),
+    },
+    customQuote: next.custom,
+  };
+}
+

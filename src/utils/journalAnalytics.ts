@@ -29,6 +29,11 @@ import {
   shiftWeekKey,
   toLocalDateKey,
 } from '../data/curriculumData';
+import {
+  doesTaskOccurOnDate,
+  expandTaskOccurrenceDates,
+  isTaskCompletedOnDate,
+} from './taskRecurrence';
 
 export interface WorkspaceAnalyticsInput {
   courses: PersonalCourse[];
@@ -61,6 +66,7 @@ export type JournalNavAction =
 
 export interface DailyJournalItem {
   key: string; // entityType:entityId
+  activityLogId?: string;
   entityType: ActivityLogEntry['entityType'];
   entityId: string;
   title: string;
@@ -75,6 +81,11 @@ export interface DailyJournalItem {
   timeLabel: string;
   sortOrderMs: number;
   navAction: JournalNavAction;
+}
+
+export interface DailyJournalFilterOptions {
+  hiddenActivityIds?: string[];
+  hiddenActivityTypes?: ActivityLogEntry['entityType'][];
 }
 
 export interface DailyJournalSummary {
@@ -137,7 +148,8 @@ function resolveEntityMeta(
   data: WorkspaceAnalyticsInput,
   fallbackTitle: string,
   fallbackSubtitle?: string,
-  fallbackHubId?: LearningHubId
+  fallbackHubId?: LearningHubId,
+  dateKey?: string
 ): {
   title: string;
   subtitle?: string;
@@ -253,7 +265,16 @@ function resolveEntityMeta(
 
   if (entityType === 'task') {
     const task = data.unifiedTasks.find((t) => t.id === entityId);
-    const meta = task ? taskStatusLabel(task.status) : null;
+    const effectiveStatus: UnifiedTask['status'] | undefined = task
+      ? task.recurrence && task.recurrence.frequency !== 'none' && dateKey
+        ? isTaskCompletedOnDate(task, dateKey)
+          ? 'done'
+          : task.status === 'done'
+          ? 'todo'
+          : task.status
+        : task.status
+      : undefined;
+    const meta = effectiveStatus ? taskStatusLabel(effectiveStatus) : null;
     return {
       title: task?.title || fallbackTitle,
       subtitle: task?.linkedLabel || task?.categoryLabel || fallbackSubtitle,
@@ -376,7 +397,8 @@ function actionLabelFallback(action: ActivityLogEntry['action']): {
 
 export function buildDailyJournalSummary(
   dateKey: string,
-  data: WorkspaceAnalyticsInput
+  data: WorkspaceAnalyticsInput,
+  filterOptions?: DailyJournalFilterOptions
 ): DailyJournalSummary {
   const hubs = data.hubs && data.hubs.length > 0 ? data.hubs : LEARNING_HUBS;
   const itemsByKey = new Map<string, DailyJournalItem>();
@@ -400,7 +422,8 @@ export function buildDailyJournalSummary(
       data,
       log.title,
       log.subtitle,
-      log.hubId
+      log.hubId,
+      dateKey
     );
     const hub = getHubMeta(meta.hubId, hubs);
     const actMeta = actionLabelFallback(log.action);
@@ -427,6 +450,7 @@ export function buildDailyJournalSummary(
 
     putItem({
       key: `${log.entityType}:${log.entityId}`,
+      activityLogId: log.id,
       entityType: log.entityType,
       entityId: log.entityId,
       title: meta.title,
@@ -444,12 +468,21 @@ export function buildDailyJournalSummary(
     });
   }
 
-  // 2. Live dated UnifiedTasks scheduled or due on dateKey
+  // 2. Live dated & recurring UnifiedTasks occurring on dateKey
   const baseDateMs = new Date(`${dateKey}T09:00:00`).getTime();
   for (const task of data.unifiedTasks) {
-    const effDate = task.scheduledDate || task.dueDate || '';
-    if (effDate !== dateKey) continue;
-    const st = taskStatusLabel(task.status);
+    if (!doesTaskOccurOnDate(task, dateKey)) continue;
+    const isRecurring = Boolean(
+      task.recurrence && task.recurrence.frequency !== 'none'
+    );
+    const effectiveStatus: UnifiedTask['status'] = isRecurring
+      ? isTaskCompletedOnDate(task, dateKey)
+        ? 'done'
+        : task.status === 'done'
+        ? 'todo'
+        : task.status
+      : task.status;
+    const st = taskStatusLabel(effectiveStatus);
     const hub = getHubMeta(task.hubId, hubs);
     const key = `task:${task.id}`;
     if (itemsByKey.has(key)) continue;
@@ -459,7 +492,7 @@ export function buildDailyJournalSummary(
       entityId: task.id,
       title: task.title,
       subtitle: task.linkedLabel || task.categoryLabel || undefined,
-      typeLabel: 'مهمة',
+      typeLabel: isRecurring ? 'مهمة متكررة' : 'مهمة',
       statusLabel: st.label,
       statusCategory: st.category,
       statusTone: st.tone,
@@ -536,10 +569,10 @@ export function buildDailyJournalSummary(
     });
   }
 
-  // 5. BookNotes created or spaced-repetition reviewed on dateKey
+  // 5. BookNotes actually created/written on dateKey (no passive lastReviewedDateKey auto-entries)
   for (const bn of data.bookNotes) {
     const createdKey = msToLocalDateKey(bn.createdAtMs);
-    if (createdKey !== dateKey && bn.lastReviewedDateKey !== dateKey) continue;
+    if (createdKey !== dateKey) continue;
     const key = `book_note:${bn.id}`;
     if (itemsByKey.has(key)) continue;
     const hub = getHubMeta(bn.hubId || 'knowledge', hubs);
@@ -550,13 +583,13 @@ export function buildDailyJournalSummary(
       title: bn.lectureTitle || bn.bookTitle,
       subtitle: bn.courseTitle || bn.author || undefined,
       typeLabel: bn.noteType === 'course_lecture' ? 'تلخيص محاضرة' : 'تلخيص',
-      statusLabel: bn.lastReviewedDateKey === dateKey ? 'مُراجَع' : 'أُنشئ اليوم',
+      statusLabel: 'أُنشئ اليوم',
       statusCategory: 'note',
       statusTone: 'blue',
       hubId: bn.hubId || 'knowledge',
       hubTitle: hub.shortTitle,
       hubAccentHex: hub.accentHex,
-      timeLabel: createdKey === dateKey ? formatTimeFromMs(bn.createdAtMs || 0) : '',
+      timeLabel: formatTimeFromMs(bn.createdAtMs || 0),
       sortOrderMs: bn.createdAtMs || baseDateMs,
       navAction: { type: 'note', noteId: bn.id },
     });
@@ -612,58 +645,17 @@ export function buildDailyJournalSummary(
     });
   }
 
-  // 8. Courses & Books reviewed on dateKey
-  for (const c of data.courses) {
-    if (c.lastReviewedDateKey !== dateKey) continue;
-    const key = `course:${c.id}`;
-    if (itemsByKey.has(key)) continue;
-    const hub = getHubMeta(c.hubId, hubs);
-    putItem({
-      key,
-      entityType: 'course',
-      entityId: String(c.id),
-      title: c.title,
-      subtitle: `${c.progressPct}% مكتمل`,
-      typeLabel: 'كورس',
-      statusLabel: 'تمت المراجعة',
-      statusCategory: 'learning',
-      statusTone: 'blue',
-      hubId: c.hubId || 'knowledge',
-      hubTitle: hub.shortTitle,
-      hubAccentHex: hub.accentHex,
-      timeLabel: '',
-      sortOrderMs: baseDateMs,
-      navAction: { type: 'course', courseId: c.id },
-    });
-  }
+  const hiddenIdSet = new Set(filterOptions?.hiddenActivityIds || []);
+  const hiddenTypeSet = new Set(filterOptions?.hiddenActivityTypes || []);
 
-  for (const b of data.readingItems) {
-    if (b.lastReviewedDateKey !== dateKey) continue;
-    const key = `reading_item:${b.id}`;
-    if (itemsByKey.has(key)) continue;
-    const hub = getHubMeta(b.hubId, hubs);
-    putItem({
-      key,
-      entityType: 'reading_item',
-      entityId: b.id,
-      title: b.title,
-      subtitle: b.author || undefined,
-      typeLabel: b.itemType || 'كتاب',
-      statusLabel: b.status === 'completed' ? 'مكتمل' : 'مراجعة قراءة',
-      statusCategory: b.status === 'completed' ? 'completed' : 'learning',
-      statusTone: b.status === 'completed' ? 'emerald' : 'blue',
-      hubId: b.hubId,
-      hubTitle: hub.shortTitle,
-      hubAccentHex: hub.accentHex,
-      timeLabel: '',
-      sortOrderMs: baseDateMs,
-      navAction: { type: 'book', bookId: b.id },
-    });
-  }
-
-  const timelineItems = Array.from(itemsByKey.values()).sort(
-    (a, b) => b.sortOrderMs - a.sortOrderMs
-  );
+  const timelineItems = Array.from(itemsByKey.values())
+    .filter((item) => {
+      if (hiddenTypeSet.has(item.entityType)) return false;
+      if (hiddenIdSet.has(item.key)) return false;
+      if (item.activityLogId && hiddenIdSet.has(item.activityLogId)) return false;
+      return true;
+    })
+    .sort((a, b) => b.sortOrderMs - a.sortOrderMs);
 
   const byHubMap = new Map<LearningHubId, DailyJournalItem[]>();
   for (const item of timelineItems) {
@@ -875,12 +867,32 @@ function collectRawPeriodWindow(
     });
   }
 
-  // Unified tasks scheduled/due in range
+  // Unified tasks scheduled/due/recurring in range
   for (const task of data.unifiedTasks) {
-    const eff = task.scheduledDate || task.dueDate || '';
-    if (!eff || eff < startKey || eff > endKey) continue;
-    if (task.status === 'done') activeDaySet.add(eff);
-    const st = taskStatusLabel(task.status);
+    const occDates = expandTaskOccurrenceDates(task, startKey, endKey);
+    if (occDates.length === 0) continue;
+    const isRecurring = Boolean(
+      task.recurrence && task.recurrence.frequency !== 'none'
+    );
+    const eff = occDates[occDates.length - 1];
+    const completedInRange = isRecurring
+      ? occDates.some((d) => isTaskCompletedOnDate(task, d))
+      : task.status === 'done';
+    if (completedInRange) {
+      for (const d of occDates) {
+        if (!isRecurring || isTaskCompletedOnDate(task, d)) {
+          activeDaySet.add(d);
+        }
+      }
+    }
+    const effectiveStatus: UnifiedTask['status'] = isRecurring
+      ? completedInRange
+        ? 'done'
+        : task.status === 'done'
+        ? 'todo'
+        : task.status
+      : task.status;
+    const st = taskStatusLabel(effectiveStatus);
     const hub = getHubMeta(task.hubId, hubs);
     putDedup({
       key: `task:${task.id}`,
@@ -888,7 +900,7 @@ function collectRawPeriodWindow(
       entityId: task.id,
       title: task.title,
       subtitle: eff,
-      typeLabel: 'مهمة',
+      typeLabel: isRecurring ? 'مهمة متكررة' : 'مهمة',
       statusLabel: st.label,
       statusCategory: st.category,
       statusTone: st.tone,
@@ -901,34 +913,27 @@ function collectRawPeriodWindow(
     }, 10);
   }
 
-  // BookNotes created or reviewed in range
+  // BookNotes created in range
   for (const bn of data.bookNotes) {
     const cKey = msToLocalDateKey(bn.createdAtMs);
-    const rKey = bn.lastReviewedDateKey || '';
-    const matchedDate =
-      cKey >= startKey && cKey <= endKey
-        ? cKey
-        : rKey >= startKey && rKey <= endKey
-        ? rKey
-        : '';
-    if (!matchedDate) continue;
-    activeDaySet.add(matchedDate);
+    if (!cKey || cKey < startKey || cKey > endKey) continue;
+    activeDaySet.add(cKey);
     const hub = getHubMeta(bn.hubId || 'knowledge', hubs);
     putDedup({
       key: `book_note:${bn.id}`,
       entityType: 'book_note',
       entityId: bn.id,
       title: bn.lectureTitle || bn.bookTitle,
-      subtitle: bn.courseTitle || bn.author || matchedDate,
+      subtitle: bn.courseTitle || bn.author || cKey,
       typeLabel: bn.noteType === 'course_lecture' ? 'تلخيص محاضرة' : 'تلخيص',
-      statusLabel: rKey >= startKey && rKey <= endKey ? 'مُراجَع' : 'تلخيص',
+      statusLabel: 'تلخيص',
       statusCategory: 'note',
       statusTone: 'blue',
       hubId: bn.hubId || 'knowledge',
       hubTitle: hub.shortTitle,
       hubAccentHex: hub.accentHex,
-      timeLabel: matchedDate,
-      sortOrderMs: bn.createdAtMs || new Date(`${matchedDate}T12:00:00`).getTime(),
+      timeLabel: cKey,
+      sortOrderMs: bn.createdAtMs || new Date(`${cKey}T12:00:00`).getTime(),
       navAction: { type: 'note', noteId: bn.id },
     });
   }

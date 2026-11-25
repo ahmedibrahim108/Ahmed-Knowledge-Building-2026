@@ -25,6 +25,7 @@ import {
   resolveCourseStudyStage,
 } from '../data/curriculumData';
 import { resolveDentalCaseCoverUrl } from '../utils/imageStorage';
+import { formatRecurrenceSummaryAr } from '../utils/taskRecurrence';
 import { ActiveTab } from './Header';
 
 function FocusDentalCoverImg({
@@ -138,8 +139,7 @@ export default function FocusView({
         .sort((a, b) => {
           const rank = { high: 0, medium: 1, low: 2 };
           return rank[a.priority] - rank[b.priority];
-        })
-        .slice(0, 6),
+        }),
     [unifiedTasks]
   );
 
@@ -265,7 +265,7 @@ export default function FocusView({
               جميع الكورسات المطابقة محددة بالفعل في التركيز الحالي أو لا توجد نتائج.
             </p>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-80 overflow-y-auto pr-1">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-80 overflow-y-auto thin-scrollbar pr-1">
               {pickerCandidates.map((c) => {
                 const hubMeta = getHubMeta(c.hubId);
                 const stageMeta = getCourseStageMeta(resolveCourseStudyStage(c));
@@ -343,7 +343,13 @@ export default function FocusView({
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div
+            className={`grid gap-4 ${
+              focusCourses.length === 1
+                ? 'grid-cols-1 max-w-2xl'
+                : 'grid-cols-1 md:grid-cols-2'
+            }`}
+          >
             {focusCourses.map((course) => {
               const hubMeta = getHubMeta(course.hubId);
               const doneTasks = course.tasks.filter((t) => t.done).length;
@@ -358,7 +364,16 @@ export default function FocusView({
               return (
                 <article
                   key={course.docId || course.id}
-                  className="bg-white border-2 border-[#1E3A5F]/25 rounded-xl p-5 flex flex-col justify-between gap-4"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectCourse(course.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onSelectCourse(course.id);
+                    }
+                  }}
+                  className="bg-white border-2 border-[#1E3A5F]/25 hover:border-[#1E3A5F]/60 rounded-xl p-5 flex flex-col justify-between gap-4 transition-colors cursor-pointer group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F]"
                 >
                   <div className="space-y-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -372,10 +387,7 @@ export default function FocusView({
                       </span>
                     </div>
 
-                    <h3
-                      onClick={() => onSelectCourse(course.id)}
-                      className="text-lg font-bold text-slate-900 hover:text-[#1E3A5F] cursor-pointer leading-snug"
-                    >
+                    <h3 className="text-lg font-bold text-slate-900 group-hover:text-[#1E3A5F] leading-snug">
                       {course.title}
                     </h3>
 
@@ -402,7 +414,10 @@ export default function FocusView({
                     </div>
                   </div>
 
-                  <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2"
+                  >
                     <button
                       type="button"
                       onClick={() => onSelectCourse(course.id)}
@@ -489,13 +504,13 @@ export default function FocusView({
               </button>
             </div>
           ) : (
-            <div className="space-y-2.5">
-              {activeDentalCases.slice(0, 4).map((dc) => (
+            <div className="space-y-2.5 max-h-[300px] overflow-y-auto thin-scrollbar pr-0.5">
+              {activeDentalCases.map((dc) => (
                 <button
                   key={dc.id}
                   type="button"
                   onClick={onOpenDentalCases}
-                  className="w-full text-right p-3 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white flex items-center gap-3 transition-colors cursor-pointer"
+                  className="w-full text-right p-3 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white flex items-center gap-3 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F]"
                 >
                   <FocusDentalCoverImg dc={dc} />
                   <div className="min-w-0 flex-1 space-y-0.5">
@@ -542,36 +557,57 @@ export default function FocusView({
               لا توجد مهام مفتوحة حاليًا. يومك متوازن وهادئ!
             </p>
           ) : (
-            <div className="space-y-2">
-              {openPriorityTasks.map((t) => (
-                <div
-                  key={t.id}
-                  className="p-3 rounded-xl border border-slate-200 bg-slate-50/70 flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0 space-y-0.5">
-                    <p className="text-xs font-bold text-slate-900 truncate">
-                      {t.title}
-                    </p>
-                    <p className="text-[11px] text-slate-500 truncate">
-                      {getHubMeta(t.hubId).shortTitle}
-                      {t.dueDate ? ` · ${t.dueDate}` : ''}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!canEdit) {
-                        onRequireAuth();
-                        return;
+            <div className="space-y-2 max-h-[300px] overflow-y-auto thin-scrollbar pr-0.5">
+              {openPriorityTasks.map((t) => {
+                const recSummary = formatRecurrenceSummaryAr(t.recurrence);
+                return (
+                  <div
+                    key={t.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onNavigateTab('tasks')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onNavigateTab('tasks');
                       }
-                      onUpdateUnifiedTask(t.id, { status: 'done' });
                     }}
-                    className="px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 rounded-md shrink-0 cursor-pointer"
+                    className="p-3 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white hover:border-[#1E3A5F]/40 flex items-center justify-between gap-3 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1E3A5F]"
                   >
-                    إنجاز ✓
-                  </button>
-                </div>
-              ))}
+                    <div className="min-w-0 space-y-0.5">
+                      <p className="text-xs font-bold text-slate-900 truncate">
+                        {t.title}
+                      </p>
+                      <p className="text-[11px] text-slate-500 truncate flex items-center gap-1.5">
+                        <span>
+                          {getHubMeta(t.hubId).shortTitle}
+                          {t.dueDate ? ` · ${t.dueDate}` : ''}
+                        </span>
+                        {recSummary && (
+                          <span className="inline-flex items-center gap-0.5 text-[#1E3A5F] font-medium">
+                            <Repeat className="w-3 h-3" aria-hidden="true" />
+                            <span>{recSummary}</span>
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!canEdit) {
+                          onRequireAuth();
+                          return;
+                        }
+                        onUpdateUnifiedTask(t.id, { status: 'done' });
+                      }}
+                      className="px-2.5 py-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 rounded-md shrink-0 cursor-pointer"
+                    >
+                      إنجاز ✓
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>
