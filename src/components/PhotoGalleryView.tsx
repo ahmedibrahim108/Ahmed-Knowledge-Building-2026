@@ -35,6 +35,8 @@ import {
   subscribeImagesForScope,
   updateStoredImageMetadata,
 } from '../utils/imageStorage';
+import { StorageOperationError } from '../services/storageService';
+import { formatSupabaseErrorMessage } from '../services/supabaseClient';
 import ConfirmDialog from './ConfirmDialog';
 import ErrorBoundary from './ErrorBoundary';
 import { FramedImage, ImageFrameEditorModal } from './FramedImage';
@@ -178,8 +180,15 @@ function PhotoGalleryViewInner({
         frameConfig: DEFAULT_IMAGE_FRAME_SPEC,
         categoryLabel: uploadCat,
       });
-    } catch {
-      setUploadError('تعذّر رفع الصورة حاليًا. تأكد من الاتصال وحاول مجددًا.');
+    } catch (err) {
+      const msg =
+        err instanceof StorageOperationError
+          ? err.message
+          : formatSupabaseErrorMessage(
+              err,
+              'تعذّر رفع الصورة حاليًا. تأكد من الاتصال وحاول مجددًا.'
+            );
+      setUploadError(msg);
     } finally {
       setUploading(false);
     }

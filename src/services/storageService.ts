@@ -180,11 +180,19 @@ function mapEdgeErrorToUserMessage(
   code: string,
   serverMessage: string
 ): string {
+  const lowerMsg = (serverMessage || '').toLowerCase();
   if (status === 401) {
+    if (
+      code === 'HTTP_401' ||
+      lowerMsg.includes('invalid jwt') ||
+      lowerMsg.includes('missing authorization')
+    ) {
+      return 'رفضت بوابة Supabase رمز الدخول (401 Invalid JWT). عطّل خيار "Verify JWT" في إعدادات دوال Edge Functions بلوحة Supabase ثم أعد المحاولة.';
+    }
     return 'انتهت جلسة التحقق. أعد تسجيل الدخول بحساب Google ثم حاول مجددًا.';
   }
   if (status === 403) {
-    return 'ليس لديك صلاحية تنفيذ هذه العملية على التخزين السحابي.';
+    return 'ليس لديك صلاحية تنفيذ هذه العملية على التخزين السحابي (403 — يتطلب حساب المسؤول المعتمد).';
   }
   if (status === 413 || code === 'FILE_TOO_LARGE' || code === 'OBJECT_SIZE_INVALID') {
     return 'حجم الملف يتجاوز الحد الأقصى المسموح به.';
@@ -194,6 +202,15 @@ function mapEdgeErrorToUserMessage(
   }
   if (status === 429 || code === 'RATE_LIMITED') {
     return 'تم إرسال طلبات كثيرة خلال وقت قصير. انتظر قليلاً ثم أعد المحاولة.';
+  }
+  if (code === 'R2_AUTH_FAILED') {
+    return 'فشلت مصادقة Cloudflare R2. تحقق من R2_ACCESS_KEY_ID و R2_SECRET_ACCESS_KEY وصلاحيات التوكن في أسرار Supabase.';
+  }
+  if (code === 'R2_BUCKET_NOT_FOUND') {
+    return 'لم يتم العثور على حاوية Cloudflare R2. تحقق من R2_BUCKET_NAME في أسرار Supabase.';
+  }
+  if (code === 'R2_ENDPOINT_UNREACHABLE') {
+    return 'تعذر الوصول إلى خادم Cloudflare R2. تحقق من R2_ENDPOINT و CLOUDFLARE_ACCOUNT_ID.';
   }
   return serverMessage || 'تعذر إتمام العملية مع خادم التخزين.';
 }
@@ -311,10 +328,6 @@ function putBlobWithXhr(
 ): Promise<{ etag?: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('PUT', url, true);
-    for (const [k, v] of Object.entries(headers)) {
-      xhr.setRequestHeader(k, v);
-    }
 
     const onAbort = () => {
       xhr.abort();
@@ -346,8 +359,8 @@ function putBlobWithXhr(
           xhr.status,
           `R2_PUT_${xhr.status}`,
           xhr.status === 403
-            ? 'انتهت صلاحية رابط الرفع المؤقت. أعد المحاولة.'
-            : 'تعذّر رفع البيانات إلى Cloudflare R2.'
+            ? 'انتهت صلاحية رابط الرفع المؤقت أو رفض R2 التوقيع (403). أعد المحاولة.'
+            : `تعذّر رفع البيانات إلى Cloudflare R2 (HTTP ${xhr.status}).`
         );
         reject(err);
       }
@@ -359,7 +372,7 @@ function putBlobWithXhr(
         new StorageOperationError(
           0,
           'R2_PUT_NETWORK_ERROR',
-          'انقطع الاتصال أثناء رفع الملف إلى Cloudflare R2 (تحقق من إعدادات CORS للحاوية إذا تكرر الخطأ).'
+          'انقطع الاتصال أثناء رفع الملف إلى Cloudflare R2 (تحقق من إعدادات CORS للحاوية: السماح بـ PUT و AllowedHeaders: *).'
         )
       );
     };
@@ -369,7 +382,24 @@ function putBlobWithXhr(
       reject(new DOMException('Upload aborted', 'AbortError'));
     };
 
-    xhr.send(body);
+    try {
+      xhr.open('PUT', url, true);
+      for (const [k, v] of Object.entries(headers || {})) {
+        if (v) xhr.setRequestHeader(k, v);
+      }
+      xhr.send(body);
+    } catch (syncErr) {
+      signal?.removeEventListener('abort', onAbort);
+      reject(
+        new StorageOperationError(
+          0,
+          'R2_PUT_INIT_ERROR',
+          syncErr instanceof Error && syncErr.message
+            ? `تعذّر بدء الرفع إلى Cloudflare R2 (${syncErr.message}).`
+            : 'تعذّر بدء طلب الرفع إلى Cloudflare R2.'
+        )
+      );
+    }
   });
 }
 
@@ -539,13 +569,27 @@ export async function uploadFileToR2(
 
   onProgress?.(5);
 
-  if (initRes.mode === 'single') {
+  const isSingleMode =
+    initRes.mode === 'single' ||
+    (!(initRes as { mode?: string }).mode &&
+      typeof (initRes as { uploadUrl?: unknown }).uploadUrl === 'string');
+
+  if (isSingleMode) {
+    const singleRes = initRes as GenerateUploadSingleResponse;
+    if (!singleRes.uploadUrl || !singleRes.uploadUrl.startsWith('http')) {
+      throw new StorageOperationError(
+        502,
+        'INVALID_UPLOAD_URL',
+        'استجابة رابط الرفع من دالة generate-upload-url غير صالحة.'
+      );
+    }
+
     await retryOperation(
       () =>
         putBlobWithXhr(
-          initRes.uploadUrl,
+          singleRes.uploadUrl,
           file,
-          initRes.requiredHeaders || { 'Content-Type': initRes.mimeType },
+          singleRes.requiredHeaders || { 'Content-Type': singleRes.mimeType },
           (loaded, total) => {
             const pct = 5 + Math.round((loaded / Math.max(1, total)) * 88);
             onProgress?.(Math.min(93, Math.max(5, pct)));
@@ -559,12 +603,12 @@ export async function uploadFileToR2(
     const confirmed = await callR2EdgeFunction<ConfirmUploadResponse>(
       'confirm-upload',
       {
-        objectKey: initRes.objectKey,
+        objectKey: singleRes.objectKey,
         module,
-        fileName: initRes.originalName,
-        mimeType: initRes.mimeType,
-        recordId: initRes.recordId,
-        recordType: initRes.recordType,
+        fileName: singleRes.originalName,
+        mimeType: singleRes.mimeType,
+        recordId: singleRes.recordId,
+        recordType: singleRes.recordType,
       },
       { requireAuth: true, signal }
     );
@@ -583,15 +627,28 @@ export async function uploadFileToR2(
     };
   }
 
-  // Multipart upload fallback only for objects exceeding single-PUT threshold (> 250 MB)
+  // Multipart upload for larger files (> threshold)
+  const multipartRes = initRes as GenerateUploadMultipartResponse;
+  if (
+    !multipartRes.uploadId ||
+    !Array.isArray(multipartRes.parts) ||
+    multipartRes.parts.length === 0
+  ) {
+    throw new StorageOperationError(
+      502,
+      'INVALID_MULTIPART_RESPONSE',
+      'استجابة الرفع متعدد الأجزاء من دالة generate-upload-url غير مكتملة.'
+    );
+  }
+
   const completedParts: Array<{ PartNumber: number; ETag: string }> = [];
   const totalBytes = Math.max(1, file.size);
   let uploadedBytes = 0;
 
   try {
-    for (const part of initRes.parts) {
-      const start = (part.partNumber - 1) * initRes.chunkSize;
-      const end = Math.min(start + initRes.chunkSize, file.size);
+    for (const part of multipartRes.parts) {
+      const start = (part.partNumber - 1) * multipartRes.chunkSize;
+      const end = Math.min(start + multipartRes.chunkSize, file.size);
       const chunk = file.slice(start, end);
 
       const partRes = await retryOperation(

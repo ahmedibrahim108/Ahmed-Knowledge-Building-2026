@@ -44,6 +44,8 @@ import {
   getDayArabicName,
   sanitizeImageFrameSpec,
 } from '../data/curriculumData';
+import { StorageOperationError } from '../services/storageService';
+import { formatSupabaseErrorMessage } from '../services/supabaseClient';
 import { SavedAudioClipSummary } from '../utils/audioCache';
 import {
   StoredImageRecord,
@@ -759,8 +761,15 @@ export default function JournalDayModal({
     setUploadingPhotos(true);
     try {
       await compressAndSaveImages(`journal:${dateKey}`, files, uid);
-    } catch {
-      setPhotoError('تعذر رفع الصورة حاليًا. تأكد من اتصالك وصلاحيات التخزين.');
+    } catch (err) {
+      const msg =
+        err instanceof StorageOperationError
+          ? err.message
+          : formatSupabaseErrorMessage(
+              err,
+              'تعذر رفع الصورة حاليًا. تأكد من اتصالك وصلاحيات التخزين.'
+            );
+      setPhotoError(msg);
     } finally {
       setUploadingPhotos(false);
     }

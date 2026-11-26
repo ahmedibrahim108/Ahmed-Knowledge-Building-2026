@@ -30,7 +30,10 @@ export async function refreshAllOfflinePendingCounts(): Promise<void> {
   ]);
 }
 
-export async function flushSupabaseOutbox(uid: string): Promise<number> {
+export async function flushSupabaseOutbox(
+  uid: string,
+  onError?: (message: string) => void
+): Promise<number> {
   if (!uid || !isAppOnline()) return 0;
   const queue = getOfflineOutbox(uid);
   if (queue.length === 0) return 0;
@@ -42,10 +45,14 @@ export async function flushSupabaseOutbox(uid: string): Promise<number> {
       removeOfflineMutation(uid, mut.id);
       flushed += 1;
     } catch (err) {
+      const msg =
+        err instanceof Error && err.message
+          ? err.message
+          : 'تعذرت مزامنة بعض التعديلات مع قاعدة البيانات.';
+      onError?.(msg);
       if (isNetworkOrOfflineError(err)) {
         break;
       }
-      // Keep non-network failure logged and move on
       console.warn('Offline mutation flush failed:', mut.table, err);
     }
   }
@@ -79,14 +86,36 @@ export async function syncAllPendingOfflineChanges(
     });
 
     let syncedCount = 0;
+    let firstSyncError: string | null = null;
+    const recordError = (msg: unknown) => {
+      if (firstSyncError) return;
+      if (typeof msg === 'string' && msg.trim()) {
+        firstSyncError = msg.trim();
+      } else if (msg instanceof Error && msg.message) {
+        firstSyncError = msg.message;
+      }
+    };
+
     try {
       const [outboxSynced, qdSynced, imgSynced, coverSynced, audioSynced] =
         await Promise.all([
-          flushSupabaseOutbox(uid),
-          flushQuickDropQueue(uid).catch(() => 0),
-          syncPendingImagesToCloud(uid).catch(() => 0),
-          syncPendingJournalCoversToCloud(uid).catch(() => 0),
-          syncPendingAudioClipsToCloud(uid).catch(() => 0),
+          flushSupabaseOutbox(uid, recordError),
+          flushQuickDropQueue(uid).catch((err) => {
+            recordError(err);
+            return 0;
+          }),
+          syncPendingImagesToCloud(uid, recordError).catch((err) => {
+            recordError(err);
+            return 0;
+          }),
+          syncPendingJournalCoversToCloud(uid, recordError).catch((err) => {
+            recordError(err);
+            return 0;
+          }),
+          syncPendingAudioClipsToCloud(uid).catch((err) => {
+            recordError(err);
+            return 0;
+          }),
         ]);
 
       syncedCount =
@@ -98,6 +127,11 @@ export async function syncAllPendingOfflineChanges(
       updateOfflineSyncState({
         isSyncing: false,
         lastSyncedAtMs: Date.now(),
+        lastSyncError:
+          remaining > 0
+            ? firstSyncError ||
+              'تعذرت مزامنة العناصر المعلقة حاليًا. تحقق من الاتصال أو إعدادات التخزين السحابي.'
+            : null,
         lastSyncMessage:
           remaining === 0
             ? syncedCount > 0

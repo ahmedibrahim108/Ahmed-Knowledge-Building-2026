@@ -6,6 +6,7 @@ import {
 import { auth } from '../firebase';
 import {
   R2UnavailableError,
+  StorageOperationError,
   StorageProvider,
   deleteFileFromStorage,
   downloadR2Blob,
@@ -19,6 +20,7 @@ import {
 } from '../services/storageService';
 import {
   ensureSupabaseRealtimeAuth,
+  formatSupabaseErrorMessage,
   isSupabaseConfigured,
   supabase,
   withFirebaseTokenRetry,
@@ -1683,7 +1685,10 @@ export async function refreshPendingImagesCount(): Promise<number> {
   return count;
 }
 
-export async function syncPendingImagesToCloud(uid: string): Promise<number> {
+export async function syncPendingImagesToCloud(
+  uid: string,
+  onError?: (message: string) => void
+): Promise<number> {
   if (!uid || !isSupabaseConfigured || !supabase || !isAppOnline()) return 0;
   let syncedCount = 0;
   try {
@@ -1710,18 +1715,31 @@ export async function syncPendingImagesToCloud(uid: string): Promise<number> {
         await uploadImageRecordToCloud(uid, rec, blob);
         syncedCount += 1;
       } catch (err) {
+        const msg =
+          err instanceof StorageOperationError
+            ? err.message
+            : formatSupabaseErrorMessage(
+                err,
+                'تعذر رفع الصورة المعلقة إلى التخزين السحابي.'
+              );
+        onError?.(msg);
         if (isNetworkOrOfflineError(err)) break;
       }
     }
-  } catch {
-    // non-fatal
+  } catch (err) {
+    onError?.(
+      formatSupabaseErrorMessage(err, 'تعذر الوصول إلى قائمة الصور المحلية.')
+    );
   }
   await refreshPendingImagesCount();
   if (syncedCount > 0) notifyOfflineMediaChanged();
   return syncedCount;
 }
 
-export async function syncPendingJournalCoversToCloud(uid: string): Promise<number> {
+export async function syncPendingJournalCoversToCloud(
+  uid: string,
+  onError?: (message: string) => void
+): Promise<number> {
   if (!uid || !isSupabaseConfigured || !supabase || !isAppOnline()) return 0;
   const list = readPendingJournalCovers();
   if (list.length === 0) return 0;
@@ -1801,7 +1819,15 @@ export async function syncPendingJournalCoversToCloud(uid: string): Promise<numb
         }
       });
       synced += 1;
-    } catch {
+    } catch (err) {
+      const msg =
+        err instanceof StorageOperationError
+          ? err.message
+          : formatSupabaseErrorMessage(
+              err,
+              'تعذر رفع غلاف اليومية المعلق إلى التخزين السحابي.'
+            );
+      onError?.(msg);
       remaining.push(item);
     }
   }

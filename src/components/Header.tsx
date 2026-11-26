@@ -30,6 +30,7 @@ import {
 } from '../data/curriculumData';
 import {
   OfflineSyncState,
+  getOfflineSyncState,
   subscribeOfflineSyncState,
 } from '../utils/offlineQueue';
 import { syncAllPendingOfflineChanges } from '../utils/offlineSync';
@@ -138,15 +139,26 @@ export default function Header({
   const showAdminNav = isAdmin && !isPreviewingPublic;
   const [reloading, setReloading] = useState(false);
   const [syncState, setSyncState] = useState<OfflineSyncState | null>(null);
+  const [syncNoticeError, setSyncNoticeError] = useState<string | null>(null);
 
   useEffect(() => {
     return subscribeOfflineSyncState(setSyncState);
   }, []);
 
   const handleManualOfflineSync = async () => {
+    setSyncNoticeError(null);
     const res = await syncAllPendingOfflineChanges(user?.uid);
     if (res.syncedCount > 0 || res.remainingCount === 0) {
       onOfflineSyncCompleted?.();
+    }
+    if (res.remainingCount > 0) {
+      const err = getOfflineSyncState().lastSyncError;
+      setSyncNoticeError(
+        err ||
+          'تعذرت مزامنة العناصر المعلقة حاليًا. تحقق من الاتصال أو إعدادات التخزين السحابي.'
+      );
+    } else {
+      setSyncNoticeError(null);
     }
   };
 
@@ -301,6 +313,7 @@ export default function Header({
                   <button
                     type="button"
                     disabled={syncState.isSyncing}
+                    title={syncState.lastSyncError || 'مزامنة العناصر المعلقة الآن'}
                     onClick={() => void handleManualOfflineSync()}
                     className="inline-flex items-center gap-1 px-2 py-0.5 h-6 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
                   >
@@ -323,6 +336,25 @@ export default function Header({
           </div>
         </div>
       </div>
+
+      {syncNoticeError && syncState && syncState.totalPendingCount > 0 && (
+        <div
+          role="alert"
+          className="bg-amber-50 border-b border-amber-200 text-amber-900 text-[11px] px-3 sm:px-6 py-1.5"
+        >
+          <div className="max-w-[1280px] mx-auto flex items-start justify-between gap-2">
+            <span className="leading-relaxed">{syncNoticeError}</span>
+            <button
+              type="button"
+              onClick={() => setSyncNoticeError(null)}
+              aria-label="إغلاق تنبيه المزامنة"
+              className="shrink-0 text-amber-700 hover:text-amber-950 px-1.5 py-0.5 rounded cursor-pointer font-bold"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="max-w-[1280px] mx-auto px-3 sm:px-6 h-13 sm:h-15 flex items-center justify-between gap-2 sm:gap-3">
         {/* Zone 1: Brand Wordmark + Custom Emblem */}

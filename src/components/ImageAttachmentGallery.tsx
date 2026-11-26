@@ -23,6 +23,8 @@ import {
   subscribeImagesForScope,
   updateStoredImageCaption,
 } from '../utils/imageStorage';
+import { StorageOperationError } from '../services/storageService';
+import { formatSupabaseErrorMessage } from '../services/supabaseClient';
 import ConfirmDialog from './ConfirmDialog';
 import ErrorBoundary from './ErrorBoundary';
 
@@ -195,10 +197,15 @@ function ImageAttachmentGalleryInner({
     setUploadError(null);
     try {
       await compressAndSaveImages(scopeKey, validImages, effectiveUid);
-    } catch {
-      setUploadError(
-        'تعذر رفع الصورة وحفظها في السحابة الآن، يرجى التأكد من الاتصال والمحاولة مرة أخرى.'
-      );
+    } catch (err) {
+      const msg =
+        err instanceof StorageOperationError
+          ? err.message
+          : formatSupabaseErrorMessage(
+              err,
+              'تعذر رفع الصورة وحفظها في السحابة الآن، يرجى التأكد من الاتصال والمحاولة مرة أخرى.'
+            );
+      setUploadError(msg);
     } finally {
       setUploading(false);
     }

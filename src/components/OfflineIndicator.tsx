@@ -66,17 +66,24 @@ export default function OfflineIndicator({ onSynced }: OfflineIndicatorProps) {
           <span>تمت مزامنة التعديلات مع قاعدة البيانات</span>
         </>
       ) : (
-        <>
-          <CloudUpload className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-          <span>{syncState.totalPendingCount} تعديلات بانتظار المزامنة</span>
-          <button
-            type="button"
-            onClick={() => void handleManualSync()}
-            className="mr-1 rounded-lg bg-white/15 hover:bg-white/25 px-2.5 py-1 text-[11px] font-bold text-white transition-colors cursor-pointer"
-          >
-            مزامنة مع قاعدة البيانات الآن
-          </button>
-        </>
+        <div className="flex flex-col gap-1 max-w-sm sm:max-w-md">
+          <div className="flex flex-wrap items-center gap-2">
+            <CloudUpload className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+            <span>{syncState.totalPendingCount} تعديلات بانتظار المزامنة</span>
+            <button
+              type="button"
+              onClick={() => void handleManualSync()}
+              className="mr-1 rounded-lg bg-white/15 hover:bg-white/25 px-2.5 py-1 text-[11px] font-bold text-white transition-colors cursor-pointer"
+            >
+              مزامنة مع قاعدة البيانات الآن
+            </button>
+          </div>
+          {syncState.lastSyncError && (
+            <p className="text-[11px] font-normal text-amber-200 leading-relaxed break-words">
+              {syncState.lastSyncError}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

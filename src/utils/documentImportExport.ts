@@ -642,14 +642,15 @@ export async function uploadResourceAttachment(
           errorMessage: r2Err.message,
         };
       } else {
+        const fallbackMsg =
+          r2Err instanceof Error && r2Err.message
+            ? `تعذر رفع الملف إلى Cloudflare R2 (${r2Err.message}). تم الاحتفاظ به محليًا على هذا الجهاز.`
+            : 'تعذر رفع الملف إلى Cloudflare R2. تم الاحتفاظ به محليًا على هذا الجهاز.';
         return {
           mimeType,
           sizeBytes: file.size,
           uploadedToCloud: false,
-          errorMessage: formatSupabaseErrorMessage(
-            r2Err,
-            'تعذر رفع الملف إلى Cloudflare R2. تم الاحتفاظ به محليًا على هذا الجهاز.'
-          ),
+          errorMessage: formatSupabaseErrorMessage(r2Err, fallbackMsg),
         };
       }
     }
