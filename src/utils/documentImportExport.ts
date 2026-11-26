@@ -2,6 +2,19 @@ import mammoth from 'mammoth';
 import { BookNote } from '../data/curriculumData';
 import { auth } from '../firebase';
 import {
+  R2UnavailableError,
+  StorageModule,
+  StorageOperationError,
+  StorageProvider,
+  deleteFileFromStorage,
+  downloadR2Blob,
+  getFileUrl,
+  inferStorageModuleFromResourceId,
+  isR2PrimaryUploadEnabled,
+  resolveEffectiveStorageProvider,
+  uploadFileToR2,
+} from '../services/storageService';
+import {
   formatSupabaseErrorMessage,
   getFirebaseIdToken,
   isSupabaseConfigured,
@@ -33,10 +46,11 @@ export interface BundledAppDocument {
 export const BUNDLED_APP_DOCUMENTS: BundledAppDocument[] = [];
 
 const STUDY_FILES_BUCKET = 'study-files';
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
+const MAX_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB max on R2 (100 MB Supabase legacy fallback)
+const MAX_SUPABASE_LEGACY_BYTES = 100 * 1024 * 1024;
 const TUS_RESUMABLE_THRESHOLD = 6 * 1024 * 1024; // 6 MB
 const TUS_CHUNK_SIZE = 6 * 1024 * 1024; // 6 MB chunks (Supabase recommended)
-const MAX_LOCAL_IDB_BYTES = 100 * 1024 * 1024; // Match 100 MB Supabase limit so fetched PDFs stay cached locally without re-downloading
+const MAX_LOCAL_IDB_BYTES = 100 * 1024 * 1024; // Cache PDFs <= 100 MB locally for offline reading
 
 function escapeHtml(text: string): string {
   return text
@@ -349,6 +363,7 @@ export async function downloadLocalAttachment(
 
 export interface UploadedAttachmentResult {
   storagePath?: string;
+  storageProvider?: StorageProvider;
   downloadUrl?: string;
   mimeType: string;
   sizeBytes: number;
@@ -532,7 +547,8 @@ export async function uploadResourceAttachment(
   resourceId: string,
   file: File,
   extractedPreview?: string,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  moduleOverride?: StorageModule
 ): Promise<UploadedAttachmentResult> {
   const mimeType = inferMimeTypeFromFileName(file.name, file.type);
 
@@ -544,7 +560,7 @@ export async function uploadResourceAttachment(
       mimeType,
       sizeBytes: file.size,
       uploadedToCloud: false,
-      errorMessage: 'الحد الأقصى لحجم الملف في التخزين السحابي هو 100 ميجابايت.',
+      errorMessage: 'الحد الأقصى لحجم الملف في التخزين السحابي هو 250 ميجابايت.',
     };
   }
 
@@ -580,6 +596,65 @@ export async function uploadResourceAttachment(
   }
 
   const safeId = resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+
+  // Primary external storage: Cloudflare R2 via Supabase Edge Functions
+  if (isR2PrimaryUploadEnabled()) {
+    try {
+      const targetModule =
+        moduleOverride || inferStorageModuleFromResourceId(resourceId);
+      const r2Res = await uploadFileToR2({
+        file,
+        fileName: file.name,
+        mimeType,
+        module: targetModule,
+        recordId: safeId,
+        recordType: 'file',
+        extractedPreview,
+        onProgress,
+      });
+      return {
+        storagePath: r2Res.objectKey,
+        storageProvider: 'r2',
+        downloadUrl: r2Res.downloadUrl || undefined,
+        mimeType: r2Res.mimeType || mimeType,
+        sizeBytes: r2Res.fileSize || file.size,
+        uploadedToCloud: true,
+      };
+    } catch (r2Err) {
+      if (r2Err instanceof R2UnavailableError) {
+        // Edge Functions or R2 secrets are not yet configured in cloud -> graceful legacy fallback
+        console.warn('R2 unavailable, falling back to Supabase Storage:', r2Err.message);
+      } else if (r2Err instanceof StorageOperationError) {
+        return {
+          mimeType,
+          sizeBytes: file.size,
+          uploadedToCloud: false,
+          errorMessage: r2Err.message,
+        };
+      } else {
+        return {
+          mimeType,
+          sizeBytes: file.size,
+          uploadedToCloud: false,
+          errorMessage: formatSupabaseErrorMessage(
+            r2Err,
+            'تعذر رفع الملف إلى Cloudflare R2. تم الاحتفاظ به محليًا على هذا الجهاز.'
+          ),
+        };
+      }
+    }
+  }
+
+  if (file.size > MAX_SUPABASE_LEGACY_BYTES) {
+    return {
+      mimeType,
+      sizeBytes: file.size,
+      uploadedToCloud: false,
+      errorMessage:
+        'يتطلب رفع ملفات أكبر من 100 ميجابايت تفعيل Cloudflare R2 Edge Functions.',
+    };
+  }
+
   const safeFileName = buildSafeStorageFileName(file.name);
   const storagePath = `${effectiveUid}/resources/${safeId}/${safeFileName}`;
 
@@ -655,6 +730,7 @@ export async function uploadResourceAttachment(
 
     return {
       storagePath,
+      storageProvider: 'supabase',
       downloadUrl: signedUrl || undefined,
       mimeType,
       sizeBytes: file.size,
@@ -699,12 +775,17 @@ export async function getFreshStudyFileSignedUrl(options: {
   uid?: string;
   resourceId?: string;
   storagePath?: string;
+  storageProvider?: StorageProvider;
   fileName?: string;
 }): Promise<string | null> {
   if (!isSupabaseConfigured || !supabase) return null;
   const effectiveUid = options.uid || auth?.currentUser?.uid;
   let resolvedStoragePath = options.storagePath;
   let resolvedBucket = STUDY_FILES_BUCKET;
+  let resolvedProvider: StorageProvider = resolveEffectiveStorageProvider(
+    options.storageProvider,
+    options.storagePath
+  );
 
   if (
     effectiveUid &&
@@ -718,15 +799,23 @@ export async function getFreshStudyFileSignedUrl(options: {
         const { data } = await withFirebaseTokenRetry(async (client) =>
           client
             .from('file_attachments')
-            .select('storage_bucket,storage_path')
+            .select('*')
             .eq('owner_id', effectiveUid)
             .eq('id', safeId)
             .maybeSingle()
         );
         if (data) {
-          const row = data as { storage_bucket?: string; storage_path?: string };
-          if (row.storage_bucket) resolvedBucket = row.storage_bucket;
-          if (row.storage_path) resolvedStoragePath = row.storage_path;
+          const row = data as Record<string, unknown>;
+          if (row.bucket_name || row.storage_bucket) {
+            resolvedBucket = String(row.bucket_name || row.storage_bucket);
+          }
+          if (row.object_key || row.storage_path) {
+            resolvedStoragePath = String(row.object_key || row.storage_path);
+          }
+          resolvedProvider = resolveEffectiveStorageProvider(
+            row.storage_provider ? String(row.storage_provider) : undefined,
+            resolvedStoragePath
+          );
         }
       } catch {
         // Ignore lookup fallback
@@ -741,18 +830,22 @@ export async function getFreshStudyFileSignedUrl(options: {
         const { data: byName } = await withFirebaseTokenRetry(async (client) =>
           client
             .from('file_attachments')
-            .select('storage_bucket,storage_path')
+            .select('*')
             .eq('owner_id', effectiveUid)
             .eq('file_name', options.fileName!)
             .order('updated_at', { ascending: false })
             .limit(1)
         );
-        const first = (
-          byName as Array<{ storage_bucket?: string; storage_path?: string }> | null
-        )?.[0];
-        if (first?.storage_path) {
-          if (first.storage_bucket) resolvedBucket = first.storage_bucket;
-          resolvedStoragePath = first.storage_path;
+        const first = (byName as Array<Record<string, unknown>> | null)?.[0];
+        if (first && (first.object_key || first.storage_path)) {
+          if (first.bucket_name || first.storage_bucket) {
+            resolvedBucket = String(first.bucket_name || first.storage_bucket);
+          }
+          resolvedStoragePath = String(first.object_key || first.storage_path);
+          resolvedProvider = resolveEffectiveStorageProvider(
+            first.storage_provider ? String(first.storage_provider) : undefined,
+            resolvedStoragePath
+          );
         }
       } catch {
         // Ignore filename fallback
@@ -764,16 +857,14 @@ export async function getFreshStudyFileSignedUrl(options: {
     return null;
   }
 
-  try {
-    const { data } = await withFirebaseTokenRetry(async (client) =>
-      client.storage
-        .from(resolvedBucket)
-        .createSignedUrl(resolvedStoragePath!, 3600)
-    );
-    return data?.signedUrl || null;
-  } catch {
-    return null;
-  }
+  return getFileUrl({
+    storageProvider: resolvedProvider,
+    objectKey: resolvedStoragePath,
+    storageBucket: resolvedBucket,
+    recordId: options.resourceId,
+    recordType: 'file',
+    downloadFileName: options.fileName,
+  });
 }
 
 export interface PdfBlobResult {
@@ -788,6 +879,7 @@ export async function getPdfBlobWithCacheInfo(options: {
   fileName?: string;
   mimeType?: string;
   storagePath?: string;
+  storageProvider?: StorageProvider;
   downloadUrl?: string;
 }): Promise<PdfBlobResult | null> {
   const inferredMime = inferMimeTypeFromFileName(
@@ -822,6 +914,10 @@ export async function getPdfBlobWithCacheInfo(options: {
   const effectiveUid = options.uid || auth?.currentUser?.uid;
   let resolvedStoragePath = options.storagePath;
   let resolvedBucket = STUDY_FILES_BUCKET;
+  let resolvedProvider: StorageProvider = resolveEffectiveStorageProvider(
+    options.storageProvider,
+    options.storagePath
+  );
   let resolvedFallbackUrl = options.downloadUrl;
   let resolvedMime = inferredMime;
 
@@ -838,25 +934,29 @@ export async function getPdfBlobWithCacheInfo(options: {
         const { data } = await withFirebaseTokenRetry(async (client) =>
           client
             .from('file_attachments')
-            .select('storage_bucket,storage_path,download_url,mime_type,file_name')
+            .select('*')
             .eq('owner_id', effectiveUid)
             .eq('id', safeId)
             .maybeSingle()
         );
         if (data) {
-          const row = data as {
-            storage_bucket?: string;
-            storage_path?: string;
-            download_url?: string;
-            mime_type?: string;
-            file_name?: string;
-          };
-          if (row.storage_bucket) resolvedBucket = row.storage_bucket;
-          if (row.storage_path) resolvedStoragePath = row.storage_path;
-          if (row.download_url) resolvedFallbackUrl = row.download_url;
+          const row = data as Record<string, unknown>;
+          if (row.bucket_name || row.storage_bucket) {
+            resolvedBucket = String(row.bucket_name || row.storage_bucket);
+          }
+          if (row.object_key || row.storage_path) {
+            resolvedStoragePath = String(row.object_key || row.storage_path);
+          }
+          resolvedProvider = resolveEffectiveStorageProvider(
+            row.storage_provider ? String(row.storage_provider) : undefined,
+            resolvedStoragePath
+          );
+          if (row.download_url) resolvedFallbackUrl = String(row.download_url);
           resolvedMime = inferMimeTypeFromFileName(
-            row.file_name || options.fileName,
-            row.mime_type || inferredMime
+            row.original_name || row.file_name
+              ? String(row.original_name || row.file_name)
+              : options.fileName,
+            row.mime_type ? String(row.mime_type) : inferredMime
           );
         }
       } catch (err) {
@@ -872,28 +972,30 @@ export async function getPdfBlobWithCacheInfo(options: {
         const { data: rowsByName } = await withFirebaseTokenRetry(async (client) =>
           client
             .from('file_attachments')
-            .select('storage_bucket,storage_path,download_url,mime_type,file_name')
+            .select('*')
             .eq('owner_id', effectiveUid)
             .eq('file_name', options.fileName!)
             .order('updated_at', { ascending: false })
             .limit(1)
         );
-        const match = (
-          rowsByName as Array<{
-            storage_bucket?: string;
-            storage_path?: string;
-            download_url?: string;
-            mime_type?: string;
-            file_name?: string;
-          }> | null
-        )?.[0];
+        const match = (rowsByName as Array<Record<string, unknown>> | null)?.[0];
         if (match) {
-          if (match.storage_bucket) resolvedBucket = match.storage_bucket;
-          if (match.storage_path) resolvedStoragePath = match.storage_path;
-          if (match.download_url) resolvedFallbackUrl = match.download_url;
+          if (match.bucket_name || match.storage_bucket) {
+            resolvedBucket = String(match.bucket_name || match.storage_bucket);
+          }
+          if (match.object_key || match.storage_path) {
+            resolvedStoragePath = String(match.object_key || match.storage_path);
+          }
+          resolvedProvider = resolveEffectiveStorageProvider(
+            match.storage_provider ? String(match.storage_provider) : undefined,
+            resolvedStoragePath
+          );
+          if (match.download_url) resolvedFallbackUrl = String(match.download_url);
           resolvedMime = inferMimeTypeFromFileName(
-            match.file_name || options.fileName,
-            match.mime_type || inferredMime
+            match.original_name || match.file_name
+              ? String(match.original_name || match.file_name)
+              : options.fileName,
+            match.mime_type ? String(match.mime_type) : inferredMime
           );
         }
       } catch {
@@ -902,11 +1004,37 @@ export async function getPdfBlobWithCacheInfo(options: {
     }
   }
 
-  // 3) Download directly from private Supabase Storage bucket using authenticated Firebase JWT,
-  //    or mint a fresh signed URL if direct SDK download hits a mobile network edge case
+  // 3a) Cloudflare R2 presigned download via Edge Function
   if (
     isSupabaseConfigured &&
     supabase &&
+    resolvedProvider === 'r2' &&
+    resolvedStoragePath
+  ) {
+    try {
+      const r2Blob = await downloadR2Blob({
+        objectKey: resolvedStoragePath,
+        recordId: options.resourceId,
+        recordType: 'file',
+        downloadFileName: options.fileName,
+        mimeType: resolvedMime,
+      });
+      if (r2Blob) {
+        if (cacheKey) {
+          await saveLocalAttachment(cacheKey, r2Blob, options.fileName);
+        }
+        return { blob: r2Blob, source: 'cloud', storagePath: resolvedStoragePath };
+      }
+    } catch (r2Err) {
+      console.warn('Cloudflare R2 download failed:', r2Err);
+    }
+  }
+
+  // 3b) Legacy Supabase Storage download
+  if (
+    isSupabaseConfigured &&
+    supabase &&
+    resolvedProvider === 'supabase' &&
     resolvedStoragePath &&
     !resolvedStoragePath.startsWith('users/')
   ) {
@@ -986,6 +1114,7 @@ export async function getPdfBlobForViewing(options: {
   fileName?: string;
   mimeType?: string;
   storagePath?: string;
+  storageProvider?: StorageProvider;
   downloadUrl?: string;
 }): Promise<Blob | null> {
   const res = await getPdfBlobWithCacheInfo(options);
@@ -1023,6 +1152,7 @@ export async function downloadResourceAttachmentResult(options: {
   fileName: string;
   mimeType?: string;
   storagePath?: string;
+  storageProvider?: StorageProvider;
   downloadUrl?: string;
 }): Promise<DownloadAttachmentResult> {
   const triggerBlobDownload = (blob: Blob) => {
@@ -1042,6 +1172,7 @@ export async function downloadResourceAttachmentResult(options: {
     fileName: options.fileName,
     mimeType: options.mimeType,
     storagePath: options.storagePath,
+    storageProvider: options.storageProvider,
     downloadUrl: options.downloadUrl,
   });
 
@@ -1050,9 +1181,18 @@ export async function downloadResourceAttachmentResult(options: {
     return { ok: true };
   }
 
-  if (options.downloadUrl) {
+  const freshUrl = await getFreshStudyFileSignedUrl({
+    uid: options.uid,
+    resourceId: options.resourceId,
+    storagePath: options.storagePath,
+    storageProvider: options.storageProvider,
+    fileName: options.fileName,
+  });
+  const externalHref = freshUrl || options.downloadUrl;
+
+  if (externalHref) {
     const a = document.createElement('a');
-    a.href = options.downloadUrl;
+    a.href = externalHref;
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
     document.body.appendChild(a);
@@ -1074,6 +1214,7 @@ export async function downloadResourceAttachment(options: {
   fileName: string;
   mimeType?: string;
   storagePath?: string;
+  storageProvider?: StorageProvider;
   downloadUrl?: string;
 }): Promise<boolean> {
   const res = await downloadResourceAttachmentResult(options);
@@ -1083,13 +1224,19 @@ export async function downloadResourceAttachment(options: {
 export async function deleteCloudAttachment(
   uid: string | undefined,
   resourceId?: string,
-  storagePath?: string
+  storagePath?: string,
+  storageProvider?: StorageProvider
 ): Promise<void> {
   if (!isSupabaseConfigured || !supabase) return;
   const effectiveUid = uid || auth?.currentUser?.uid;
   if (!effectiveUid) return;
 
   let pathToRemove = storagePath;
+  let providerToRemove: StorageProvider = resolveEffectiveStorageProvider(
+    storageProvider,
+    storagePath
+  );
+  let bucketToRemove = STUDY_FILES_BUCKET;
   const safeId = resourceId
     ? resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
     : undefined;
@@ -1099,34 +1246,44 @@ export async function deleteCloudAttachment(
       const { data } = await withFirebaseTokenRetry(async (client) =>
         client
           .from('file_attachments')
-          .select('storage_path')
+          .select('*')
           .eq('owner_id', effectiveUid)
           .eq('id', safeId)
           .maybeSingle()
       );
-      if (data && typeof (data as { storage_path?: string }).storage_path === 'string') {
-        pathToRemove = pathToRemove || (data as { storage_path: string }).storage_path;
+      if (data) {
+        const row = data as Record<string, unknown>;
+        const dbPath = row.object_key
+          ? String(row.object_key)
+          : row.storage_path
+          ? String(row.storage_path)
+          : '';
+        if (dbPath) pathToRemove = pathToRemove || dbPath;
+        if (row.bucket_name || row.storage_bucket) {
+          bucketToRemove = String(row.bucket_name || row.storage_bucket);
+        }
+        providerToRemove = resolveEffectiveStorageProvider(
+          row.storage_provider
+            ? String(row.storage_provider)
+            : storageProvider,
+          pathToRemove
+        );
       }
-      await withFirebaseTokenRetry(async (client) =>
-        client
-          .from('file_attachments')
-          .delete()
-          .eq('owner_id', effectiveUid)
-          .eq('id', safeId)
-      );
     } catch {
-      // Non-fatal cleanup
+      // Non-fatal lookup
     }
   }
 
-  if (pathToRemove && !pathToRemove.startsWith('users/')) {
-    try {
-      await withFirebaseTokenRetry(async (client) =>
-        client.storage.from(STUDY_FILES_BUCKET).remove([pathToRemove!])
-      );
-    } catch {
-      // Non-fatal cleanup
-    }
+  try {
+    await deleteFileFromStorage({
+      storageProvider: providerToRemove,
+      objectKey: pathToRemove,
+      storageBucket: bucketToRemove,
+      recordId: safeId,
+      recordType: 'file',
+    });
+  } catch {
+    // Non-fatal cleanup
   }
 }
 

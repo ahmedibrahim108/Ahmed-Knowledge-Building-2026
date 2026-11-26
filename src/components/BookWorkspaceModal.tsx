@@ -563,6 +563,7 @@ export default function BookWorkspaceModal({
       onUpdateItem(item.id, {
         coverImageUrl: uploaded.imageUrl || uploaded.localObjectUrl,
         coverStoragePath: uploaded.imageStoragePath || undefined,
+        coverStorageProvider: uploaded.coverStorageProvider,
         coverFrame: item.coverFrame ?? DEFAULT_BOOK_COVER_FRAME,
       });
       if (oldPath && oldPath !== uploaded.imageStoragePath) {
@@ -587,6 +588,7 @@ export default function BookWorkspaceModal({
     onUpdateItem(item.id, {
       coverImageUrl: undefined,
       coverStoragePath: undefined,
+      coverStorageProvider: undefined,
       coverFrame: undefined,
     });
     if (oldPath) {
@@ -606,12 +608,14 @@ export default function BookWorkspaceModal({
         resId,
         file,
         undefined,
-        (pct) => setUploadProgressPct(pct)
+        (pct) => setUploadProgressPct(pct),
+        'library_book'
       );
       onUpdateItem(item.id, {
         attachmentName: file.name,
         attachmentResourceId: resId,
         storagePath: uploaded.storagePath,
+        storageProvider: uploaded.storageProvider,
         downloadUrl: uploaded.downloadUrl,
         ...(isPdfAttachment(file.name, file.type)
           ? { itemType: 'ملف PDF' as ReadingItemType }
@@ -1753,6 +1757,7 @@ export default function BookWorkspaceModal({
                         fileName: item.attachmentName || `${item.title}.pdf`,
                         resourceId: item.attachmentResourceId,
                         storagePath: item.storagePath,
+                        storageProvider: item.storageProvider,
                         downloadUrl: item.downloadUrl,
                         extractedPreview:
                           richHtmlToPlainText(draft.notesHtml) ||
@@ -1778,6 +1783,7 @@ export default function BookWorkspaceModal({
                         resourceId: item.attachmentResourceId,
                         fileName: item.attachmentName || `${item.title}.pdf`,
                         storagePath: item.storagePath,
+                        storageProvider: item.storageProvider,
                         downloadUrl: item.downloadUrl,
                       });
                       if (!result.ok && result.errorMessage) {

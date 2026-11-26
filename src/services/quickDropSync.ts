@@ -8,6 +8,14 @@ import {
   isQuickDropItemExpired,
 } from '../utils/quickDropUtils';
 import {
+  R2UnavailableError,
+  deleteFileFromStorage,
+  downloadR2Blob,
+  isR2PrimaryUploadEnabled,
+  resolveEffectiveStorageProvider,
+  uploadFileToR2,
+} from './storageService';
+import {
   ensureSupabaseRealtimeAuth,
   formatSupabaseErrorMessage,
   isSupabaseConfigured,
@@ -265,17 +273,24 @@ function sanitizeAttachments(raw: unknown): QuickDropAttachment[] {
   return raw
     .filter((a): a is Record<string, unknown> => Boolean(a && typeof a === 'object'))
     .slice(0, 12)
-    .map((a, idx) => ({
-      id: typeof a.id === 'string' && a.id ? a.id : `qda_${idx + 1}`,
-      kind: a.kind === 'pdf' ? 'pdf' : 'image',
-      name: String(a.name || 'مرفق').slice(0, 200),
-      mimeType: String(a.mimeType || 'application/octet-stream').slice(0, 100),
-      sizeBytes: Math.max(0, Math.round(Number(a.sizeBytes ?? 0))),
-      storageBucket: a.storageBucket ? String(a.storageBucket) : undefined,
-      storagePath: a.storagePath ? String(a.storagePath) : undefined,
-      downloadUrl: a.downloadUrl ? String(a.downloadUrl) : undefined,
-      dataUrl: a.dataUrl ? String(a.dataUrl) : undefined,
-    }));
+    .map((a, idx) => {
+      const storagePath = a.storagePath ? String(a.storagePath) : undefined;
+      return {
+        id: typeof a.id === 'string' && a.id ? a.id : `qda_${idx + 1}`,
+        kind: a.kind === 'pdf' ? 'pdf' : 'image',
+        name: String(a.name || 'مرفق').slice(0, 200),
+        mimeType: String(a.mimeType || 'application/octet-stream').slice(0, 100),
+        sizeBytes: Math.max(0, Math.round(Number(a.sizeBytes ?? 0))),
+        storageProvider: resolveEffectiveStorageProvider(
+          a.storageProvider ? String(a.storageProvider) : undefined,
+          storagePath
+        ),
+        storageBucket: a.storageBucket ? String(a.storageBucket) : undefined,
+        storagePath,
+        downloadUrl: a.downloadUrl ? String(a.downloadUrl) : undefined,
+        dataUrl: a.dataUrl ? String(a.dataUrl) : undefined,
+      };
+    });
 }
 
 function mapQuickDropRow(row: RawQuickDropRow): QuickDropItem {
@@ -331,6 +346,7 @@ async function executeCloudMutation(
         name: a.name,
         mimeType: a.mimeType,
         sizeBytes: a.sizeBytes,
+        ...(a.storageProvider ? { storageProvider: a.storageProvider } : {}),
         ...(a.storageBucket ? { storageBucket: a.storageBucket } : {}),
         ...(a.storagePath ? { storagePath: a.storagePath } : {}),
         ...(a.downloadUrl ? { downloadUrl: a.downloadUrl } : {}),
@@ -595,6 +611,7 @@ export async function uploadQuickDropAttachmentFile(
     0,
     180
   );
+  const mimeType = file.type || (isPdf ? 'application/pdf' : 'image/jpeg');
   const safeFile = cleanName.replace(/[^a-zA-Z0-9._-]/g, '_') || (isPdf ? 'doc.pdf' : 'img.jpg');
   const bucket = kind === 'pdf' ? 'study-files' : 'user-images';
   const storagePath = `${uid}/quick_drop/${id}/${safeFile}`;
@@ -606,14 +623,44 @@ export async function uploadQuickDropAttachmentFile(
     (typeof navigator === 'undefined' || navigator.onLine !== false);
 
   if (canUploadOnline) {
+    if (isR2PrimaryUploadEnabled()) {
+      try {
+        const r2Res = await uploadFileToR2({
+          file,
+          fileName: cleanName,
+          mimeType,
+          module: 'quick_drop',
+          recordId: id,
+          recordType: 'none',
+        });
+        return {
+          id,
+          kind,
+          name: cleanName,
+          mimeType: r2Res.mimeType || mimeType,
+          sizeBytes: r2Res.fileSize || file.size,
+          storageProvider: 'r2',
+          storageBucket: r2Res.bucketName,
+          storagePath: r2Res.objectKey,
+          downloadUrl: r2Res.downloadUrl,
+        };
+      } catch (r2Err) {
+        if (!(r2Err instanceof R2UnavailableError)) {
+          // Fall through to legacy/dataUrl only when R2 backend isn't deployed/configured yet
+          if (!isNetworkFailure(r2Err)) {
+            console.warn('QuickDrop R2 upload failed:', r2Err);
+          }
+        }
+      }
+    }
+
     try {
       let downloadUrl = '';
       await withFirebaseTokenRetry(async (client) => {
         const { error: upErr } = await client.storage
           .from(bucket)
           .upload(storagePath, file, {
-            contentType:
-              file.type || (isPdf ? 'application/pdf' : 'image/jpeg'),
+            contentType: mimeType,
             upsert: true,
           });
         if (upErr) throw upErr;
@@ -630,8 +677,9 @@ export async function uploadQuickDropAttachmentFile(
         id,
         kind,
         name: cleanName,
-        mimeType: file.type || (isPdf ? 'application/pdf' : 'image/jpeg'),
+        mimeType,
         sizeBytes: file.size,
+        storageProvider: 'supabase',
         storageBucket: bucket,
         storagePath,
         downloadUrl,
@@ -648,7 +696,7 @@ export async function uploadQuickDropAttachmentFile(
     id,
     kind,
     name: cleanName,
-    mimeType: file.type || (isPdf ? 'application/pdf' : 'image/jpeg'),
+    mimeType,
     sizeBytes: file.size,
     dataUrl,
   };
@@ -663,20 +711,41 @@ export async function resolveQuickDropAttachmentUrl(
     supabase &&
     (typeof navigator === 'undefined' || navigator.onLine !== false)
   ) {
-    try {
-      const bucket = att.storageBucket || (att.kind === 'pdf' ? 'study-files' : 'user-images');
-      const blob = await withFirebaseTokenRetry(async (client) => {
-        const { data, error } = await client.storage
-          .from(bucket)
-          .download(att.storagePath!);
-        if (error || !data) throw error || new Error('Empty file');
-        return data;
-      });
-      if (blob) {
-        return { url: URL.createObjectURL(blob), isObjectUrl: true };
+    const provider = resolveEffectiveStorageProvider(
+      att.storageProvider,
+      att.storagePath
+    );
+    if (provider === 'r2') {
+      try {
+        const blob = await downloadR2Blob({
+          objectKey: att.storagePath,
+          recordId: att.id,
+          recordType: att.kind === 'pdf' ? 'file' : 'image',
+          downloadFileName: att.name,
+          mimeType: att.mimeType,
+        });
+        if (blob) {
+          return { url: URL.createObjectURL(blob), isObjectUrl: true };
+        }
+      } catch {
+        // Fallback below
       }
-    } catch {
-      // Fallback below
+    } else {
+      try {
+        const bucket = att.storageBucket || (att.kind === 'pdf' ? 'study-files' : 'user-images');
+        const blob = await withFirebaseTokenRetry(async (client) => {
+          const { data, error } = await client.storage
+            .from(bucket)
+            .download(att.storagePath!);
+          if (error || !data) throw error || new Error('Empty file');
+          return data;
+        });
+        if (blob) {
+          return { url: URL.createObjectURL(blob), isObjectUrl: true };
+        }
+      } catch {
+        // Fallback below
+      }
     }
   }
   if (att.dataUrl) {
@@ -693,10 +762,17 @@ export async function removeQuickDropAttachmentStorage(
 ): Promise<void> {
   if (!att.storagePath || !isSupabaseConfigured || !supabase) return;
   try {
-    const bucket = att.storageBucket || (att.kind === 'pdf' ? 'study-files' : 'user-images');
-    await withFirebaseTokenRetry(async (client) =>
-      client.storage.from(bucket).remove([att.storagePath!])
+    const provider = resolveEffectiveStorageProvider(
+      att.storageProvider,
+      att.storagePath
     );
+    await deleteFileFromStorage({
+      storageProvider: provider,
+      objectKey: att.storagePath,
+      storageBucket:
+        att.storageBucket || (att.kind === 'pdf' ? 'study-files' : 'user-images'),
+      recordType: att.kind === 'pdf' ? 'file' : 'image',
+    });
   } catch {
     // Non-fatal
   }

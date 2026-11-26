@@ -21,6 +21,7 @@ import {
   resolveDentalCaseCoverUrl,
   uploadDentalCaseCover,
 } from '../utils/imageStorage';
+import type { StorageProvider } from '../services/storageService';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
 import ImageAttachmentGallery from './ImageAttachmentGallery';
@@ -157,6 +158,9 @@ export default function DentalCasesView({
   const [coverPreviewUrl, setCoverPreviewUrl] = useState<string>('');
   const [coverImageUrl, setCoverImageUrl] = useState<string>('');
   const [coverStoragePath, setCoverStoragePath] = useState<string>('');
+  const [coverStorageProvider, setCoverStorageProvider] = useState<
+    StorageProvider | undefined
+  >(undefined);
   const [coverDataUrl, setCoverDataUrl] = useState<string>('');
   const [uploadingCover, setUploadingCover] = useState(false);
   const [coverUploadError, setCoverUploadError] = useState<string | null>(null);
@@ -209,6 +213,7 @@ export default function DentalCasesView({
     setCoverPreviewUrl('');
     setCoverImageUrl('');
     setCoverStoragePath('');
+    setCoverStorageProvider(undefined);
     setCoverDataUrl('');
     setCoverUploadError(null);
   };
@@ -231,6 +236,7 @@ export default function DentalCasesView({
     setCoverPreviewUrl(dc.coverImageUrl || dc.coverDataUrl || '');
     setCoverImageUrl(dc.coverImageUrl || '');
     setCoverStoragePath(dc.coverStoragePath || '');
+    setCoverStorageProvider(dc.coverStorageProvider);
     setCoverDataUrl(dc.coverDataUrl || '');
     setShowAddForm(true);
   };
@@ -261,6 +267,7 @@ export default function DentalCasesView({
 
       let finalImageUrl = coverImageUrl;
       let finalStoragePath = coverStoragePath;
+      let finalStorageProvider = coverStorageProvider;
       let finalDataUrl = coverDataUrl;
 
       if (coverFile) {
@@ -268,6 +275,7 @@ export default function DentalCasesView({
         const uploaded = await uploadDentalCaseCover(targetId, coverFile, uid);
         finalImageUrl = uploaded.coverImageUrl;
         finalStoragePath = uploaded.coverStoragePath;
+        finalStorageProvider = uploaded.coverStorageProvider;
         finalDataUrl = uploaded.coverDataUrl;
         if (
           previousPath &&
@@ -287,6 +295,7 @@ export default function DentalCasesView({
         status,
         coverImageUrl: finalImageUrl,
         coverStoragePath: finalStoragePath,
+        coverStorageProvider: finalStoragePath ? finalStorageProvider : undefined,
         coverDataUrl: finalDataUrl,
         linkedCourseId: linkedCourseId > 0 ? linkedCourseId : 0,
       };

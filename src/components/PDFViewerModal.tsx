@@ -27,6 +27,7 @@ import {
   renderDocumentBlobToHtml,
 } from '../utils/documentImportExport';
 import { renderSafeBidiHtml } from '../utils/richText';
+import type { StorageProvider } from '../services/storageService';
 import ErrorBoundary from './ErrorBoundary';
 
 // Safe runtime shims for mobile WebViews / older Android Chrome & iOS Safari
@@ -82,6 +83,7 @@ export interface ActivePdfTarget {
   fileName: string;
   resourceId?: string;
   storagePath?: string;
+  storageProvider?: StorageProvider;
   downloadUrl?: string;
   mimeType?: string;
   extractedPreview?: string;
@@ -226,6 +228,7 @@ export default function PDFViewerModal({
               uid: resolvedUid,
               resourceId: target.resourceId,
               storagePath: target.storagePath,
+              storageProvider: target.storageProvider,
               fileName: target.fileName,
             }).then((signed) => {
               if (!cancelled && signed) setFreshExternalUrl(signed);
@@ -240,6 +243,7 @@ export default function PDFViewerModal({
             fileName: target.fileName,
             mimeType: target.mimeType,
             storagePath: target.storagePath,
+            storageProvider: target.storageProvider,
             downloadUrl: target.downloadUrl,
           });
           if (cancelled) return;
@@ -258,6 +262,7 @@ export default function PDFViewerModal({
               uid: resolvedUid,
               resourceId: target.resourceId,
               storagePath: fetched.storagePath || target.storagePath,
+              storageProvider: target.storageProvider,
               fileName: target.fileName,
             }).then((signed) => {
               if (!cancelled && signed) setFreshExternalUrl(signed);
@@ -270,6 +275,7 @@ export default function PDFViewerModal({
             uid: resolvedUid,
             resourceId: target.resourceId,
             storagePath: target.storagePath,
+            storageProvider: target.storageProvider,
             fileName: target.fileName,
           });
           if (cancelled) return;
@@ -290,6 +296,7 @@ export default function PDFViewerModal({
             fileName: target.fileName,
             mimeType: target.mimeType,
             storagePath: target.storagePath,
+            storageProvider: target.storageProvider,
             downloadUrl: target.downloadUrl,
           });
           if (cancelled) return;
@@ -405,6 +412,7 @@ export default function PDFViewerModal({
       fileName: target.fileName,
       mimeType: target.mimeType,
       storagePath: target.storagePath,
+      storageProvider: target.storageProvider,
       downloadUrl: target.downloadUrl,
     });
     if (!res.ok) {

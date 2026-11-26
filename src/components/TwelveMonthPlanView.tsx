@@ -37,6 +37,7 @@ import {
   VoiceDialectMode,
 } from '../data/curriculumData';
 import { auth } from '../firebase';
+import type { StorageProvider } from '../services/storageService';
 import {
   downloadResourceAttachmentResult,
   isPdfAttachment,
@@ -106,6 +107,7 @@ interface TwelveMonthPlanViewProps {
       attachmentName?: string;
       extractedPreview?: string;
       storagePath?: string;
+      storageProvider?: StorageProvider;
       downloadUrl?: string;
       mimeType?: string;
       sizeBytes?: number;
@@ -233,6 +235,9 @@ export default function TwelveMonthPlanView({
   const [newResAttachmentName, setNewResAttachmentName] = useState('');
   const [newResPreview, setNewResPreview] = useState('');
   const [newResStoragePath, setNewResStoragePath] = useState('');
+  const [newResStorageProvider, setNewResStorageProvider] = useState<
+    StorageProvider | undefined
+  >(undefined);
   const [newResDownloadUrl, setNewResDownloadUrl] = useState('');
   const [newResMimeType, setNewResMimeType] = useState('');
   const [newResSizeBytes, setNewResSizeBytes] = useState<number | undefined>(
@@ -372,7 +377,8 @@ export default function TwelveMonthPlanView({
         generatedId,
         file,
         previewSlice,
-        (pct) => setUploadProgressPct(pct)
+        (pct) => setUploadProgressPct(pct),
+        'month_attachment'
       );
       if (!newResTitle.trim()) {
         setNewResTitle(parsed.title || file.name.replace(/\.[^.]+$/, ''));
@@ -381,6 +387,7 @@ export default function TwelveMonthPlanView({
       setNewResAttachmentName(file.name);
       setNewResPreview(previewSlice);
       setNewResStoragePath(uploadResPath(uploaded.storagePath));
+      setNewResStorageProvider(uploaded.storageProvider);
       setNewResDownloadUrl(uploaded.downloadUrl ?? '');
       setNewResMimeType(uploaded.mimeType || file.type || '');
       setNewResSizeBytes(uploaded.sizeBytes ?? file.size);
@@ -420,6 +427,7 @@ export default function TwelveMonthPlanView({
         attachmentName: newResAttachmentName || undefined,
         extractedPreview: newResPreview || undefined,
         storagePath: newResStoragePath || undefined,
+        storageProvider: newResStorageProvider,
         downloadUrl: newResDownloadUrl || undefined,
         mimeType: newResMimeType || undefined,
         sizeBytes: newResSizeBytes,
@@ -431,6 +439,7 @@ export default function TwelveMonthPlanView({
     setNewResAttachmentName('');
     setNewResPreview('');
     setNewResStoragePath('');
+    setNewResStorageProvider(undefined);
     setNewResDownloadUrl('');
     setNewResMimeType('');
     setNewResSizeBytes(undefined);
@@ -469,13 +478,15 @@ export default function TwelveMonthPlanView({
         targetResId,
         file,
         previewSlice,
-        (pct) => setUploadProgressPct(pct)
+        (pct) => setUploadProgressPct(pct),
+        'month_attachment'
       );
       onUpdateMonthResource(activeMonth.id, targetResId, {
         attachmentName: file.name,
         mimeType: uploaded.mimeType || file.type || '',
         sizeBytes: uploaded.sizeBytes ?? file.size,
         storagePath: uploaded.storagePath,
+        storageProvider: uploaded.storageProvider,
         downloadUrl: uploaded.downloadUrl,
         ...(previewSlice ? { extractedPreview: previewSlice } : {}),
       });
@@ -1615,6 +1626,7 @@ export default function TwelveMonthPlanView({
                         (isPdf ? `${res.title}.pdf` : `${res.title}.docx`),
                       resourceId: res.id,
                       storagePath: res.storagePath,
+                      storageProvider: res.storageProvider,
                       downloadUrl: res.downloadUrl,
                       mimeType: res.mimeType,
                       extractedPreview: res.extractedPreview,
@@ -1717,6 +1729,7 @@ export default function TwelveMonthPlanView({
                                     fileName: res.attachmentName || res.title,
                                     mimeType: res.mimeType,
                                     storagePath: res.storagePath,
+                                    storageProvider: res.storageProvider,
                                     downloadUrl: res.downloadUrl,
                                   });
                                 if (!result.ok && result.errorMessage) {

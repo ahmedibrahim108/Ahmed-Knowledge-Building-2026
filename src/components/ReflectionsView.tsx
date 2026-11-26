@@ -41,6 +41,10 @@ import {
   isImageFile,
   uploadReflectionImage,
 } from '../utils/imageStorage';
+import {
+  resolveEffectiveStorageProvider,
+  type StorageProvider,
+} from '../services/storageService';
 import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
@@ -130,6 +134,8 @@ export default function ReflectionsView({
   const [composerIsPublic, setComposerIsPublic] = useState(false);
   const [composerImageUrl, setComposerImageUrl] = useState('');
   const [composerImageStoragePath, setComposerImageStoragePath] = useState('');
+  const [composerImageStorageProvider, setComposerImageStorageProvider] =
+    useState<StorageProvider | undefined>(undefined);
   const [composerImageFrame, setComposerImageFrame] = useState<ImageFrameSpec>(
     DEFAULT_REFLECTION_IMAGE_FRAME
   );
@@ -196,6 +202,9 @@ export default function ReflectionsView({
   const [editIsPublic, setEditIsPublic] = useState(false);
   const [editImageUrl, setEditImageUrl] = useState('');
   const [editImageStoragePath, setEditImageStoragePath] = useState('');
+  const [editImageStorageProvider, setEditImageStorageProvider] = useState<
+    StorageProvider | undefined
+  >(undefined);
   const [editImageFrame, setEditImageFrame] = useState<ImageFrameSpec>(
     DEFAULT_REFLECTION_IMAGE_FRAME
   );
@@ -252,6 +261,7 @@ export default function ReflectionsView({
       const res = await uploadReflectionImage(tempId, file, uid);
       setComposerImageUrl(res.imageUrl || res.localObjectUrl);
       setComposerImageStoragePath(res.imageStoragePath);
+      setComposerImageStorageProvider(res.imageStorageProvider);
       setComposerImageFrame(DEFAULT_REFLECTION_IMAGE_FRAME);
       setFrameEditorState({
         mode: 'composer',
@@ -281,6 +291,7 @@ export default function ReflectionsView({
       );
       setEditImageUrl(res.imageUrl || res.localObjectUrl);
       setEditImageStoragePath(res.imageStoragePath);
+      setEditImageStorageProvider(res.imageStorageProvider);
       setEditImageFrame(nextFrame);
       setFrameEditorState({
         mode: 'modal_edit',
@@ -378,6 +389,7 @@ export default function ReflectionsView({
         ? {
             imageUrl: composerImageUrl,
             imageStoragePath: composerImageStoragePath,
+            imageStorageProvider: composerImageStorageProvider,
             imageFrame: composerImageFrame,
           }
         : {}),
@@ -391,6 +403,7 @@ export default function ReflectionsView({
     setComposerIsPublic(false);
     setComposerImageUrl('');
     setComposerImageStoragePath('');
+    setComposerImageStorageProvider(undefined);
     setComposerImageFrame(DEFAULT_REFLECTION_IMAGE_FRAME);
     setComposerImgErr(null);
     setComposerOpen(false);
@@ -406,6 +419,7 @@ export default function ReflectionsView({
     setEditIsPublic(Boolean(r.isPublic));
     setEditImageUrl(r.imageUrl || '');
     setEditImageStoragePath(r.imageStoragePath || '');
+    setEditImageStorageProvider(r.imageStorageProvider);
     setEditImageFrame(
       sanitizeImageFrameSpec(r.imageFrame, DEFAULT_REFLECTION_IMAGE_FRAME)
     );
@@ -431,6 +445,9 @@ export default function ReflectionsView({
       isPublic: editIsPublic,
       imageUrl: editImageUrl,
       imageStoragePath: editImageStoragePath,
+      imageStorageProvider: editImageStoragePath
+        ? editImageStorageProvider
+        : undefined,
       imageFrame:
         editImageUrl || editImageStoragePath ? editImageFrame : undefined,
     });
@@ -1615,6 +1632,14 @@ export default function ReflectionsView({
                         if (galleryPickerTarget === 'composer') {
                           setComposerImageUrl(item.url);
                           setComposerImageStoragePath(item.storagePath || '');
+                          setComposerImageStorageProvider(
+                            item.storagePath
+                              ? resolveEffectiveStorageProvider(
+                                  undefined,
+                                  item.storagePath
+                                )
+                              : undefined
+                          );
                           setComposerImageFrame(DEFAULT_REFLECTION_IMAGE_FRAME);
                           setFrameEditorState({
                             mode: 'composer',
@@ -1629,6 +1654,14 @@ export default function ReflectionsView({
                           );
                           setEditImageUrl(item.url);
                           setEditImageStoragePath(item.storagePath || '');
+                          setEditImageStorageProvider(
+                            item.storagePath
+                              ? resolveEffectiveStorageProvider(
+                                  undefined,
+                                  item.storagePath
+                                )
+                              : undefined
+                          );
                           setEditImageFrame(nextFrame);
                           setFrameEditorState({
                             mode: 'modal_edit',

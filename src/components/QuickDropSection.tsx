@@ -337,6 +337,7 @@ export default function QuickDropSection({
       title: att.name,
       fileName: att.name,
       storagePath: att.storagePath,
+      storageProvider: att.storageProvider,
       downloadUrl: resolved.url,
       mimeType: att.mimeType || 'application/pdf',
       contextLabel: 'مرفق النقل السريع',

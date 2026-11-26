@@ -7,6 +7,7 @@ export interface QuickDropAttachment {
   name: string;
   mimeType: string;
   sizeBytes: number;
+  storageProvider?: 'supabase' | 'r2';
   storageBucket?: string;
   storagePath?: string;
   downloadUrl?: string;

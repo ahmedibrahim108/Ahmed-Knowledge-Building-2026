@@ -152,6 +152,7 @@ export interface DentalCase {
   status: DentalCaseStatus;
   coverImageUrl?: string;
   coverStoragePath?: string;
+  coverStorageProvider?: 'supabase' | 'r2';
   coverDataUrl?: string;
   linkedCourseId?: number;
   updatedAtLabel?: string;
@@ -410,6 +411,7 @@ export interface StudyResource {
   attachmentName?: string;
   extractedPreview?: string;
   storagePath?: string;
+  storageProvider?: 'supabase' | 'r2';
   downloadUrl?: string;
   mimeType?: string;
   sizeBytes?: number;
@@ -739,11 +741,13 @@ export interface ReadingLibraryItem {
   isPublic?: boolean;
   coverImageUrl?: string;
   coverStoragePath?: string;
+  coverStorageProvider?: 'supabase' | 'r2';
   coverFrame?: ImageFrameSpec;
   workspaceData?: BookWorkspaceData;
   attachmentName?: string;
   attachmentResourceId?: string;
   storagePath?: string;
+  storageProvider?: 'supabase' | 'r2';
   downloadUrl?: string;
   externalUrl?: string;
   readingModes: ReadingMode[];
@@ -1111,6 +1115,7 @@ export interface PersonalReflection {
   isPublic?: boolean;
   imageUrl?: string;
   imageStoragePath?: string;
+  imageStorageProvider?: 'supabase' | 'r2';
   imageFrame?: ImageFrameSpec;
   pinned: boolean;
   createdAtLabel: string;
@@ -1126,6 +1131,7 @@ export interface BlogPost {
   categoryLabel?: string;
   coverImageUrl?: string;
   coverStoragePath?: string;
+  coverStorageProvider?: 'supabase' | 'r2';
   coverFrame?: ImageFrameSpec;
   readingTimeMinutes?: number;
   isPublic?: boolean;
@@ -1937,6 +1943,7 @@ export interface DailyJournalRecord {
   cardColor?: JournalCardColorKey;
   coverImageUrl?: string;
   coverImageStoragePath?: string;
+  coverStorageProvider?: 'supabase' | 'r2';
   coverFrame?: ImageFrameSpec;
   dailyQuote?: JournalQuoteMeta;
   reflectionText: string;

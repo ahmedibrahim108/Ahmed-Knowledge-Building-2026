@@ -31,6 +31,10 @@ import {
   uploadJournalCoverImage,
   validateImageFileForUpload,
 } from '../utils/imageStorage';
+import {
+  resolveEffectiveStorageProvider,
+  type StorageProvider,
+} from '../services/storageService';
 import { ImageFrameEditorModal, useResolvedImageSrc } from './FramedImage';
 import { MAIN_GALLERY_SCOPE_KEY } from './PhotoGalleryView';
 
@@ -137,6 +141,9 @@ export default function JournalCardCustomizeModal({
   const [coverStoragePath, setCoverStoragePath] = useState(
     existingRecord?.coverImageStoragePath || ''
   );
+  const [coverStorageProvider, setCoverStorageProvider] = useState<
+    StorageProvider | undefined
+  >(existingRecord?.coverStorageProvider);
   const [coverFrame, setCoverFrame] = useState<ImageFrameSpec>(() =>
     sanitizeImageFrameSpec(
       existingRecord?.coverFrame,
@@ -159,6 +166,7 @@ export default function JournalCardCustomizeModal({
     setCardColor(existingRecord?.cardColor || 'default');
     setCoverUrl(existingRecord?.coverImageUrl || '');
     setCoverStoragePath(existingRecord?.coverImageStoragePath || '');
+    setCoverStorageProvider(existingRecord?.coverStorageProvider);
     setCoverFrame(
       sanitizeImageFrameSpec(
         existingRecord?.coverFrame,
@@ -213,6 +221,7 @@ export default function JournalCardCustomizeModal({
     nextColor?: JournalCardColorKey;
     nextCoverUrl?: string;
     nextCoverStoragePath?: string;
+    nextCoverStorageProvider?: StorageProvider | undefined;
     nextCoverFrame?: ImageFrameSpec;
     closeAfter?: boolean;
   }) => {
@@ -223,6 +232,10 @@ export default function JournalCardCustomizeModal({
     const finalColor = overrides?.nextColor ?? cardColor;
     const finalUrl = overrides?.nextCoverUrl ?? coverUrl;
     const finalPath = overrides?.nextCoverStoragePath ?? coverStoragePath;
+    const finalProvider =
+      overrides && 'nextCoverStorageProvider' in overrides
+        ? overrides.nextCoverStorageProvider
+        : coverStorageProvider;
     const finalFrame = overrides?.nextCoverFrame ?? coverFrame;
 
     const record: DailyJournalRecord = {
@@ -233,6 +246,7 @@ export default function JournalCardCustomizeModal({
       cardColor: finalColor,
       coverImageUrl: finalUrl,
       coverImageStoragePath: finalPath,
+      coverStorageProvider: finalPath ? finalProvider : undefined,
       coverFrame: finalPath || finalUrl ? finalFrame : undefined,
       updatedAtMs: Date.now(),
     };
@@ -245,6 +259,15 @@ export default function JournalCardCustomizeModal({
     }
   };
 
+  const isDedicatedCoverPath = (path: string) =>
+    Boolean(
+      path &&
+        (path.includes('/images/journal_cover_') ||
+          (path.startsWith('journal/attachments/') &&
+            !dayPhotos.some((p) => p.storagePath === path) &&
+            !galleryItems.some((g) => g.storagePath === path)))
+    );
+
   const handleUploadNewCover = async (file: File) => {
     if (!canEdit) return onRequireAuth();
     const check = validateImageFileForUpload(file);
@@ -255,10 +278,9 @@ export default function JournalCardCustomizeModal({
     setUploadErr(null);
     setUploadingCover(true);
     try {
-      const oldDedicatedPath =
-        coverStoragePath && coverStoragePath.includes('/images/journal_cover_')
-          ? coverStoragePath
-          : '';
+      const oldDedicatedPath = isDedicatedCoverPath(coverStoragePath)
+        ? coverStoragePath
+        : '';
       const res = await uploadJournalCoverImage(dateKey, file, uid);
       if (oldDedicatedPath && oldDedicatedPath !== res.imageStoragePath) {
         void deleteJournalCoverStorage(oldDedicatedPath);
@@ -267,10 +289,12 @@ export default function JournalCardCustomizeModal({
       const nextPath = res.imageStoragePath || '';
       setCoverUrl(nextUrl);
       setCoverStoragePath(nextPath);
+      setCoverStorageProvider(res.coverStorageProvider);
       // Persist immediately after successful upload so storage path and DB row stay synchronized
       persistAppearance({
         nextCoverUrl: nextUrl,
         nextCoverStoragePath: nextPath,
+        nextCoverStorageProvider: res.coverStorageProvider,
       });
     } catch (err) {
       setUploadErr(
@@ -283,22 +307,24 @@ export default function JournalCardCustomizeModal({
 
   const handleRemoveCover = () => {
     if (!canEdit) return onRequireAuth();
-    if (coverStoragePath && coverStoragePath.includes('/images/journal_cover_')) {
+    if (isDedicatedCoverPath(coverStoragePath)) {
       void deleteJournalCoverStorage(coverStoragePath);
     }
     setCoverUrl('');
     setCoverStoragePath('');
+    setCoverStorageProvider(undefined);
     setCoverFrame(DEFAULT_JOURNAL_CARD_COVER_FRAME);
   };
 
   const handleResetDefault = () => {
     if (!canEdit) return onRequireAuth();
-    if (coverStoragePath && coverStoragePath.includes('/images/journal_cover_')) {
+    if (isDedicatedCoverPath(coverStoragePath)) {
       void deleteJournalCoverStorage(coverStoragePath);
     }
     setCardColor('default');
     setCoverUrl('');
     setCoverStoragePath('');
+    setCoverStorageProvider(undefined);
     setCoverFrame(DEFAULT_JOURNAL_CARD_COVER_FRAME);
   };
 
@@ -607,6 +633,11 @@ export default function JournalCardCustomizeModal({
                           if (!canEdit) return onRequireAuth();
                           setCoverUrl(url);
                           setCoverStoragePath(sp || '');
+                          setCoverStorageProvider(
+                            sp
+                              ? resolveEffectiveStorageProvider(undefined, sp)
+                              : undefined
+                          );
                         }}
                       />
                     ))}

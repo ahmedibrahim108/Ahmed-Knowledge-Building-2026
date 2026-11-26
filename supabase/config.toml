@@ -1,0 +1,16 @@
+# Supabase Project Configuration for Edge Functions
+# Firebase Authentication (Third-Party Auth) issues RS256 ID tokens signed by Google.
+# Gateway JWT verification is disabled per-function so each Edge Function validates
+# the Firebase ID token cryptographically via Google X.509 certificates + RBAC DB checks.
+
+[functions.generate-upload-url]
+verify_jwt = false
+
+[functions.confirm-upload]
+verify_jwt = false
+
+[functions.generate-download-url]
+verify_jwt = false
+
+[functions.delete-file]
+verify_jwt = false

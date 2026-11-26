@@ -70,6 +70,7 @@ function computeEndTimeFromStart(startTime: string, durationMinutes: number): st
   return `${String(Math.floor(endMins / 60)).padStart(2, '0')}:${String(endMins % 60).padStart(2, '0')}`;
 }
 import { auth } from '../firebase';
+import type { StorageProvider } from '../services/storageService';
 import { formatSupabaseErrorMessage } from '../services/supabaseClient';
 import {
   downloadResourceAttachmentResult,
@@ -137,6 +138,7 @@ interface CourseDetailPageProps {
       attachmentName?: string;
       extractedPreview?: string;
       storagePath?: string;
+      storageProvider?: StorageProvider;
       downloadUrl?: string;
       mimeType?: string;
       sizeBytes?: number;
@@ -266,6 +268,9 @@ export default function CourseDetailPage({
   const [newResAttachmentName, setNewResAttachmentName] = useState('');
   const [newResPreview, setNewResPreview] = useState('');
   const [newResStoragePath, setNewResStoragePath] = useState('');
+  const [newResStorageProvider, setNewResStorageProvider] = useState<
+    StorageProvider | undefined
+  >(undefined);
   const [newResDownloadUrl, setNewResDownloadUrl] = useState('');
   const [newResMimeType, setNewResMimeType] = useState('');
   const [newResSizeBytes, setNewResSizeBytes] = useState<number | undefined>(
@@ -524,7 +529,8 @@ export default function CourseDetailPage({
         generatedId,
         file,
         previewSlice,
-        (pct) => setUploadProgressPct(pct)
+        (pct) => setUploadProgressPct(pct),
+        'course_attachment'
       );
       if (!newResTitle.trim()) {
         setNewResTitle(parsed.title);
@@ -533,6 +539,7 @@ export default function CourseDetailPage({
       setNewResAttachmentName(file.name);
       setNewResPreview(previewSlice);
       setNewResStoragePath(uploadRes.storagePath ?? '');
+      setNewResStorageProvider(uploadRes.storageProvider);
       setNewResDownloadUrl(uploadRes.downloadUrl ?? '');
       setNewResMimeType(uploadRes.mimeType);
       setNewResSizeBytes(uploadRes.sizeBytes);
@@ -586,6 +593,7 @@ export default function CourseDetailPage({
       attachmentName: newResAttachmentName || undefined,
       extractedPreview: newResPreview || undefined,
       storagePath: newResStoragePath || undefined,
+      storageProvider: newResStorageProvider,
       downloadUrl: newResDownloadUrl || undefined,
       mimeType: newResMimeType || undefined,
       sizeBytes: newResSizeBytes,
@@ -596,6 +604,7 @@ export default function CourseDetailPage({
     setNewResAttachmentName('');
     setNewResPreview('');
     setNewResStoragePath('');
+    setNewResStorageProvider(undefined);
     setNewResDownloadUrl('');
     setNewResMimeType('');
     setNewResSizeBytes(undefined);
@@ -628,13 +637,15 @@ export default function CourseDetailPage({
         targetResId,
         file,
         previewSlice,
-        (pct) => setUploadProgressPct(pct)
+        (pct) => setUploadProgressPct(pct),
+        'course_attachment'
       );
       onUpdateCourseResource(course.id, targetResId, {
         attachmentName: file.name,
         mimeType: uploadRes.mimeType,
         sizeBytes: uploadRes.sizeBytes,
         storagePath: uploadRes.storagePath,
+        storageProvider: uploadRes.storageProvider,
         downloadUrl: uploadRes.downloadUrl,
         ...(previewSlice ? { extractedPreview: previewSlice } : {}),
       });
@@ -1735,6 +1746,7 @@ export default function CourseDetailPage({
                           (isPdf ? `${res.title}.pdf` : `${res.title}.docx`),
                         resourceId: res.id,
                         storagePath: res.storagePath,
+                        storageProvider: res.storageProvider,
                         downloadUrl:
                           res.downloadUrl || (isPdf ? res.externalUrl : undefined),
                         mimeType: res.mimeType,
@@ -1848,6 +1860,7 @@ export default function CourseDetailPage({
                                       fileName: res.attachmentName || res.title,
                                       mimeType: res.mimeType,
                                       storagePath: res.storagePath,
+                                      storageProvider: res.storageProvider,
                                       downloadUrl: res.downloadUrl,
                                     });
                                   if (!result.ok && result.errorMessage) {

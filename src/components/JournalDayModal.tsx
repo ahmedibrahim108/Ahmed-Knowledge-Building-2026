@@ -58,6 +58,7 @@ import {
   uploadJournalCoverImage,
   validateImageFileForUpload,
 } from '../utils/imageStorage';
+import { resolveEffectiveStorageProvider } from '../services/storageService';
 import { useSpeechDictation } from '../hooks/useSpeechDictation';
 import {
   QUOTE_COLOR_THEMES,
@@ -796,6 +797,7 @@ export default function JournalDayModal({
       updateDraft((prev) => ({
         ...prev,
         coverImageStoragePath: '',
+        coverStorageProvider: undefined,
         coverImageUrl: '',
       }));
     }
@@ -806,6 +808,9 @@ export default function JournalDayModal({
       ...prev,
       cardColor: prev.cardColor || 'default',
       coverImageStoragePath: photo.storagePath || '',
+      coverStorageProvider: photo.storagePath
+        ? resolveEffectiveStorageProvider(photo.storageProvider, photo.storagePath)
+        : undefined,
       coverImageUrl: photo.downloadUrl || photo.resolvedUrl || '',
     }));
   };
@@ -817,7 +822,9 @@ export default function JournalDayModal({
     try {
       const oldDedicated =
         draft.coverImageStoragePath &&
-        draft.coverImageStoragePath.includes('/images/journal_cover_')
+        (draft.coverImageStoragePath.includes('/images/journal_cover_') ||
+          (draft.coverImageStoragePath.startsWith('journal/attachments/') &&
+            !photos.some((p) => p.storagePath === draft.coverImageStoragePath)))
           ? draft.coverImageStoragePath
           : '';
       const res = await uploadJournalCoverImage(dateKey, file, uid);
@@ -827,6 +834,7 @@ export default function JournalDayModal({
       updateDraft((prev) => ({
         ...prev,
         coverImageStoragePath: res.imageStoragePath,
+        coverStorageProvider: res.coverStorageProvider,
         coverImageUrl: res.imageUrl || res.localObjectUrl || '',
       }));
     } catch (err) {
@@ -850,6 +858,7 @@ export default function JournalDayModal({
       ...prev,
       cardColor: 'default',
       coverImageStoragePath: '',
+      coverStorageProvider: undefined,
       coverImageUrl: '',
       coverFrame: undefined,
     }));

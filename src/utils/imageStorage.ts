@@ -5,6 +5,19 @@ import {
 } from '../data/curriculumData';
 import { auth } from '../firebase';
 import {
+  R2UnavailableError,
+  StorageProvider,
+  deleteFileFromStorage,
+  downloadR2Blob,
+  getBatchR2DownloadUrls,
+  getFileUrl,
+  inferStorageModuleFromImageScope,
+  isR2ObjectKey,
+  isR2PrimaryUploadEnabled,
+  resolveEffectiveStorageProvider,
+  uploadFileToR2,
+} from '../services/storageService';
+import {
   ensureSupabaseRealtimeAuth,
   isSupabaseConfigured,
   supabase,
@@ -34,6 +47,7 @@ export interface StoredImageRecord {
   blob?: Blob;
   dataUrl?: string;
   storagePath?: string;
+  storageProvider?: StorageProvider;
   downloadUrl?: string;
   cloudSynced?: boolean;
 }
@@ -292,27 +306,49 @@ export async function resolveImageFallbackUrl(
     return { url: localRec.dataUrl, isObjectUrl: false };
   }
 
-  // 2) Authenticated Supabase Storage download
+  // 2) Cloud storage download (Cloudflare R2 or legacy Supabase Storage)
   if (
     isSupabaseConfigured &&
     supabase &&
     record.storagePath &&
     !record.storagePath.startsWith('users/')
   ) {
-    try {
-      const blob = await withFirebaseTokenRetry(async (client) => {
-        const { data, error } = await client.storage
-          .from(USER_IMAGES_BUCKET)
-          .download(record.storagePath!);
-        if (error || !data) throw error || new Error('Empty image');
-        return data;
-      });
-      if (blob) {
-        await putLocalImageRecord({ ...record, blob });
-        return { url: URL.createObjectURL(blob), isObjectUrl: true };
+    const provider = resolveEffectiveStorageProvider(
+      record.storageProvider,
+      record.storagePath
+    );
+    if (provider === 'r2') {
+      try {
+        const blob = await downloadR2Blob({
+          objectKey: record.storagePath,
+          recordId: record.id,
+          recordType: 'image',
+          downloadFileName: record.name,
+          mimeType: record.mimeType,
+        });
+        if (blob) {
+          await putLocalImageRecord({ ...record, blob });
+          return { url: URL.createObjectURL(blob), isObjectUrl: true };
+        }
+      } catch (err) {
+        console.warn('R2 image fallback download failed:', err);
       }
-    } catch (err) {
-      console.warn('Supabase Storage image fallback download failed:', err);
+    } else {
+      try {
+        const blob = await withFirebaseTokenRetry(async (client) => {
+          const { data, error } = await client.storage
+            .from(USER_IMAGES_BUCKET)
+            .download(record.storagePath!);
+          if (error || !data) throw error || new Error('Empty image');
+          return data;
+        });
+        if (blob) {
+          await putLocalImageRecord({ ...record, blob });
+          return { url: URL.createObjectURL(blob), isObjectUrl: true };
+        }
+      } catch (err) {
+        console.warn('Supabase Storage image fallback download failed:', err);
+      }
     }
   }
 
@@ -332,6 +368,21 @@ export async function resolveDentalCaseCoverUrl(
     !isSupabaseConfigured ||
     !supabase
   ) {
+    return null;
+  }
+  if (isR2ObjectKey(storagePath)) {
+    try {
+      const signed = await getFileUrl({
+        storageProvider: 'r2',
+        objectKey: storagePath,
+        recordType: 'image',
+      });
+      if (signed) {
+        return { url: signed, isObjectUrl: false };
+      }
+    } catch (err) {
+      console.warn('R2 dental cover fetch failed:', err);
+    }
     return null;
   }
   try {
@@ -363,82 +414,119 @@ async function uploadImageRecordToCloud(
   const safeId = sanitizeImageId(record.id);
   let storagePath = record.storagePath || '';
   let downloadUrl = record.downloadUrl || '';
+  let storageProvider: StorageProvider = resolveEffectiveStorageProvider(
+    record.storageProvider,
+    storagePath
+  );
 
   if (blob) {
-    const safeScope = record.scopeKey
-      .replace(/[^a-zA-Z0-9_-]/g, '_')
-      .slice(0, 64);
-    const safeFileName = sanitizeStorageImageName(record.name || 'image.jpg');
-    storagePath = `${uid}/images/${safeScope}_${safeId}/${safeFileName}`;
-
-    await withFirebaseTokenRetry(async (client) => {
-      const { error: uploadErr } = await client.storage
-        .from(USER_IMAGES_BUCKET)
-        .upload(storagePath, blob, {
-          contentType: record.mimeType || 'image/jpeg',
-          upsert: true,
-        });
-      if (uploadErr) throw uploadErr;
-
+    let usedR2 = false;
+    if (isR2PrimaryUploadEnabled()) {
       try {
-        const { data: signed } = await client.storage
+        const module = inferStorageModuleFromImageScope(record.scopeKey);
+        const r2Res = await uploadFileToR2({
+          file: blob,
+          fileName: record.name || 'image.jpg',
+          mimeType: record.mimeType || 'image/jpeg',
+          module,
+          recordId: safeId,
+          recordType: 'image',
+          scopeKey: record.scopeKey.slice(0, 128),
+          caption: (record.caption || '').slice(0, 500),
+          width: Math.max(0, Math.round(record.width ?? 0)),
+          height: Math.max(0, Math.round(record.height ?? 0)),
+          categoryLabel: (record.categoryLabel || '').slice(0, 80),
+          sortOrder: Math.max(0, Math.round(record.sortOrder ?? 0)),
+          frameConfig: record.frameConfig ?? DEFAULT_IMAGE_FRAME_SPEC,
+          createdAtMs: Math.max(0, Math.round(record.createdAtMs || Date.now())),
+        });
+        storagePath = r2Res.objectKey;
+        downloadUrl = r2Res.downloadUrl;
+        storageProvider = 'r2';
+        usedR2 = true;
+      } catch (err) {
+        if (!(err instanceof R2UnavailableError)) throw err;
+      }
+    }
+
+    if (!usedR2) {
+      storageProvider = 'supabase';
+      const safeScope = record.scopeKey
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .slice(0, 64);
+      const safeFileName = sanitizeStorageImageName(record.name || 'image.jpg');
+      storagePath = `${uid}/images/${safeScope}_${safeId}/${safeFileName}`;
+
+      await withFirebaseTokenRetry(async (client) => {
+        const { error: uploadErr } = await client.storage
           .from(USER_IMAGES_BUCKET)
-          .createSignedUrl(storagePath, 3600);
-        if (signed?.signedUrl) {
-          downloadUrl = signed.signedUrl;
-        }
-      } catch {
-        // Signed URL optional; download() works everywhere
-      }
+          .upload(storagePath, blob, {
+            contentType: record.mimeType || 'image/jpeg',
+            upsert: true,
+          });
+        if (uploadErr) throw uploadErr;
 
-      const baseRow: Record<string, unknown> = {
-        owner_id: uid,
-        id: safeId,
-        scope_key: record.scopeKey.slice(0, 128),
-        file_name: (record.name || 'image.jpg').slice(0, 200),
-        mime_type: (record.mimeType || 'image/jpeg').slice(0, 80),
-        size_bytes: Math.max(0, Math.round((record.sizeKb || 1) * 1024)),
-        width: Math.max(0, Math.round(record.width ?? 0)),
-        height: Math.max(0, Math.round(record.height ?? 0)),
-        caption: (record.caption || '').slice(0, 500),
-        storage_bucket: USER_IMAGES_BUCKET,
-        storage_path: storagePath,
-        download_url: downloadUrl,
-        created_at_ms: Math.max(0, Math.round(record.createdAtMs || Date.now())),
-      };
-      const extendedRow: Record<string, unknown> = {
-        ...baseRow,
-        frame_config: record.frameConfig ?? DEFAULT_IMAGE_FRAME_SPEC,
-        category_label: (record.categoryLabel || '').slice(0, 80),
-        sort_order: Math.max(0, Math.round(record.sortOrder ?? 0)),
-      };
-
-      const { error: rowErr } = await client
-        .from('image_attachments')
-        .upsert(extendedRow, { onConflict: 'owner_id,id' });
-      if (rowErr) {
-        const msg = `${rowErr.code || ''} ${rowErr.message || ''}`.toLowerCase();
-        if (
-          rowErr.code === '42703' ||
-          rowErr.code === 'PGRST204' ||
-          msg.includes('column') ||
-          msg.includes('schema cache')
-        ) {
-          const { error: fallbackErr } = await client
-            .from('image_attachments')
-            .upsert(baseRow, { onConflict: 'owner_id,id' });
-          if (fallbackErr) throw fallbackErr;
-        } else {
-          throw rowErr;
+        try {
+          const { data: signed } = await client.storage
+            .from(USER_IMAGES_BUCKET)
+            .createSignedUrl(storagePath, 3600);
+          if (signed?.signedUrl) {
+            downloadUrl = signed.signedUrl;
+          }
+        } catch {
+          // Signed URL optional; download() works everywhere
         }
-      }
-    });
+
+        const baseRow: Record<string, unknown> = {
+          owner_id: uid,
+          id: safeId,
+          scope_key: record.scopeKey.slice(0, 128),
+          file_name: (record.name || 'image.jpg').slice(0, 200),
+          mime_type: (record.mimeType || 'image/jpeg').slice(0, 80),
+          size_bytes: Math.max(0, Math.round((record.sizeKb || 1) * 1024)),
+          width: Math.max(0, Math.round(record.width ?? 0)),
+          height: Math.max(0, Math.round(record.height ?? 0)),
+          caption: (record.caption || '').slice(0, 500),
+          storage_bucket: USER_IMAGES_BUCKET,
+          storage_path: storagePath,
+          download_url: downloadUrl,
+          created_at_ms: Math.max(0, Math.round(record.createdAtMs || Date.now())),
+        };
+        const extendedRow: Record<string, unknown> = {
+          ...baseRow,
+          frame_config: record.frameConfig ?? DEFAULT_IMAGE_FRAME_SPEC,
+          category_label: (record.categoryLabel || '').slice(0, 80),
+          sort_order: Math.max(0, Math.round(record.sortOrder ?? 0)),
+        };
+
+        const { error: rowErr } = await client
+          .from('image_attachments')
+          .upsert(extendedRow, { onConflict: 'owner_id,id' });
+        if (rowErr) {
+          const msg = `${rowErr.code || ''} ${rowErr.message || ''}`.toLowerCase();
+          if (
+            rowErr.code === '42703' ||
+            rowErr.code === 'PGRST204' ||
+            msg.includes('column') ||
+            msg.includes('schema cache')
+          ) {
+            const { error: fallbackErr } = await client
+              .from('image_attachments')
+              .upsert(baseRow, { onConflict: 'owner_id,id' });
+            if (fallbackErr) throw fallbackErr;
+          } else {
+            throw rowErr;
+          }
+        }
+      });
+    }
   }
 
   const syncedRecord: StoredImageRecord = {
     ...record,
     id: safeId,
     storagePath: storagePath || undefined,
+    storageProvider,
     downloadUrl: downloadUrl || undefined,
     cloudSynced: true,
   };
@@ -521,16 +609,19 @@ async function fetchCloudImagesForScope(
     return (data || []) as Record<string, unknown>[];
   });
 
-  const storagePaths = rows
-    .map((r) => (r.storage_path ? String(r.storage_path) : ''))
+  const allPaths = rows
+    .map((r) => (r.object_key || r.storage_path ? String(r.object_key || r.storage_path) : ''))
     .filter((p) => p && !p.startsWith('users/'));
 
-  const signedUrlMap = new Map<string, string>();
-  if (storagePaths.length > 0 && supabase) {
+  const r2Paths = allPaths.filter((p) => isR2ObjectKey(p));
+  const supabasePaths = allPaths.filter((p) => !isR2ObjectKey(p));
+
+  const signedUrlMap = await getBatchR2DownloadUrls(r2Paths, 'image');
+  if (supabasePaths.length > 0 && supabase) {
     try {
       const { data: signedList } = await supabase.storage
         .from(USER_IMAGES_BUCKET)
-        .createSignedUrls(storagePaths, 3600);
+        .createSignedUrls(supabasePaths, 3600);
       if (Array.isArray(signedList)) {
         for (const item of signedList) {
           if (item.path && item.signedUrl) {
@@ -544,14 +635,21 @@ async function fetchCloudImagesForScope(
   }
 
   return rows.map((raw) => {
-    const storagePath = raw.storage_path ? String(raw.storage_path) : undefined;
+    const storagePath = raw.object_key
+      ? String(raw.object_key)
+      : raw.storage_path
+      ? String(raw.storage_path)
+      : undefined;
     const freshSigned = storagePath ? signedUrlMap.get(storagePath) : undefined;
     return {
       id: String(raw.id),
       scopeKey: String(raw.scope_key || scopeKey),
-      name: String(raw.file_name || 'image.jpg'),
+      name: String(raw.original_name || raw.file_name || 'image.jpg'),
       mimeType: String(raw.mime_type || 'image/jpeg'),
-      sizeKb: Math.max(1, Math.round(Number(raw.size_bytes ?? 0) / 1024)),
+      sizeKb: Math.max(
+        1,
+        Math.round(Number(raw.file_size ?? raw.size_bytes ?? 0) / 1024)
+      ),
       width: typeof raw.width === 'number' ? raw.width : undefined,
       height: typeof raw.height === 'number' ? raw.height : undefined,
       caption: String(raw.caption || ''),
@@ -562,6 +660,10 @@ async function fetchCloudImagesForScope(
       sortOrder: typeof raw.sort_order === 'number' ? raw.sort_order : 0,
       createdAtMs: Number(raw.created_at_ms ?? 0),
       storagePath,
+      storageProvider: resolveEffectiveStorageProvider(
+        raw.storage_provider ? String(raw.storage_provider) : undefined,
+        storagePath
+      ),
       downloadUrl:
         freshSigned || (raw.download_url ? String(raw.download_url) : undefined),
       cloudSynced: true,
@@ -771,18 +873,15 @@ export async function deleteStoredImage(
 
   if (uid && isSupabaseConfigured && supabase) {
     try {
-      await withFirebaseTokenRetry(async (client) => {
-        await client
-          .from('image_attachments')
-          .delete()
-          .eq('owner_id', uid)
-          .eq('id', sanitizeImageId(image.id));
-
-        if (image.storagePath && !image.storagePath.startsWith('users/')) {
-          await client.storage
-            .from(USER_IMAGES_BUCKET)
-            .remove([image.storagePath]);
-        }
+      await deleteFileFromStorage({
+        storageProvider: resolveEffectiveStorageProvider(
+          image.storageProvider,
+          image.storagePath
+        ),
+        objectKey: image.storagePath,
+        storageBucket: USER_IMAGES_BUCKET,
+        recordId: sanitizeImageId(image.id),
+        recordType: 'image',
       });
     } catch {
       // non-fatal
@@ -874,37 +973,63 @@ export async function uploadDentalCaseCover(
 ): Promise<{
   coverImageUrl: string;
   coverStoragePath: string;
+  coverStorageProvider?: StorageProvider;
   coverDataUrl: string;
 }> {
   const uid = uidOverride || auth?.currentUser?.uid;
   const compressed = await compressImageFileForCloud(file);
   let coverStoragePath = '';
   let coverImageUrl = '';
+  let coverStorageProvider: StorageProvider | undefined;
 
   if (uid && isSupabaseConfigured && supabase) {
     const safeId = sanitizeImageId(caseId);
-    const safeName = sanitizeStorageImageName(file.name || 'cover.jpg');
-    const storagePath = `${uid}/images/case_cover_${safeId}/${safeName}`;
-    await withFirebaseTokenRetry(async (client) => {
-      const { error: uploadErr } = await client.storage
-        .from(USER_IMAGES_BUCKET)
-        .upload(storagePath, compressed.blob, {
-          contentType: compressed.mimeType || 'image/jpeg',
-          upsert: true,
+    let usedR2 = false;
+    if (isR2PrimaryUploadEnabled()) {
+      try {
+        const r2Res = await uploadFileToR2({
+          file: compressed.blob,
+          fileName: file.name || 'cover.jpg',
+          mimeType: compressed.mimeType || 'image/jpeg',
+          module: 'dental_cover',
+          recordId: `case_cover_${safeId}`,
+          recordType: 'none',
         });
-      if (uploadErr) throw uploadErr;
+        coverStoragePath = r2Res.objectKey;
+        coverImageUrl = r2Res.downloadUrl;
+        coverStorageProvider = 'r2';
+        usedR2 = true;
+      } catch (err) {
+        if (!(err instanceof R2UnavailableError)) throw err;
+      }
+    }
 
-      const { data: signed } = await client.storage
-        .from(USER_IMAGES_BUCKET)
-        .createSignedUrl(storagePath, 3600);
-      coverStoragePath = storagePath;
-      coverImageUrl = signed?.signedUrl || '';
-    });
+    if (!usedR2) {
+      const safeName = sanitizeStorageImageName(file.name || 'cover.jpg');
+      const storagePath = `${uid}/images/case_cover_${safeId}/${safeName}`;
+      await withFirebaseTokenRetry(async (client) => {
+        const { error: uploadErr } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .upload(storagePath, compressed.blob, {
+            contentType: compressed.mimeType || 'image/jpeg',
+            upsert: true,
+          });
+        if (uploadErr) throw uploadErr;
+
+        const { data: signed } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .createSignedUrl(storagePath, 3600);
+        coverStoragePath = storagePath;
+        coverImageUrl = signed?.signedUrl || '';
+        coverStorageProvider = 'supabase';
+      });
+    }
   }
 
   return {
     coverImageUrl,
     coverStoragePath,
+    coverStorageProvider,
     coverDataUrl: '',
   };
 }
@@ -1005,6 +1130,14 @@ export async function resolveStorageImageUrl(
   ) {
     return null;
   }
+  if (isR2ObjectKey(storagePath)) {
+    const signed = await getFileUrl({
+      storageProvider: 'r2',
+      objectKey: storagePath,
+      recordType: 'image',
+    });
+    return signed ? { url: signed, isObjectUrl: false } : null;
+  }
   try {
     const blob = await withFirebaseTokenRetry(async (client) => {
       const { data, error } = await client.storage
@@ -1038,6 +1171,7 @@ export async function uploadReflectionImage(
 ): Promise<{
   imageUrl: string;
   imageStoragePath: string;
+  imageStorageProvider?: StorageProvider;
   localObjectUrl: string;
 }> {
   const uid = uidOverride || auth?.currentUser?.uid;
@@ -1045,31 +1179,56 @@ export async function uploadReflectionImage(
   const localObjectUrl = URL.createObjectURL(compressed.blob);
   let imageStoragePath = '';
   let imageUrl = '';
+  let imageStorageProvider: StorageProvider | undefined;
 
   if (uid && isSupabaseConfigured && supabase) {
     const safeId = sanitizeImageId(reflectionId);
-    const safeName = sanitizeStorageImageName(file.name || 'reflection.jpg');
-    const storagePath = `${uid}/images/reflection_cover_${safeId}/${safeName}`;
-    await withFirebaseTokenRetry(async (client) => {
-      const { error: uploadErr } = await client.storage
-        .from(USER_IMAGES_BUCKET)
-        .upload(storagePath, compressed.blob, {
-          contentType: compressed.mimeType || 'image/jpeg',
-          upsert: true,
+    let usedR2 = false;
+    if (isR2PrimaryUploadEnabled()) {
+      try {
+        const r2Res = await uploadFileToR2({
+          file: compressed.blob,
+          fileName: file.name || 'reflection.jpg',
+          mimeType: compressed.mimeType || 'image/jpeg',
+          module: 'reflection_image',
+          recordId: `reflection_cover_${safeId}`,
+          recordType: 'none',
         });
-      if (uploadErr) throw uploadErr;
+        imageStoragePath = r2Res.objectKey;
+        imageUrl = r2Res.downloadUrl;
+        imageStorageProvider = 'r2';
+        usedR2 = true;
+      } catch (err) {
+        if (!(err instanceof R2UnavailableError)) throw err;
+      }
+    }
 
-      const { data: signed } = await client.storage
-        .from(USER_IMAGES_BUCKET)
-        .createSignedUrl(storagePath, 3600);
-      imageStoragePath = storagePath;
-      imageUrl = signed?.signedUrl || '';
-    });
+    if (!usedR2) {
+      const safeName = sanitizeStorageImageName(file.name || 'reflection.jpg');
+      const storagePath = `${uid}/images/reflection_cover_${safeId}/${safeName}`;
+      await withFirebaseTokenRetry(async (client) => {
+        const { error: uploadErr } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .upload(storagePath, compressed.blob, {
+            contentType: compressed.mimeType || 'image/jpeg',
+            upsert: true,
+          });
+        if (uploadErr) throw uploadErr;
+
+        const { data: signed } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .createSignedUrl(storagePath, 3600);
+        imageStoragePath = storagePath;
+        imageUrl = signed?.signedUrl || '';
+        imageStorageProvider = 'supabase';
+      });
+    }
   }
 
   return {
     imageUrl: imageUrl || compressed.dataUrl || localObjectUrl,
     imageStoragePath,
+    imageStorageProvider,
     localObjectUrl,
   };
 }
@@ -1086,9 +1245,12 @@ export async function deleteReflectionImageStorage(
     return;
   }
   try {
-    await withFirebaseTokenRetry(async (client) =>
-      client.storage.from(USER_IMAGES_BUCKET).remove([storagePath])
-    );
+    await deleteFileFromStorage({
+      storageProvider: resolveEffectiveStorageProvider(undefined, storagePath),
+      objectKey: storagePath,
+      storageBucket: USER_IMAGES_BUCKET,
+      recordType: 'image',
+    });
   } catch {
     // Non-fatal storage cleanup
   }
@@ -1101,6 +1263,7 @@ export async function uploadBlogCoverImage(
 ): Promise<{
   imageUrl: string;
   imageStoragePath: string;
+  coverStorageProvider?: StorageProvider;
   localObjectUrl: string;
 }> {
   const uid = uidOverride || auth?.currentUser?.uid;
@@ -1108,31 +1271,56 @@ export async function uploadBlogCoverImage(
   const localObjectUrl = URL.createObjectURL(compressed.blob);
   let imageStoragePath = '';
   let imageUrl = '';
+  let coverStorageProvider: StorageProvider | undefined;
 
   if (uid && isSupabaseConfigured && supabase) {
     const safeId = sanitizeImageId(blogId);
-    const safeName = sanitizeStorageImageName(file.name || 'blog-cover.jpg');
-    const storagePath = `${uid}/images/blog_cover_${safeId}/${safeName}`;
-    await withFirebaseTokenRetry(async (client) => {
-      const { error: uploadErr } = await client.storage
-        .from(USER_IMAGES_BUCKET)
-        .upload(storagePath, compressed.blob, {
-          contentType: compressed.mimeType || 'image/jpeg',
-          upsert: true,
+    let usedR2 = false;
+    if (isR2PrimaryUploadEnabled()) {
+      try {
+        const r2Res = await uploadFileToR2({
+          file: compressed.blob,
+          fileName: file.name || 'blog-cover.jpg',
+          mimeType: compressed.mimeType || 'image/jpeg',
+          module: 'blog_cover',
+          recordId: `blog_cover_${safeId}`,
+          recordType: 'none',
         });
-      if (uploadErr) throw uploadErr;
+        imageStoragePath = r2Res.objectKey;
+        imageUrl = r2Res.downloadUrl;
+        coverStorageProvider = 'r2';
+        usedR2 = true;
+      } catch (err) {
+        if (!(err instanceof R2UnavailableError)) throw err;
+      }
+    }
 
-      const { data: signed } = await client.storage
-        .from(USER_IMAGES_BUCKET)
-        .createSignedUrl(storagePath, 3600);
-      imageStoragePath = storagePath;
-      imageUrl = signed?.signedUrl || '';
-    });
+    if (!usedR2) {
+      const safeName = sanitizeStorageImageName(file.name || 'blog-cover.jpg');
+      const storagePath = `${uid}/images/blog_cover_${safeId}/${safeName}`;
+      await withFirebaseTokenRetry(async (client) => {
+        const { error: uploadErr } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .upload(storagePath, compressed.blob, {
+            contentType: compressed.mimeType || 'image/jpeg',
+            upsert: true,
+          });
+        if (uploadErr) throw uploadErr;
+
+        const { data: signed } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .createSignedUrl(storagePath, 3600);
+        imageStoragePath = storagePath;
+        imageUrl = signed?.signedUrl || '';
+        coverStorageProvider = 'supabase';
+      });
+    }
   }
 
   return {
     imageUrl: imageUrl || compressed.dataUrl || localObjectUrl,
     imageStoragePath,
+    coverStorageProvider,
     localObjectUrl,
   };
 }
@@ -1149,9 +1337,12 @@ export async function deleteBlogCoverStorage(
     return;
   }
   try {
-    await withFirebaseTokenRetry(async (client) =>
-      client.storage.from(USER_IMAGES_BUCKET).remove([storagePath])
-    );
+    await deleteFileFromStorage({
+      storageProvider: resolveEffectiveStorageProvider(undefined, storagePath),
+      objectKey: storagePath,
+      storageBucket: USER_IMAGES_BUCKET,
+      recordType: 'image',
+    });
   } catch {
     // Non-fatal storage cleanup
   }
@@ -1169,9 +1360,12 @@ export async function deleteDentalCaseCoverStorage(
     return;
   }
   try {
-    await withFirebaseTokenRetry(async (client) =>
-      client.storage.from(USER_IMAGES_BUCKET).remove([coverStoragePath])
-    );
+    await deleteFileFromStorage({
+      storageProvider: resolveEffectiveStorageProvider(undefined, coverStoragePath),
+      objectKey: coverStoragePath,
+      storageBucket: USER_IMAGES_BUCKET,
+      recordType: 'image',
+    });
   } catch {
     // Non-fatal storage cleanup
   }
@@ -1184,6 +1378,7 @@ export async function uploadBookCoverImage(
 ): Promise<{
   imageUrl: string;
   imageStoragePath: string;
+  coverStorageProvider?: StorageProvider;
   localObjectUrl: string;
   uploadedToCloud: boolean;
 }> {
@@ -1192,29 +1387,54 @@ export async function uploadBookCoverImage(
   const localObjectUrl = URL.createObjectURL(compressed.blob);
   let imageStoragePath = '';
   let imageUrl = '';
+  let coverStorageProvider: StorageProvider | undefined;
   let uploadedToCloud = false;
 
   if (uid && isSupabaseConfigured && supabase && isAppOnline()) {
     try {
       const safeId = sanitizeImageId(itemId);
-      const safeName = sanitizeStorageImageName(file.name || 'book-cover.jpg');
-      const storagePath = `${uid}/images/book_cover_${safeId}/${safeName}`;
-      await withFirebaseTokenRetry(async (client) => {
-        const { error: uploadErr } = await client.storage
-          .from(USER_IMAGES_BUCKET)
-          .upload(storagePath, compressed.blob, {
-            contentType: compressed.mimeType || 'image/jpeg',
-            upsert: true,
+      let usedR2 = false;
+      if (isR2PrimaryUploadEnabled()) {
+        try {
+          const r2Res = await uploadFileToR2({
+            file: compressed.blob,
+            fileName: file.name || 'book-cover.jpg',
+            mimeType: compressed.mimeType || 'image/jpeg',
+            module: 'library_cover',
+            recordId: `book_cover_${safeId}`,
+            recordType: 'none',
           });
-        if (uploadErr) throw uploadErr;
+          imageStoragePath = r2Res.objectKey;
+          imageUrl = r2Res.downloadUrl;
+          coverStorageProvider = 'r2';
+          uploadedToCloud = true;
+          usedR2 = true;
+        } catch (err) {
+          if (!(err instanceof R2UnavailableError)) throw err;
+        }
+      }
 
-        const { data: signed } = await client.storage
-          .from(USER_IMAGES_BUCKET)
-          .createSignedUrl(storagePath, 3600);
-        imageStoragePath = storagePath;
-        imageUrl = signed?.signedUrl || '';
-        uploadedToCloud = true;
-      });
+      if (!usedR2) {
+        const safeName = sanitizeStorageImageName(file.name || 'book-cover.jpg');
+        const storagePath = `${uid}/images/book_cover_${safeId}/${safeName}`;
+        await withFirebaseTokenRetry(async (client) => {
+          const { error: uploadErr } = await client.storage
+            .from(USER_IMAGES_BUCKET)
+            .upload(storagePath, compressed.blob, {
+              contentType: compressed.mimeType || 'image/jpeg',
+              upsert: true,
+            });
+          if (uploadErr) throw uploadErr;
+
+          const { data: signed } = await client.storage
+            .from(USER_IMAGES_BUCKET)
+            .createSignedUrl(storagePath, 3600);
+          imageStoragePath = storagePath;
+          imageUrl = signed?.signedUrl || '';
+          coverStorageProvider = 'supabase';
+          uploadedToCloud = true;
+        });
+      }
     } catch (err) {
       if (!isNetworkOrOfflineError(err)) throw err;
     }
@@ -1223,6 +1443,7 @@ export async function uploadBookCoverImage(
   return {
     imageUrl: imageUrl || compressed.dataUrl || localObjectUrl,
     imageStoragePath,
+    coverStorageProvider,
     localObjectUrl,
     uploadedToCloud,
   };
@@ -1240,9 +1461,12 @@ export async function removeBookCoverStorage(
     return;
   }
   try {
-    await withFirebaseTokenRetry(async (client) =>
-      client.storage.from(USER_IMAGES_BUCKET).remove([storagePath])
-    );
+    await deleteFileFromStorage({
+      storageProvider: resolveEffectiveStorageProvider(undefined, storagePath),
+      objectKey: storagePath,
+      storageBucket: USER_IMAGES_BUCKET,
+      recordType: 'image',
+    });
   } catch {
     // Non-fatal storage cleanup
   }
@@ -1259,6 +1483,7 @@ export async function replaceStoredImage(
   }
   const uid = uidOverride || auth?.currentUser?.uid;
   const oldStoragePath = existing.storagePath;
+  const oldStorageProvider = existing.storageProvider;
   const compressed = await compressImageFileForCloud(newFile);
   const updatedRecord: StoredImageRecord = {
     ...existing,
@@ -1282,9 +1507,15 @@ export async function replaceStoredImage(
         !oldStoragePath.startsWith('users/')
       ) {
         try {
-          await withFirebaseTokenRetry(async (client) =>
-            client.storage.from(USER_IMAGES_BUCKET).remove([oldStoragePath])
-          );
+          await deleteFileFromStorage({
+            storageProvider: resolveEffectiveStorageProvider(
+              oldStorageProvider,
+              oldStoragePath
+            ),
+            objectKey: oldStoragePath,
+            storageBucket: USER_IMAGES_BUCKET,
+            recordType: 'image',
+          });
         } catch {
           // Non-fatal cleanup
         }
@@ -1338,6 +1569,7 @@ export async function uploadJournalCoverImage(
 ): Promise<{
   imageUrl: string;
   imageStoragePath: string;
+  coverStorageProvider?: StorageProvider;
   localObjectUrl: string;
   pendingCloudUpload?: boolean;
 }> {
@@ -1350,28 +1582,52 @@ export async function uploadJournalCoverImage(
   const localObjectUrl = URL.createObjectURL(compressed.blob);
   let imageStoragePath = '';
   let imageUrl = '';
+  let coverStorageProvider: StorageProvider | undefined;
   let pendingCloudUpload = false;
 
   if (uid && isSupabaseConfigured && supabase && isAppOnline()) {
     try {
       const safeId = sanitizeImageId(dateKey);
-      const safeName = sanitizeStorageImageName(file.name || 'journal-cover.jpg');
-      const storagePath = `${uid}/images/journal_cover_${safeId}/${safeName}`;
-      await withFirebaseTokenRetry(async (client) => {
-        const { error: uploadErr } = await client.storage
-          .from(USER_IMAGES_BUCKET)
-          .upload(storagePath, compressed.blob, {
-            contentType: compressed.mimeType || 'image/jpeg',
-            upsert: true,
+      let usedR2 = false;
+      if (isR2PrimaryUploadEnabled()) {
+        try {
+          const r2Res = await uploadFileToR2({
+            file: compressed.blob,
+            fileName: file.name || 'journal-cover.jpg',
+            mimeType: compressed.mimeType || 'image/jpeg',
+            module: 'journal_attachment',
+            recordId: `journal_cover_${safeId}`,
+            recordType: 'none',
           });
-        if (uploadErr) throw uploadErr;
+          imageStoragePath = r2Res.objectKey;
+          imageUrl = r2Res.downloadUrl;
+          coverStorageProvider = 'r2';
+          usedR2 = true;
+        } catch (r2Err) {
+          if (!(r2Err instanceof R2UnavailableError)) throw r2Err;
+        }
+      }
 
-        const { data: signed } = await client.storage
-          .from(USER_IMAGES_BUCKET)
-          .createSignedUrl(storagePath, 3600);
-        imageStoragePath = storagePath;
-        imageUrl = signed?.signedUrl || '';
-      });
+      if (!usedR2) {
+        const safeName = sanitizeStorageImageName(file.name || 'journal-cover.jpg');
+        const storagePath = `${uid}/images/journal_cover_${safeId}/${safeName}`;
+        await withFirebaseTokenRetry(async (client) => {
+          const { error: uploadErr } = await client.storage
+            .from(USER_IMAGES_BUCKET)
+            .upload(storagePath, compressed.blob, {
+              contentType: compressed.mimeType || 'image/jpeg',
+              upsert: true,
+            });
+          if (uploadErr) throw uploadErr;
+
+          const { data: signed } = await client.storage
+            .from(USER_IMAGES_BUCKET)
+            .createSignedUrl(storagePath, 3600);
+          imageStoragePath = storagePath;
+          imageUrl = signed?.signedUrl || '';
+          coverStorageProvider = 'supabase';
+        });
+      }
     } catch (err) {
       if (!isNetworkOrOfflineError(err)) throw err;
       pendingCloudUpload = true;
@@ -1397,6 +1653,7 @@ export async function uploadJournalCoverImage(
   return {
     imageUrl: imageUrl || compressed.dataUrl || localObjectUrl,
     imageStoragePath,
+    coverStorageProvider,
     localObjectUrl,
     pendingCloudUpload,
   };
@@ -1474,34 +1731,73 @@ export async function syncPendingJournalCoversToCloud(uid: string): Promise<numb
       const res = await fetch(item.dataUrl);
       const blob = await res.blob();
       const safeId = sanitizeImageId(item.dateKey);
-      const safeName = sanitizeStorageImageName(item.fileName || 'journal-cover.jpg');
-      const storagePath = `${uid}/images/journal_cover_${safeId}/${safeName}`;
+      let storagePath = '';
       let downloadUrl = '';
-      await withFirebaseTokenRetry(async (client) => {
-        const { error: uploadErr } = await client.storage
-          .from(USER_IMAGES_BUCKET)
-          .upload(storagePath, blob, {
-            contentType: item.mimeType || 'image/jpeg',
-            upsert: true,
+      let usedR2 = false;
+
+      if (isR2PrimaryUploadEnabled()) {
+        try {
+          const r2Res = await uploadFileToR2({
+            file: blob,
+            fileName: item.fileName || 'journal-cover.jpg',
+            mimeType: item.mimeType || 'image/jpeg',
+            module: 'journal_attachment',
+            recordId: `journal_cover_${safeId}`,
+            recordType: 'none',
           });
-        if (uploadErr) throw uploadErr;
-        const { data: signed } = await client.storage
-          .from(USER_IMAGES_BUCKET)
-          .createSignedUrl(storagePath, 3600);
-        downloadUrl = signed?.signedUrl || '';
-      });
+          storagePath = r2Res.objectKey;
+          downloadUrl = r2Res.downloadUrl;
+          usedR2 = true;
+        } catch (r2Err) {
+          if (!(r2Err instanceof R2UnavailableError)) throw r2Err;
+        }
+      }
+
+      if (!usedR2) {
+        const safeName = sanitizeStorageImageName(item.fileName || 'journal-cover.jpg');
+        storagePath = `${uid}/images/journal_cover_${safeId}/${safeName}`;
+        await withFirebaseTokenRetry(async (client) => {
+          const { error: uploadErr } = await client.storage
+            .from(USER_IMAGES_BUCKET)
+            .upload(storagePath, blob, {
+              contentType: item.mimeType || 'image/jpeg',
+              upsert: true,
+            });
+          if (uploadErr) throw uploadErr;
+          const { data: signed } = await client.storage
+            .from(USER_IMAGES_BUCKET)
+            .createSignedUrl(storagePath, 3600);
+          downloadUrl = signed?.signedUrl || '';
+        });
+      }
+
       patchQueuedDailyJournalCover(uid, item.dateKey, storagePath, downloadUrl);
       // Also update daily_journals row directly if present
-      await withFirebaseTokenRetry(async (client) =>
-        client
+      await withFirebaseTokenRetry(async (client) => {
+        const patchPayload: Record<string, unknown> = {
+          cover_image_storage_path: storagePath,
+          cover_image_url: downloadUrl,
+          cover_storage_provider: usedR2 ? 'r2' : 'supabase',
+        };
+        const { error } = await client
           .from('daily_journals')
-          .update({
-            cover_image_storage_path: storagePath,
-            cover_image_url: downloadUrl,
-          })
+          .update(patchPayload)
           .eq('owner_id', uid)
-          .eq('date_key', item.dateKey)
-      );
+          .eq('date_key', item.dateKey);
+        if (error) {
+          const msg = `${error.code || ''} ${error.message || ''}`.toLowerCase();
+          if (error.code === '42703' || error.code === 'PGRST204' || msg.includes('column')) {
+            await client
+              .from('daily_journals')
+              .update({
+                cover_image_storage_path: storagePath,
+                cover_image_url: downloadUrl,
+              })
+              .eq('owner_id', uid)
+              .eq('date_key', item.dateKey);
+          }
+        }
+      });
       synced += 1;
     } catch {
       remaining.push(item);
@@ -1525,9 +1821,12 @@ export async function deleteJournalCoverStorage(
     return;
   }
   try {
-    await withFirebaseTokenRetry(async (client) =>
-      client.storage.from(USER_IMAGES_BUCKET).remove([storagePath])
-    );
+    await deleteFileFromStorage({
+      storageProvider: resolveEffectiveStorageProvider(undefined, storagePath),
+      objectKey: storagePath,
+      storageBucket: USER_IMAGES_BUCKET,
+      recordType: 'image',
+    });
   } catch {
     // Non-fatal cleanup
   }
@@ -1570,16 +1869,19 @@ export async function fetchAllJournalImagesSummary(
     return (data || []) as Record<string, unknown>[];
   });
 
-  const storagePaths = rows
-    .map((r) => (r.storage_path ? String(r.storage_path) : ''))
+  const allPaths = rows
+    .map((r) => (r.object_key || r.storage_path ? String(r.object_key || r.storage_path) : ''))
     .filter((p) => p && !p.startsWith('users/'));
 
-  const signedUrlMap = new Map<string, string>();
-  if (storagePaths.length > 0 && supabase) {
+  const r2Paths = allPaths.filter((p) => isR2ObjectKey(p));
+  const supabasePaths = allPaths.filter((p) => !isR2ObjectKey(p));
+
+  const signedUrlMap = await getBatchR2DownloadUrls(r2Paths, 'image');
+  if (supabasePaths.length > 0 && supabase) {
     try {
       const { data: signedList } = await supabase.storage
         .from(USER_IMAGES_BUCKET)
-        .createSignedUrls(storagePaths, 3600);
+        .createSignedUrls(supabasePaths, 3600);
       if (Array.isArray(signedList)) {
         for (const item of signedList) {
           if (item.path && item.signedUrl) {
@@ -1598,15 +1900,22 @@ export async function fetchAllJournalImagesSummary(
   const merged = new Map<string, StoredImageRecord>();
   for (const raw of rows) {
     const id = String(raw.id);
-    const storagePath = raw.storage_path ? String(raw.storage_path) : undefined;
+    const storagePath = raw.object_key
+      ? String(raw.object_key)
+      : raw.storage_path
+      ? String(raw.storage_path)
+      : undefined;
     const freshSigned = storagePath ? signedUrlMap.get(storagePath) : undefined;
     const loc = localById.get(id);
     merged.set(id, {
       id,
       scopeKey: String(raw.scope_key || ''),
-      name: String(raw.file_name || 'image.jpg'),
+      name: String(raw.original_name || raw.file_name || 'image.jpg'),
       mimeType: String(raw.mime_type || 'image/jpeg'),
-      sizeKb: Math.max(1, Math.round(Number(raw.size_bytes ?? 0) / 1024)),
+      sizeKb: Math.max(
+        1,
+        Math.round(Number(raw.file_size ?? raw.size_bytes ?? 0) / 1024)
+      ),
       width: typeof raw.width === 'number' ? raw.width : undefined,
       height: typeof raw.height === 'number' ? raw.height : undefined,
       caption: String(raw.caption || ''),
@@ -1617,6 +1926,10 @@ export async function fetchAllJournalImagesSummary(
       sortOrder: typeof raw.sort_order === 'number' ? raw.sort_order : 0,
       createdAtMs: Number(raw.created_at_ms ?? 0),
       storagePath,
+      storageProvider: resolveEffectiveStorageProvider(
+        raw.storage_provider ? String(raw.storage_provider) : undefined,
+        storagePath
+      ),
       downloadUrl:
         freshSigned || (raw.download_url ? String(raw.download_url) : undefined),
       blob: loc?.blob,

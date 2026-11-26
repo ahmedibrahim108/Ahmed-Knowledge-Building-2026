@@ -113,6 +113,10 @@ import {
   saveCachedUserProfile,
 } from '../utils/offlineQueue';
 import {
+  StorageProvider,
+  resolveEffectiveStorageProvider,
+} from './storageService';
+import {
   ensureSupabaseRealtimeAuth,
   formatSupabaseErrorMessage,
   isSupabaseConfigured,
@@ -365,6 +369,14 @@ function sanitizeResourceList(items: StudyResource[]): StudyResource[] {
       ? { extractedPreview: clip(r.extractedPreview, 8000) }
       : {}),
     ...(r.storagePath ? { storagePath: clip(r.storagePath, 400) } : {}),
+    ...(r.storagePath || r.storageProvider
+      ? {
+          storageProvider: resolveEffectiveStorageProvider(
+            r.storageProvider,
+            r.storagePath
+          ),
+        }
+      : {}),
     ...(r.downloadUrl ? { downloadUrl: clip(r.downloadUrl, 1200) } : {}),
     ...(r.mimeType ? { mimeType: clip(r.mimeType, 120) } : {}),
     ...(typeof r.sizeBytes === 'number' && r.sizeBytes >= 0
@@ -922,6 +934,10 @@ export function buildReflectionRow(uid: string, r: PersonalReflection) {
     is_public: Boolean(r.isPublic),
     image_url: clip(r.imageUrl || '', 2000),
     image_storage_path: clip(r.imageStoragePath || '', 500),
+    image_storage_provider: resolveEffectiveStorageProvider(
+      r.imageStorageProvider,
+      r.imageStoragePath
+    ),
     image_frame: r.imageFrame
       ? sanitizeImageFrameSpec(r.imageFrame, DEFAULT_REFLECTION_IMAGE_FRAME)
       : {},
@@ -947,6 +963,10 @@ export function buildBlogPostRow(uid: string, post: BlogPost) {
     category_label: clip(post.categoryLabel || '', 100),
     cover_image_url: clip(post.coverImageUrl || '', 2000),
     cover_storage_path: clip(post.coverStoragePath || '', 500),
+    cover_storage_provider: resolveEffectiveStorageProvider(
+      post.coverStorageProvider,
+      post.coverStoragePath
+    ),
     cover_frame: post.coverFrame
       ? sanitizeImageFrameSpec(post.coverFrame, DEFAULT_IMAGE_FRAME_SPEC)
       : {},
@@ -1091,14 +1111,25 @@ export function buildReadingItemRow(uid: string, item: ReadingLibraryItem) {
     is_public: Boolean(item.isPublic),
     cover_image_url: clip(item.coverImageUrl || '', 2000),
     cover_storage_path: clip(item.coverStoragePath || '', 500),
+    cover_storage_provider: resolveEffectiveStorageProvider(
+      item.coverStorageProvider,
+      item.coverStoragePath
+    ),
     cover_frame: item.coverFrame
       ? sanitizeImageFrameSpec(item.coverFrame, DEFAULT_BOOK_COVER_FRAME)
       : {},
     workspace_data: cleanWorkspace ?? {},
     attachment_name: clip(item.attachmentName, 240),
     attachment_resource_id: clip(item.attachmentResourceId, 160),
-    storage_bucket: 'study-files',
+    storage_bucket:
+      resolveEffectiveStorageProvider(item.storageProvider, item.storagePath) === 'r2'
+        ? 'r2'
+        : 'study-files',
     storage_path: clip(item.storagePath, 400),
+    storage_provider: resolveEffectiveStorageProvider(
+      item.storageProvider,
+      item.storagePath
+    ),
     download_url: clip(item.downloadUrl, 1200),
     external_url: clip(item.externalUrl, 800),
     reading_modes: sanitizeReadingModes(item.readingModes),
@@ -1256,8 +1287,18 @@ export function buildDentalCaseRow(uid: string, dc: DentalCase) {
     case_date: sanitizeDateKeyOrEmpty(dc.caseDate),
     status,
     cover_image_url: clip(dc.coverImageUrl, 1200),
-    cover_storage_bucket: 'user-images',
+    cover_storage_bucket:
+      resolveEffectiveStorageProvider(
+        dc.coverStorageProvider,
+        dc.coverStoragePath
+      ) === 'r2'
+        ? 'r2'
+        : 'user-images',
     cover_storage_path: clip(dc.coverStoragePath, 400),
+    cover_storage_provider: resolveEffectiveStorageProvider(
+      dc.coverStorageProvider,
+      dc.coverStoragePath
+    ),
     cover_data_url: clip(dc.coverDataUrl, 40000),
     linked_course_id: Math.max(0, Math.round(dc.linkedCourseId ?? 0)),
     updated_at_label: clip(dc.updatedAtLabel, 100),
@@ -1688,6 +1729,12 @@ function mapReflectionRow(raw: Record<string, unknown>): PersonalReflection {
     imageStoragePath: raw.image_storage_path
       ? String(raw.image_storage_path)
       : undefined,
+    imageStorageProvider: resolveEffectiveStorageProvider(
+      raw.image_storage_provider
+        ? String(raw.image_storage_provider)
+        : undefined,
+      raw.image_storage_path ? String(raw.image_storage_path) : undefined
+    ),
     imageFrame: hasFrame
       ? sanitizeImageFrameSpec(rawFrame, DEFAULT_REFLECTION_IMAGE_FRAME)
       : undefined,
@@ -1716,6 +1763,12 @@ function mapBlogPostRow(raw: Record<string, unknown>): BlogPost {
     coverStoragePath: raw.cover_storage_path
       ? String(raw.cover_storage_path)
       : undefined,
+    coverStorageProvider: resolveEffectiveStorageProvider(
+      raw.cover_storage_provider
+        ? String(raw.cover_storage_provider)
+        : undefined,
+      raw.cover_storage_path ? String(raw.cover_storage_path) : undefined
+    ),
     coverFrame: hasFrame
       ? sanitizeImageFrameSpec(rawFrame, DEFAULT_IMAGE_FRAME_SPEC)
       : undefined,
@@ -1821,6 +1874,12 @@ function mapReadingItemRow(raw: Record<string, unknown>): ReadingLibraryItem {
     coverStoragePath: raw.cover_storage_path
       ? String(raw.cover_storage_path)
       : undefined,
+    coverStorageProvider: resolveEffectiveStorageProvider(
+      raw.cover_storage_provider
+        ? String(raw.cover_storage_provider)
+        : undefined,
+      raw.cover_storage_path ? String(raw.cover_storage_path) : undefined
+    ),
     coverFrame: hasCoverFrame
       ? sanitizeImageFrameSpec(rawCoverFrame, DEFAULT_BOOK_COVER_FRAME)
       : undefined,
@@ -1830,6 +1889,10 @@ function mapReadingItemRow(raw: Record<string, unknown>): ReadingLibraryItem {
       ? String(raw.attachment_resource_id)
       : undefined,
     storagePath: raw.storage_path ? String(raw.storage_path) : undefined,
+    storageProvider: resolveEffectiveStorageProvider(
+      raw.storage_provider ? String(raw.storage_provider) : undefined,
+      raw.storage_path ? String(raw.storage_path) : undefined
+    ),
     downloadUrl: raw.download_url ? String(raw.download_url) : undefined,
     externalUrl: raw.external_url ? String(raw.external_url) : undefined,
     readingModes: sanitizeReadingModes(raw.reading_modes),
@@ -1973,6 +2036,12 @@ function mapDentalCaseRow(raw: Record<string, unknown>): DentalCase {
     coverStoragePath: raw.cover_storage_path
       ? String(raw.cover_storage_path)
       : undefined,
+    coverStorageProvider: resolveEffectiveStorageProvider(
+      raw.cover_storage_provider
+        ? String(raw.cover_storage_provider)
+        : undefined,
+      raw.cover_storage_path ? String(raw.cover_storage_path) : undefined
+    ),
     coverDataUrl: raw.cover_data_url ? String(raw.cover_data_url) : undefined,
     linkedCourseId:
       typeof raw.linked_course_id === 'number' && raw.linked_course_id > 0
@@ -3166,6 +3235,14 @@ const OPTIONAL_019_COLUMNS_BY_TABLE: Record<string, string[]> = {
   ],
 };
 
+const OPTIONAL_020_COLUMNS_BY_TABLE: Record<string, string[]> = {
+  reading_items: ['storage_provider', 'cover_storage_provider'],
+  reflections: ['image_storage_provider'],
+  blog_posts: ['cover_storage_provider'],
+  dental_cases: ['cover_storage_provider'],
+  daily_journals: ['cover_storage_provider'],
+};
+
 function stripColumns(
   row: Record<string, unknown>,
   dropCols: string[]
@@ -3208,11 +3285,24 @@ async function runUpsertWith007Fallback(
   await withFirebaseTokenRetry(async (client) => {
     const { error } = await client.from(table).upsert(row, { onConflict });
     if (!error) return;
+    const cols020 = OPTIONAL_020_COLUMNS_BY_TABLE[table] ?? [];
     const cols019 = OPTIONAL_019_COLUMNS_BY_TABLE[table] ?? [];
     const cols007 = OPTIONAL_007_COLUMNS_BY_TABLE[table] ?? [];
-    if (isMissingColumnError(error) && (cols019.length > 0 || cols007.length > 0)) {
+    let workingRow = row;
+    let activeErr: unknown = error;
+
+    if (isMissingColumnError(activeErr) && cols020.length > 0) {
+      workingRow = stripColumns(workingRow, cols020);
+      const { error: err020 } = await client
+        .from(table)
+        .upsert(workingRow, { onConflict });
+      if (!err020) return;
+      activeErr = err020;
+    }
+
+    if (isMissingColumnError(activeErr) && (cols019.length > 0 || cols007.length > 0)) {
       if (cols019.length > 0) {
-        const rowWithout019 = stripColumns(row, cols019);
+        const rowWithout019 = stripColumns(workingRow, cols019);
         const { error: err019 } = await client
           .from(table)
           .upsert(rowWithout019, { onConflict });
@@ -3238,9 +3328,9 @@ async function runUpsertWith007Fallback(
       hasPending007Migration = true;
       console.warn(
         `Supabase table "${table}" is missing migration 007 columns; retrying with legacy schema:`,
-        error
+        activeErr
       );
-      const fallbackRow = strip007Columns(table, row);
+      const fallbackRow = strip007Columns(table, workingRow);
       const { error: retryErr } = await client
         .from(table)
         .upsert(fallbackRow, { onConflict });
@@ -3728,6 +3818,7 @@ export async function saveBlogPostDoc(
       keyVal: row.id,
       onConflict: 'owner_id,id',
       row,
+      use007Fallback: true,
     });
   } catch (err) {
     if (isMissingTableError(err)) {
@@ -4050,6 +4141,7 @@ export async function saveDentalCaseDoc(
     keyVal: row.id,
     onConflict: 'owner_id,id',
     row,
+    use007Fallback: true,
   });
 }
 
@@ -4094,6 +4186,7 @@ export interface CloudAttachmentItem {
   mimeType: string;
   sizeBytes: number;
   storagePath?: string;
+  storageProvider?: StorageProvider;
   updatedAtMs: number;
 }
 
@@ -4114,7 +4207,7 @@ export function subscribeCloudAttachments(
       const { data, error } = await withFirebaseTokenRetry(async (c) =>
         c
           .from('file_attachments')
-          .select('id,file_name,mime_type,size_bytes,storage_path,updated_at')
+          .select('*')
           .eq('owner_id', uid)
           .order('updated_at', { ascending: false })
       );
@@ -4126,12 +4219,21 @@ export function subscribeCloudAttachments(
         const r = row as Record<string, unknown>;
         const updatedStr = typeof r.updated_at === 'string' ? r.updated_at : '';
         const ms = updatedStr ? Date.parse(updatedStr) : 0;
+        const storagePath = r.object_key
+          ? String(r.object_key)
+          : r.storage_path
+          ? String(r.storage_path)
+          : undefined;
         return {
           id: String(r.id),
-          fileName: String(r.file_name || 'مستند مرفق'),
+          fileName: String(r.original_name || r.file_name || 'مستند مرفق'),
           mimeType: String(r.mime_type || 'application/pdf'),
-          sizeBytes: Number(r.size_bytes ?? 0),
-          storagePath: r.storage_path ? String(r.storage_path) : undefined,
+          sizeBytes: Number(r.file_size ?? r.size_bytes ?? 0),
+          storagePath,
+          storageProvider: resolveEffectiveStorageProvider(
+            r.storage_provider ? String(r.storage_provider) : undefined,
+            storagePath
+          ),
           updatedAtMs: Number.isFinite(ms) ? ms : 0,
         };
       });
@@ -5201,12 +5303,19 @@ export function buildDailyJournalRow(uid: string, rec: DailyJournalRecord) {
   const cleanQuote = sanitizeJournalQuote(rec.dailyQuote, row013.date_key);
   return {
     ...row013,
+    cover_storage_provider: resolveEffectiveStorageProvider(
+      rec.coverStorageProvider,
+      rec.coverImageStoragePath
+    ),
     daily_quote: cleanQuote || null,
   };
 }
 
 function mapDailyJournalRow(raw: Record<string, unknown>): DailyJournalRecord {
   const dateKey = String(raw.date_key || toLocalDateKey());
+  const coverImageStoragePath = raw.cover_image_storage_path
+    ? String(raw.cover_image_storage_path)
+    : undefined;
   return {
     dateKey,
     title: raw.title ? String(raw.title) : undefined,
@@ -5219,9 +5328,13 @@ function mapDailyJournalRow(raw: Record<string, unknown>): DailyJournalRecord {
       ? sanitizeJournalQuickNotes(raw.quick_notes)
       : undefined,
     cardColor: sanitizeJournalCardColor(raw.card_color),
-    coverImageStoragePath: raw.cover_image_storage_path
-      ? String(raw.cover_image_storage_path)
-      : undefined,
+    coverImageStoragePath,
+    coverStorageProvider: resolveEffectiveStorageProvider(
+      raw.cover_storage_provider
+        ? String(raw.cover_storage_provider)
+        : undefined,
+      coverImageStoragePath
+    ),
     coverImageUrl: raw.cover_image_url ? String(raw.cover_image_url) : undefined,
     coverFrame:
       raw.cover_frame && typeof raw.cover_frame === 'object'
@@ -5273,6 +5386,18 @@ export async function saveDailyJournalDoc(
       return;
     }
     if (isMissingColumnError(err)) {
+      // First try stripping only migration 020 cover_storage_provider (keeping daily_quote!)
+      const rowWithout020 = stripColumns(fullRow, ['cover_storage_provider']);
+      try {
+        await runWrite((c) =>
+          c
+            .from('daily_journals')
+            .upsert(rowWithout020, { onConflict: 'owner_id,date_key' })
+        );
+        return;
+      } catch (err020) {
+        if (!isMissingColumnError(err020)) throw err020;
+      }
       hasPending014Migration = true;
       const row013 = buildDailyJournal013Row(uid, rec);
       try {

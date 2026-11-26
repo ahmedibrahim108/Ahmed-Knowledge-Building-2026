@@ -42,6 +42,7 @@ import {
 } from '../data/curriculumData';
 import { auth } from '../firebase';
 import { formatSupabaseErrorMessage } from '../services/supabaseClient';
+import type { StorageProvider } from '../services/storageService';
 import { CloudAttachmentItem } from '../services/supabaseSync';
 import {
   isPdfAttachment,
@@ -182,6 +183,8 @@ export default function LibraryView({
   const [pendingCoverStoragePath, setPendingCoverStoragePath] = useState<
     string | undefined
   >();
+  const [pendingCoverStorageProvider, setPendingCoverStorageProvider] =
+    useState<StorageProvider | undefined>();
   const [pendingCoverFrame, setPendingCoverFrame] = useState<ImageFrameSpec>(
     DEFAULT_BOOK_COVER_FRAME
   );
@@ -201,6 +204,9 @@ export default function LibraryView({
   const [pendingResId, setPendingResId] = useState('');
   const [pendingFileName, setPendingFileName] = useState('');
   const [pendingStoragePath, setPendingStoragePath] = useState<string | undefined>();
+  const [pendingStorageProvider, setPendingStorageProvider] = useState<
+    StorageProvider | undefined
+  >();
   const [pendingDownloadUrl, setPendingDownloadUrl] = useState<string | undefined>();
   const [confirmDelete, setConfirmDelete] = useState<ReadingLibraryItem | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -273,6 +279,7 @@ export default function LibraryView({
       const res = await uploadBookCoverImage(tempId, file, resolvedUid);
       setPendingCoverUrl(res.imageUrl || res.localObjectUrl);
       setPendingCoverStoragePath(res.imageStoragePath || undefined);
+      setPendingCoverStorageProvider(res.coverStorageProvider);
       setPendingCoverFrame(DEFAULT_BOOK_COVER_FRAME);
       setCoverFrameEditorOpen(true);
     } catch (err) {
@@ -299,11 +306,13 @@ export default function LibraryView({
         resId,
         file,
         undefined,
-        (pct) => setUploadProgressPct(pct)
+        (pct) => setUploadProgressPct(pct),
+        'library_book'
       );
       setPendingResId(resId);
       setPendingFileName(file.name);
       setPendingStoragePath(uploaded.storagePath);
+      setPendingStorageProvider(uploaded.storageProvider);
       setPendingDownloadUrl(uploaded.downloadUrl);
       if (!title.trim()) {
         setTitle(
@@ -368,10 +377,12 @@ export default function LibraryView({
       takeaways: takeaways.trim(),
       coverImageUrl: pendingCoverUrl || undefined,
       coverStoragePath: pendingCoverStoragePath || undefined,
+      coverStorageProvider: pendingCoverStorageProvider,
       coverFrame: pendingCoverUrl ? pendingCoverFrame : undefined,
       attachmentName: pendingFileName || undefined,
       attachmentResourceId: pendingResId || undefined,
       storagePath: pendingStoragePath,
+      storageProvider: pendingStorageProvider,
       downloadUrl: pendingDownloadUrl,
       externalUrl: externalUrl.trim() || undefined,
       readingModes: [],
@@ -392,11 +403,13 @@ export default function LibraryView({
     setTakeaways('');
     setPendingCoverUrl('');
     setPendingCoverStoragePath(undefined);
+    setPendingCoverStorageProvider(undefined);
     setPendingCoverFrame(DEFAULT_BOOK_COVER_FRAME);
     setCoverUploadError(null);
     setPendingResId('');
     setPendingFileName('');
     setPendingStoragePath(undefined);
+    setPendingStorageProvider(undefined);
     setPendingDownloadUrl(undefined);
     setUploadStatusMsg(null);
     setShowAddForm(false);
@@ -993,6 +1006,7 @@ export default function LibraryView({
                                 item.attachmentName || `${item.title}.pdf`,
                               resourceId: item.attachmentResourceId,
                               storagePath: item.storagePath,
+                              storageProvider: item.storageProvider,
                               downloadUrl: item.downloadUrl,
                               extractedPreview:
                                 richHtmlToPlainText(

@@ -82,7 +82,8 @@ export default function NoteAttachmentsPanel({
         resourceId,
         file,
         extractedPreview,
-        (pct) => setUploadProgress(pct)
+        (pct) => setUploadProgress(pct),
+        'note_attachment'
       );
 
       const newRes: StudyResource = {
@@ -95,6 +96,7 @@ export default function NoteAttachmentsPanel({
         mimeType: uploaded.mimeType || mimeType,
         sizeBytes: uploaded.sizeBytes ?? file.size,
         storagePath: uploaded.storagePath,
+        storageProvider: uploaded.storageProvider,
         downloadUrl: uploaded.downloadUrl,
         extractedPreview: extractedPreview || undefined,
       };
@@ -134,6 +136,7 @@ export default function NoteAttachmentsPanel({
       fileName: res.attachmentName || res.title,
       mimeType: res.mimeType,
       storagePath: res.storagePath,
+      storageProvider: res.storageProvider,
       downloadUrl: res.downloadUrl,
     });
     if (!result.ok && result.errorMessage) {
@@ -148,7 +151,7 @@ export default function NoteAttachmentsPanel({
     }
     setErrorMessage(null);
     onUpdateResources(resources.filter((item) => item.id !== res.id));
-    await deleteCloudAttachment(uid, res.id, res.storagePath);
+    await deleteCloudAttachment(uid, res.id, res.storagePath, res.storageProvider);
   };
 
   return (
@@ -254,6 +257,7 @@ export default function NoteAttachmentsPanel({
                       fileName: res.attachmentName || res.title || 'document.pdf',
                       resourceId: res.id,
                       storagePath: res.storagePath,
+                      storageProvider: res.storageProvider,
                       downloadUrl: res.downloadUrl,
                       mimeType: res.mimeType,
                       extractedPreview: res.extractedPreview,

@@ -2043,7 +2043,12 @@ export default function App() {
       .find((m) => m.id === monthId)
       ?.resources.find((r) => r.id === resourceId);
     if (existing) {
-      void deleteCloudAttachment(user.uid, resourceId, existing.storagePath);
+      void deleteCloudAttachment(
+        user.uid,
+        resourceId,
+        existing.storagePath,
+        existing.storageProvider
+      );
     }
     setMonths((prev) =>
       prev.map((m) => {
@@ -2207,7 +2212,12 @@ export default function App() {
     if (target) {
       for (const res of target.resources || []) {
         if (res.storagePath || res.attachmentName) {
-          void deleteCloudAttachment(user.uid, res.id, res.storagePath);
+          void deleteCloudAttachment(
+            user.uid,
+            res.id,
+            res.storagePath,
+            res.storageProvider
+          );
         }
       }
       void deleteCourseDoc(user.uid, target.docId || `course-${target.id}`);
@@ -2324,6 +2334,7 @@ export default function App() {
       attachmentName?: string;
       extractedPreview?: string;
       storagePath?: string;
+      storageProvider?: 'supabase' | 'r2';
       downloadUrl?: string;
       mimeType?: string;
       sizeBytes?: number;
@@ -2347,6 +2358,9 @@ export default function App() {
         ? { extractedPreview: extras.extractedPreview }
         : {}),
       ...(extras?.storagePath ? { storagePath: extras.storagePath } : {}),
+      ...(extras?.storageProvider
+        ? { storageProvider: extras.storageProvider }
+        : {}),
       ...(extras?.downloadUrl ? { downloadUrl: extras.downloadUrl } : {}),
       ...(extras?.mimeType ? { mimeType: extras.mimeType } : {}),
       ...(typeof extras?.sizeBytes === 'number'
@@ -2397,7 +2411,12 @@ export default function App() {
       .find((c) => c.id === courseId)
       ?.resources.find((r) => r.id === resourceId);
     if (existing) {
-      void deleteCloudAttachment(user.uid, resourceId, existing.storagePath);
+      void deleteCloudAttachment(
+        user.uid,
+        resourceId,
+        existing.storagePath,
+        existing.storageProvider
+      );
     }
     setCourses((prev) =>
       prev.map((c) => {
@@ -2581,7 +2600,12 @@ export default function App() {
     if (targetNote?.resources) {
       for (const res of targetNote.resources) {
         if (res.storagePath || res.attachmentName) {
-          void deleteCloudAttachment(user.uid, res.id, res.storagePath);
+          void deleteCloudAttachment(
+            user.uid,
+            res.id,
+            res.storagePath,
+            res.storageProvider
+          );
         }
       }
     }
@@ -2750,6 +2774,7 @@ export default function App() {
     categoryLabel?: string;
     coverImageUrl?: string;
     coverStoragePath?: string;
+    coverStorageProvider?: 'supabase' | 'r2';
     coverFrame?: ImageFrameSpec;
     isPublic?: boolean;
     pinned?: boolean;
@@ -2770,6 +2795,7 @@ export default function App() {
       categoryLabel: (payload.categoryLabel || 'مقال عام').trim(),
       coverImageUrl: payload.coverImageUrl || '',
       coverStoragePath: payload.coverStoragePath || '',
+      coverStorageProvider: payload.coverStorageProvider,
       coverFrame: payload.coverFrame,
       readingTimeMinutes: estimateReadingTimeMinutes(contentText),
       isPublic: payload.isPublic !== false,
@@ -3063,7 +3089,8 @@ export default function App() {
       void deleteCloudAttachment(
         user.uid,
         existing.attachmentResourceId,
-        existing.storagePath
+        existing.storagePath,
+        existing.storageProvider
       );
     }
     if (existing?.coverStoragePath) {

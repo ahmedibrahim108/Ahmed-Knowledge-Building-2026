@@ -30,6 +30,10 @@ import {
   isImageFile,
   uploadBlogCoverImage,
 } from '../utils/imageStorage';
+import {
+  resolveEffectiveStorageProvider,
+  type StorageProvider,
+} from '../services/storageService';
 import AutoResizeTextarea from './AutoResizeTextarea';
 import BidiText from './BidiText';
 import ConfirmDialog from './ConfirmDialog';
@@ -54,6 +58,7 @@ interface BlogsViewProps {
     categoryLabel?: string;
     coverImageUrl?: string;
     coverStoragePath?: string;
+    coverStorageProvider?: StorageProvider;
     coverFrame?: ImageFrameSpec;
     isPublic?: boolean;
     pinned?: boolean;
@@ -97,6 +102,9 @@ export default function BlogsView({
   const [pinned, setPinned] = useState(false);
   const [coverImageUrl, setCoverImageUrl] = useState('');
   const [coverStoragePath, setCoverStoragePath] = useState('');
+  const [coverStorageProvider, setCoverStorageProvider] = useState<
+    StorageProvider | undefined
+  >(undefined);
   const [coverFrame, setCoverFrame] = useState<ImageFrameSpec>(
     DEFAULT_IMAGE_FRAME_SPEC
   );
@@ -120,6 +128,9 @@ export default function BlogsView({
   const [editIsPublic, setEditIsPublic] = useState(true);
   const [editCoverUrl, setEditCoverUrl] = useState('');
   const [editCoverPath, setEditCoverPath] = useState('');
+  const [editCoverStorageProvider, setEditCoverStorageProvider] = useState<
+    StorageProvider | undefined
+  >(undefined);
   const [editCoverFrame, setEditCoverFrame] = useState<ImageFrameSpec>(
     DEFAULT_IMAGE_FRAME_SPEC
   );
@@ -209,6 +220,7 @@ export default function BlogsView({
       const res = await uploadBlogCoverImage(`draft-${Date.now()}`, file, uid);
       setCoverImageUrl(res.imageUrl || res.localObjectUrl);
       setCoverStoragePath(res.imageStoragePath);
+      setCoverStorageProvider(res.coverStorageProvider);
     } catch {
       setCoverErr('تعذر رفع صورة الغلاف.');
     } finally {
@@ -224,6 +236,7 @@ export default function BlogsView({
       const res = await uploadBlogCoverImage(activePost.id, file, uid);
       setEditCoverUrl(res.imageUrl || res.localObjectUrl);
       setEditCoverPath(res.imageStoragePath);
+      setEditCoverStorageProvider(res.coverStorageProvider);
     } finally {
       setUploadingModalCover(false);
     }
@@ -242,6 +255,7 @@ export default function BlogsView({
       categoryLabel: chosenCat,
       coverImageUrl: coverImageUrl || undefined,
       coverStoragePath: coverStoragePath || undefined,
+      coverStorageProvider: coverStoragePath ? coverStorageProvider : undefined,
       coverFrame: coverImageUrl || coverStoragePath ? coverFrame : undefined,
       isPublic,
       pinned,
@@ -253,6 +267,7 @@ export default function BlogsView({
     setCustomCategoryInput('');
     setCoverImageUrl('');
     setCoverStoragePath('');
+    setCoverStorageProvider(undefined);
     setCoverFrame(DEFAULT_IMAGE_FRAME_SPEC);
     setPinned(false);
     setIsPublic(true);
@@ -268,6 +283,7 @@ export default function BlogsView({
     setEditIsPublic(Boolean(post.isPublic));
     setEditCoverUrl(post.coverImageUrl || '');
     setEditCoverPath(post.coverStoragePath || '');
+    setEditCoverStorageProvider(post.coverStorageProvider);
     setEditCoverFrame(
       post.coverFrame
         ? sanitizeImageFrameSpec(post.coverFrame, DEFAULT_IMAGE_FRAME_SPEC)
@@ -288,6 +304,7 @@ export default function BlogsView({
       isPublic: editIsPublic,
       coverImageUrl: editCoverUrl || undefined,
       coverStoragePath: editCoverPath || undefined,
+      coverStorageProvider: editCoverPath ? editCoverStorageProvider : undefined,
       coverFrame:
         editCoverUrl || editCoverPath ? editCoverFrame : undefined,
       readingTimeMinutes: estimateReadingTimeMinutes(editContent),
@@ -533,6 +550,7 @@ export default function BlogsView({
                     onClick={() => {
                       setCoverImageUrl('');
                       setCoverStoragePath('');
+                      setCoverStorageProvider(undefined);
                     }}
                     className="text-red-700 hover:underline cursor-pointer"
                   >
@@ -929,6 +947,7 @@ export default function BlogsView({
                             onClick={() => {
                               setEditCoverUrl('');
                               setEditCoverPath('');
+                              setEditCoverStorageProvider(undefined);
                             }}
                             className="text-red-700 hover:underline cursor-pointer"
                           >
@@ -1050,9 +1069,25 @@ export default function BlogsView({
                         if (galleryPickerTarget === 'composer') {
                           setCoverImageUrl(item.url);
                           setCoverStoragePath(item.storagePath || '');
+                          setCoverStorageProvider(
+                            item.storagePath
+                              ? resolveEffectiveStorageProvider(
+                                  undefined,
+                                  item.storagePath
+                                )
+                              : undefined
+                          );
                         } else {
                           setEditCoverUrl(item.url);
                           setEditCoverPath(item.storagePath || '');
+                          setEditCoverStorageProvider(
+                            item.storagePath
+                              ? resolveEffectiveStorageProvider(
+                                  undefined,
+                                  item.storagePath
+                                )
+                              : undefined
+                          );
                         }
                         setGalleryPickerTarget(null);
                       }}
