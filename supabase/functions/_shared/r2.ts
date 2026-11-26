@@ -36,8 +36,8 @@ const MB = 1024 * 1024;
 // R2 supports single PUT objects up to 5 GB natively; keep up to 250 MB in one single PUT
 // without splitting into S3 multipart chunks (avoids unnecessary ETag CORS & part overhead).
 export const SINGLE_UPLOAD_MAX_BYTES = 250 * MB;
-export const MULTIPART_CHUNK_BYTES = 25 * MB;
-export const MAX_DOCUMENT_BYTES = 250 * MB;
+export const MULTIPART_CHUNK_BYTES = 50 * MB;
+export const MAX_DOCUMENT_BYTES = 1024 * MB;
 export const MAX_IMAGE_BYTES = 25 * MB;
 
 const DOCUMENT_MIMES = [
@@ -213,6 +213,7 @@ export function createR2Client(cfg: R2Config): S3Client {
   return new S3Client({
     region: 'auto',
     endpoint: cfg.endpoint,
+    forcePathStyle: true,
     credentials: {
       accessKeyId: cfg.accessKeyId,
       secretAccessKey: cfg.secretAccessKey,
@@ -452,7 +453,7 @@ export async function signSinglePutUrl(
   bucket: string,
   key: string,
   contentType: string,
-  expiresIn = 300
+  expiresIn = 1800
 ): Promise<string> {
   const command = new PutObjectCommand({
     Bucket: bucket,
@@ -468,7 +469,7 @@ export async function createMultipartSession(
   key: string,
   contentType: string,
   totalBytes: number,
-  expiresIn = 1800
+  expiresIn = 3600
 ): Promise<{
   uploadId: string;
   chunkSize: number;
@@ -626,7 +627,11 @@ export async function signGetUrl(
 ): Promise<{ url: string; expiresIn: number; isPublicUrl: boolean }> {
   const expiresIn = Math.min(3600, Math.max(60, options?.expiresIn ?? 1800));
 
-  if (options?.publicUrlBase && options?.isPublicAsset) {
+  if (
+    options?.publicUrlBase &&
+    options?.isPublicAsset &&
+    options?.disposition !== 'attachment'
+  ) {
     const encodedPath = key
       .split('/')
       .map((seg) => encodeURIComponent(seg))

@@ -53,6 +53,59 @@ export function resolveEffectiveStorageProvider(
   return 'supabase';
 }
 
+export function isSignedUrlExpiredOrExpiring(
+  url?: string | null,
+  bufferSeconds = 90
+): boolean {
+  if (!url || typeof url !== 'string') return true;
+  const trimmed = url.trim();
+  if (!trimmed) return true;
+  if (trimmed.startsWith('blob:') || trimmed.startsWith('data:')) return false;
+
+  try {
+    const parsed = new URL(trimmed, 'https://example.invalid');
+    const amzDate = parsed.searchParams.get('X-Amz-Date');
+    const amzExpires = parsed.searchParams.get('X-Amz-Expires');
+    if (amzDate && amzExpires) {
+      const m = amzDate.match(
+        /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/
+      );
+      const expSec = Number(amzExpires);
+      if (m && Number.isFinite(expSec)) {
+        const issuedMs = Date.UTC(
+          Number(m[1]),
+          Number(m[2]) - 1,
+          Number(m[3]),
+          Number(m[4]),
+          Number(m[5]),
+          Number(m[6])
+        );
+        return issuedMs + expSec * 1000 - bufferSeconds * 1000 <= Date.now();
+      }
+    }
+
+    const token = parsed.searchParams.get('token');
+    if (token && token.split('.').length === 3) {
+      const payloadB64 = token
+        .split('.')[1]
+        .replace(/-/g, '+')
+        .replace(/_/g, '/');
+      const padded = payloadB64.padEnd(
+        payloadB64.length + ((4 - (payloadB64.length % 4)) % 4),
+        '='
+      );
+      const data = JSON.parse(atob(padded)) as { exp?: unknown };
+      if (typeof data.exp === 'number' && Number.isFinite(data.exp)) {
+        return data.exp * 1000 - bufferSeconds * 1000 <= Date.now();
+      }
+    }
+  } catch {
+    // Non-standard URL; let caller attempt normal fetch/render
+  }
+
+  return false;
+}
+
 export function isR2PrimaryUploadEnabled(): boolean {
   const configured = (import.meta.env.VITE_STORAGE_PROVIDER || 'r2')
     .trim()
@@ -699,7 +752,7 @@ export async function getBatchR2DownloadUrls(
         objectKeys: r2Keys.slice(0, 60),
         ...(recordType ? { recordType } : {}),
         disposition: 'inline',
-        expiresIn: 300,
+        expiresIn: 3600,
       },
       { requireAuth: false }
     );

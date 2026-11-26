@@ -17,10 +17,16 @@ import {
   ImageFrameSpec,
   sanitizeImageFrameSpec,
 } from '../data/curriculumData';
+import { isSignedUrlExpiredOrExpiring } from '../services/storageService';
 import { resolveStorageImageUrl } from '../utils/imageStorage';
 
 export function useResolvedImageSrc(srcUrl?: string, storagePath?: string) {
-  const [resolvedUrl, setResolvedUrl] = useState<string>(srcUrl || '');
+  const isStaleSigned = Boolean(
+    srcUrl && storagePath && isSignedUrlExpiredOrExpiring(srcUrl)
+  );
+  const [resolvedUrl, setResolvedUrl] = useState<string>(
+    isStaleSigned ? '' : srcUrl || ''
+  );
   const [loadFailed, setLoadFailed] = useState(false);
   const objectUrlRef = useRef<string | null>(null);
   const fallbackTriedRef = useRef(false);
@@ -28,13 +34,16 @@ export function useResolvedImageSrc(srcUrl?: string, storagePath?: string) {
   useEffect(() => {
     fallbackTriedRef.current = false;
     setLoadFailed(false);
-    setResolvedUrl(srcUrl || '');
+    const stale = Boolean(
+      srcUrl && storagePath && isSignedUrlExpiredOrExpiring(srcUrl)
+    );
+    setResolvedUrl(stale ? '' : srcUrl || '');
     if (objectUrlRef.current) {
       URL.revokeObjectURL(objectUrlRef.current);
       objectUrlRef.current = null;
     }
 
-    if (!srcUrl && storagePath) {
+    if (storagePath && (!srcUrl || stale)) {
       let active = true;
       void resolveStorageImageUrl(storagePath).then((res) => {
         if (!active || !res) return;

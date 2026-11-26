@@ -57,8 +57,8 @@ Deno.serve(async (req: Request) => {
       body.disposition === 'attachment' ? 'attachment' : 'inline';
     const expiresIn =
       typeof body.expiresIn === 'number'
-        ? Math.min(900, Math.max(60, Math.round(body.expiresIn)))
-        : 300;
+        ? Math.min(3600, Math.max(60, Math.round(body.expiresIn)))
+        : 1800;
 
     // Batch signing support for image galleries & lists
     if (Array.isArray(body.objectKeys)) {
@@ -109,15 +109,26 @@ Deno.serve(async (req: Request) => {
         : undefined;
 
     if (!objectKey && recordId) {
-      const table =
-        recordType === 'image' ? 'image_attachments' : 'file_attachments';
-      const { data } = await adminClient
-        .from(table)
-        .select('object_key, storage_path, storage_provider')
-        .eq('id', recordId)
-        .maybeSingle();
-      if (data?.storage_provider === 'r2') {
-        objectKey = String(data.object_key || data.storage_path || '');
+      const candidateTables =
+        recordType === 'image'
+          ? (['image_attachments'] as const)
+          : recordType === 'file'
+          ? (['file_attachments'] as const)
+          : (['file_attachments', 'image_attachments'] as const);
+      for (const table of candidateTables) {
+        const { data } = await adminClient
+          .from(table)
+          .select('object_key, storage_path, storage_provider')
+          .eq('id', recordId)
+          .maybeSingle();
+        const candidateKey = String(data?.object_key || data?.storage_path || '');
+        if (
+          data &&
+          (data.storage_provider === 'r2' || isValidR2ObjectKey(candidateKey))
+        ) {
+          objectKey = candidateKey;
+          break;
+        }
       }
     }
 

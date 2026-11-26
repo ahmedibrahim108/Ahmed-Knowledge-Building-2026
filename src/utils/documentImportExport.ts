@@ -46,7 +46,7 @@ export interface BundledAppDocument {
 export const BUNDLED_APP_DOCUMENTS: BundledAppDocument[] = [];
 
 const STUDY_FILES_BUCKET = 'study-files';
-const MAX_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB max single-PUT directly on R2
+const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024; // 1 GB max on R2 (single PUT <=250MB, multipart >250MB)
 const MAX_SUPABASE_LEGACY_BYTES = 100 * 1024 * 1024;
 const TUS_RESUMABLE_THRESHOLD = 6 * 1024 * 1024; // 6 MB
 const TUS_CHUNK_SIZE = 6 * 1024 * 1024; // 6 MB chunks (legacy Supabase fallback only)
@@ -555,12 +555,17 @@ export async function uploadResourceAttachment(
   // Persist smaller files locally in IndexedDB for instant offline viewing on this device
   await saveLocalAttachment(resourceId, file, file.name);
 
-  if (file.size > MAX_UPLOAD_BYTES) {
+  const effectiveMaxBytes = isR2PrimaryUploadEnabled()
+    ? MAX_UPLOAD_BYTES
+    : MAX_SUPABASE_LEGACY_BYTES;
+  if (file.size > effectiveMaxBytes) {
     return {
       mimeType,
       sizeBytes: file.size,
       uploadedToCloud: false,
-      errorMessage: 'الحد الأقصى لحجم الملف في التخزين السحابي هو 250 ميجابايت.',
+      errorMessage: isR2PrimaryUploadEnabled()
+        ? 'الحد الأقصى لحجم الملف في Cloudflare R2 هو 1 جيجابايت.'
+        : 'الحد الأقصى لحجم الملف في التخزين السحابي هو 100 ميجابايت.',
     };
   }
 
@@ -786,6 +791,8 @@ export async function getFreshStudyFileSignedUrl(options: {
   storagePath?: string;
   storageProvider?: StorageProvider;
   fileName?: string;
+  disposition?: 'inline' | 'attachment';
+  expiresIn?: number;
 }): Promise<string | null> {
   if (!isSupabaseConfigured || !supabase) return null;
   const effectiveUid = options.uid || auth?.currentUser?.uid;
@@ -872,7 +879,9 @@ export async function getFreshStudyFileSignedUrl(options: {
     storageBucket: resolvedBucket,
     recordId: options.resourceId,
     recordType: 'file',
+    disposition: options.disposition || 'inline',
     downloadFileName: options.fileName,
+    expiresIn: options.expiresIn ?? 1800,
   });
 }
 
@@ -1175,6 +1184,54 @@ export async function downloadResourceAttachmentResult(options: {
     window.setTimeout(() => URL.revokeObjectURL(url), 1500);
   };
 
+  // 1) Instant download from local IndexedDB cache when present
+  const local = await findCachedAttachmentBlob({
+    resourceId: options.resourceId,
+    storagePath: options.storagePath,
+    fileName: options.fileName,
+  });
+  if (local?.blob) {
+    const inferredMime = inferMimeTypeFromFileName(
+      options.fileName,
+      options.mimeType || local.type || local.blob.type
+    );
+    const typedBlob =
+      inferredMime !== 'application/octet-stream' &&
+      local.blob.type !== inferredMime
+        ? new Blob([local.blob], { type: inferredMime })
+        : local.blob;
+    triggerBlobDownload(typedBlob);
+    return { ok: true };
+  }
+
+  // 2) For R2 objects, use a fresh signed URL with ResponseContentDisposition=attachment
+  // so large 600+ page PDFs stream natively to disk without loading into JS RAM.
+  const effectiveProvider = resolveEffectiveStorageProvider(
+    options.storageProvider,
+    options.storagePath
+  );
+  const freshAttachmentUrl = await getFreshStudyFileSignedUrl({
+    uid: options.uid,
+    resourceId: options.resourceId,
+    storagePath: options.storagePath,
+    storageProvider: options.storageProvider,
+    fileName: options.fileName,
+    disposition: 'attachment',
+    expiresIn: 1800,
+  });
+
+  if (effectiveProvider === 'r2' && freshAttachmentUrl) {
+    const a = document.createElement('a');
+    a.href = freshAttachmentUrl;
+    a.download = options.fileName || 'document.pdf';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    return { ok: true };
+  }
+
+  // 3) Legacy Supabase Storage / fallback blob download
   const blob = await getPdfBlobForViewing({
     uid: options.uid,
     resourceId: options.resourceId,
@@ -1190,14 +1247,7 @@ export async function downloadResourceAttachmentResult(options: {
     return { ok: true };
   }
 
-  const freshUrl = await getFreshStudyFileSignedUrl({
-    uid: options.uid,
-    resourceId: options.resourceId,
-    storagePath: options.storagePath,
-    storageProvider: options.storageProvider,
-    fileName: options.fileName,
-  });
-  const externalHref = freshUrl || options.downloadUrl;
+  const externalHref = freshAttachmentUrl || options.downloadUrl;
 
   if (externalHref) {
     const a = document.createElement('a');
@@ -1230,15 +1280,36 @@ export async function downloadResourceAttachment(options: {
   return res.ok;
 }
 
+async function deleteLocalAttachmentCacheKeys(keys: Array<string | undefined>): Promise<void> {
+  const unique = Array.from(
+    new Set(keys.map((k) => k?.trim()).filter((k): k is string => Boolean(k)))
+  );
+  if (unique.length === 0) return;
+  try {
+    const idb = await openAttachmentsDb();
+    const tx = idb.transaction(IDB_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_STORE);
+    for (const k of unique) {
+      store.delete(k);
+    }
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Non-fatal IndexedDB cleanup
+  }
+}
+
 export async function deleteCloudAttachment(
   uid: string | undefined,
   resourceId?: string,
   storagePath?: string,
   storageProvider?: StorageProvider
 ): Promise<void> {
-  if (!isSupabaseConfigured || !supabase) return;
-  const effectiveUid = uid || auth?.currentUser?.uid;
-  if (!effectiveUid) return;
+  const safeId = resourceId
+    ? resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
+    : undefined;
 
   let pathToRemove = storagePath;
   let providerToRemove: StorageProvider = resolveEffectiveStorageProvider(
@@ -1246,9 +1317,24 @@ export async function deleteCloudAttachment(
     storagePath
   );
   let bucketToRemove = STUDY_FILES_BUCKET;
-  const safeId = resourceId
-    ? resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
-    : undefined;
+
+  if (!isSupabaseConfigured || !supabase) {
+    await deleteLocalAttachmentCacheKeys([
+      resourceId,
+      safeId,
+      pathToRemove ? `path:${pathToRemove}` : undefined,
+    ]);
+    return;
+  }
+  const effectiveUid = uid || auth?.currentUser?.uid;
+  if (!effectiveUid) {
+    await deleteLocalAttachmentCacheKeys([
+      resourceId,
+      safeId,
+      pathToRemove ? `path:${pathToRemove}` : undefined,
+    ]);
+    return;
+  }
 
   if (safeId) {
     try {
@@ -1282,6 +1368,12 @@ export async function deleteCloudAttachment(
       // Non-fatal lookup
     }
   }
+
+  await deleteLocalAttachmentCacheKeys([
+    resourceId,
+    safeId,
+    pathToRemove ? `path:${pathToRemove}` : undefined,
+  ]);
 
   try {
     await deleteFileFromStorage({

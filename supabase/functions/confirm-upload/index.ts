@@ -3,7 +3,7 @@ import {
   checkRateLimit,
   createSupabaseAdminClient,
   getClientRateKey,
-  requireVerifiedAdmin,
+  requireVerifiedUser,
 } from '../_shared/auth.ts';
 import {
   errorResponse,
@@ -21,6 +21,7 @@ import {
   deleteR2Object,
   getR2Config,
   headR2Object,
+  normalizeAndValidateMime,
   sanitizeOriginalFileName,
   sanitizeRecordId,
   signGetUrl,
@@ -36,7 +37,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const adminClient = createSupabaseAdminClient();
-    const caller = await requireVerifiedAdmin(req, adminClient);
+    const caller = await requireVerifiedUser(req, adminClient);
 
     const rl = checkRateLimit(getClientRateKey(req, caller.uid), 60, 60_000);
     if (!rl.allowed) {
@@ -61,11 +62,25 @@ Deno.serve(async (req: Request) => {
 
     const objectKey = assertOwnerKeyConfined(body.objectKey, caller.uid);
     const module = assertValidModule(body.module);
+    if (
+      !caller.isAdmin &&
+      (module !== 'quick_drop' ||
+        !objectKey.startsWith(`quick_drop/attachments/${caller.uid}/`))
+    ) {
+      throw new AuthError(
+        403,
+        'ADMIN_REQUIRED',
+        'Only the approved platform administrator can perform this action.'
+      );
+    }
+
     const policy = MODULE_POLICIES[module];
     const { originalName } = sanitizeOriginalFileName(body.fileName);
     const recordId = sanitizeRecordId(body.recordId);
     const recordType =
-      body.recordType === 'image'
+      !caller.isAdmin
+        ? 'none'
+        : body.recordType === 'image'
         ? 'image'
         : body.recordType === 'none'
         ? 'none'
@@ -112,24 +127,41 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const normalizedMime =
-      typeof body.mimeType === 'string' && body.mimeType.trim()
-        ? body.mimeType.trim().toLowerCase()
-        : head.contentType || 'application/octet-stream';
-
-    if (!policy.allowedMimes.includes(normalizedMime)) {
+    const rawHeadMime = (head.contentType || '').trim().toLowerCase().split(';')[0];
+    if (
+      rawHeadMime === 'image/svg+xml' ||
+      rawHeadMime === 'application/x-msdownload' ||
+      rawHeadMime === 'application/javascript' ||
+      rawHeadMime === 'text/javascript' ||
+      (rawHeadMime === 'text/html' && module !== 'library_book' && module !== 'note_attachment')
+    ) {
       await deleteR2Object(r2Client, r2Cfg.bucketName, objectKey);
       return errorResponse(
         req,
         415,
         'UNSUPPORTED_MIME_TYPE',
-        'Uploaded object content type is not allowed.'
+        'Uploaded object content type is blocked for security reasons.'
       );
+    }
+
+    const preferredMime =
+      rawHeadMime &&
+      rawHeadMime !== 'application/octet-stream' &&
+      rawHeadMime !== 'binary/octet-stream'
+        ? rawHeadMime
+        : body.mimeType;
+
+    let normalizedMime: string;
+    try {
+      normalizedMime = normalizeAndValidateMime(module, preferredMime, originalName);
+    } catch (mimeErr) {
+      await deleteR2Object(r2Client, r2Cfg.bucketName, objectKey);
+      throw mimeErr;
     }
 
     const finalEtag = (head.etag || completedEtag || '').replace(/^"+|"+$/g, '');
     const signed = await signGetUrl(r2Client, r2Cfg.bucketName, objectKey, {
-      expiresIn: 300,
+      expiresIn: 3600,
       disposition: 'inline',
       downloadFileName: originalName,
       contentType: normalizedMime,

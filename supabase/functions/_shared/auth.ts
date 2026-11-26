@@ -206,7 +206,7 @@ export async function verifyOptionalCaller(
   };
 }
 
-export async function requireVerifiedAdmin(
+export async function requireVerifiedUser(
   req: Request,
   adminClient: SupabaseClient
 ): Promise<VerifiedCaller> {
@@ -218,6 +218,14 @@ export async function requireVerifiedAdmin(
       'Authentication is required for this operation.'
     );
   }
+  return caller;
+}
+
+export async function requireVerifiedAdmin(
+  req: Request,
+  adminClient: SupabaseClient
+): Promise<VerifiedCaller> {
+  const caller = await requireVerifiedUser(req, adminClient);
   if (!caller.isAdmin) {
     throw new AuthError(
       403,
@@ -364,6 +372,21 @@ export async function authorizeReadAccess(
 
   // 1) Owner Admin always has full read access to their own objects
   if (caller?.isAdmin && caller.uid === ownerId) {
+    return {
+      allowed: true,
+      isPublicAsset: false,
+      ownerId,
+      fileName,
+      mimeType,
+    };
+  }
+
+  // 1b) Verified non-admin users have read access to their own Quick Drop attachments
+  if (
+    caller &&
+    caller.uid === ownerId &&
+    objectKey.startsWith('quick_drop/attachments/')
+  ) {
     return {
       allowed: true,
       isPublicAsset: false,

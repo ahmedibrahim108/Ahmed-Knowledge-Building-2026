@@ -243,13 +243,14 @@ export default function PDFViewerModal({
             return;
           }
 
-          // 2) Streaming signed URL first so 300+ page PDFs open Page 1 via HTTP Range requests immediately
+          // 2) Streaming signed URL first so 600+ page PDFs open Page 1 via HTTP Range requests immediately
           const freshSignedUrl = await getFreshStudyFileSignedUrl({
             uid: resolvedUid,
             resourceId: target.resourceId,
             storagePath: target.storagePath,
             storageProvider: target.storageProvider,
             fileName: target.fileName,
+            expiresIn: 3600,
           });
           if (cancelled) return;
           if (freshSignedUrl) {
@@ -886,15 +887,16 @@ export default function PDFViewerModal({
                         rawBlobRef.current = fetched.blob;
                         if (blobUrlRef.current) {
                           URL.revokeObjectURL(blobUrlRef.current);
+                          blobUrlRef.current = null;
                         }
-                        const objUrl = URL.createObjectURL(fetched.blob);
-                        blobUrlRef.current = objUrl;
-                        setPdfUrl(objUrl);
                         setCacheBadge(fetched.source);
                         try {
                           const buf = await fetched.blob.arrayBuffer();
                           setPdfBinaryData({ data: new Uint8Array(buf) });
                         } catch {
+                          const objUrl = URL.createObjectURL(fetched.blob);
+                          blobUrlRef.current = objUrl;
+                          setPdfUrl(objUrl);
                           setUseNativeIframeFallback(true);
                         }
                       });

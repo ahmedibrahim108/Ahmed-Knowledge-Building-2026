@@ -4215,7 +4215,12 @@ export function subscribeCloudAttachments(
         if (error) console.warn('Could not fetch file_attachments:', error);
         return;
       }
-      const mapped: CloudAttachmentItem[] = (data || []).map((row) => {
+      const mapped: CloudAttachmentItem[] = (data || [])
+        .filter((row) => {
+          const r = row as Record<string, unknown>;
+          return r.upload_status !== 'pending' && r.upload_status !== 'failed';
+        })
+        .map((row) => {
         const r = row as Record<string, unknown>;
         const updatedStr = typeof r.updated_at === 'string' ? r.updated_at : '';
         const ms = updatedStr ? Date.parse(updatedStr) : 0;

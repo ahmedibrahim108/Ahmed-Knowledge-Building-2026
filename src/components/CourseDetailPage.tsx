@@ -73,6 +73,7 @@ import { auth } from '../firebase';
 import type { StorageProvider } from '../services/storageService';
 import { formatSupabaseErrorMessage } from '../services/supabaseClient';
 import {
+  deleteCloudAttachment,
   downloadResourceAttachmentResult,
   isPdfAttachment,
   isViewableDocumentAttachment,
@@ -621,6 +622,10 @@ export default function CourseDetailPage({
       return;
     }
 
+    const existingResource = course.resources.find((r) => r.id === targetResId);
+    const oldStoragePath = existingResource?.storagePath;
+    const oldStorageProvider = existingResource?.storageProvider;
+
     setLastReplaceRetry({ resId: targetResId, file });
     setReplacingResId(targetResId);
     setUploadingFile(true);
@@ -653,6 +658,19 @@ export default function CourseDetailPage({
         setResourceActionError(uploadRes.errorMessage);
       } else {
         setLastReplaceRetry(null);
+        if (
+          uploadRes.uploadedToCloud &&
+          oldStoragePath &&
+          uploadRes.storagePath &&
+          oldStoragePath !== uploadRes.storagePath
+        ) {
+          void deleteCloudAttachment(
+            effectiveUid,
+            undefined,
+            oldStoragePath,
+            oldStorageProvider
+          );
+        }
       }
     } catch (err) {
       console.error('Replace course resource error:', err);

@@ -58,6 +58,7 @@ import {
 } from '../data/curriculumData';
 import { formatSupabaseErrorMessage } from '../services/supabaseClient';
 import {
+  deleteCloudAttachment,
   downloadResourceAttachmentResult,
   exportSingleBookNoteAsWord,
   isPdfAttachment,
@@ -601,6 +602,8 @@ export default function BookWorkspaceModal({
     setUploadingFile(true);
     setUploadProgressPct(0);
     setDownloadError(null);
+    const oldStoragePath = item.storagePath;
+    const oldStorageProvider = item.storageProvider;
     try {
       const resId = item.attachmentResourceId || `lib-res-${Date.now()}`;
       const uploaded = await uploadResourceAttachment(
@@ -623,6 +626,18 @@ export default function BookWorkspaceModal({
       });
       if (uploaded.uploadedToCloud) {
         setLastReplaceFile(null);
+        if (
+          oldStoragePath &&
+          uploaded.storagePath &&
+          oldStoragePath !== uploaded.storagePath
+        ) {
+          void deleteCloudAttachment(
+            uid,
+            undefined,
+            oldStoragePath,
+            oldStorageProvider
+          );
+        }
       } else {
         setDownloadError(
           uploaded.errorMessage ||

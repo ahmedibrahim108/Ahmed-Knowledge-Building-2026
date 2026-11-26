@@ -9,9 +9,12 @@ import {
 } from '../utils/quickDropUtils';
 import {
   R2UnavailableError,
+  StorageOperationError,
   deleteFileFromStorage,
   downloadR2Blob,
+  getFileUrl,
   isR2PrimaryUploadEnabled,
+  isSignedUrlExpiredOrExpiring,
   resolveEffectiveStorageProvider,
   uploadFileToR2,
 } from './storageService';
@@ -599,6 +602,21 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+function inferQuickDropMimeType(file: File, isPdf: boolean): string {
+  const raw = (file.type || '').trim().toLowerCase();
+  if (raw && raw !== 'application/octet-stream') return raw;
+  if (isPdf) return 'application/pdf';
+  const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'gif') return 'image/gif';
+  if (ext === 'bmp') return 'image/bmp';
+  if (ext === 'heic') return 'image/heic';
+  if (ext === 'heif') return 'image/heif';
+  if (ext === 'avif') return 'image/avif';
+  return 'image/jpeg';
+}
+
 export async function uploadQuickDropAttachmentFile(
   uid: string,
   file: File
@@ -611,7 +629,7 @@ export async function uploadQuickDropAttachmentFile(
     0,
     180
   );
-  const mimeType = file.type || (isPdf ? 'application/pdf' : 'image/jpeg');
+  const mimeType = inferQuickDropMimeType(file, isPdf);
   const safeFile = cleanName.replace(/[^a-zA-Z0-9._-]/g, '_') || (isPdf ? 'doc.pdf' : 'img.jpg');
   const bucket = kind === 'pdf' ? 'study-files' : 'user-images';
   const storagePath = `${uid}/quick_drop/${id}/${safeFile}`;
@@ -645,11 +663,12 @@ export async function uploadQuickDropAttachmentFile(
           downloadUrl: r2Res.downloadUrl,
         };
       } catch (r2Err) {
-        if (!(r2Err instanceof R2UnavailableError)) {
-          // Fall through to legacy/dataUrl only when R2 backend isn't deployed/configured yet
+        if (r2Err instanceof StorageOperationError) {
           if (!isNetworkFailure(r2Err)) {
-            console.warn('QuickDrop R2 upload failed:', r2Err);
+            throw r2Err;
           }
+        } else if (!(r2Err instanceof R2UnavailableError)) {
+          throw r2Err;
         }
       }
     }
@@ -685,8 +704,10 @@ export async function uploadQuickDropAttachmentFile(
         downloadUrl,
       };
     } catch (err) {
-      if (!isNetworkFailure(err)) {
-        // Fallback to local dataUrl if bucket rejected or temporary failure
+      if (!isNetworkFailure(err) && file.size >= 300 * 1024) {
+        throw err instanceof Error
+          ? err
+          : new Error('تعذر رفع المرفق إلى التخزين السحابي.');
       }
     }
   }
@@ -716,7 +737,21 @@ export async function resolveQuickDropAttachmentUrl(
       att.storagePath
     );
     if (provider === 'r2') {
+      if (att.downloadUrl && !isSignedUrlExpiredOrExpiring(att.downloadUrl)) {
+        return { url: att.downloadUrl, isObjectUrl: false };
+      }
       try {
+        const signed = await getFileUrl({
+          storageProvider: 'r2',
+          objectKey: att.storagePath,
+          recordType: att.kind === 'pdf' ? 'file' : 'image',
+          downloadFileName: att.name,
+          disposition: 'inline',
+          expiresIn: 1800,
+        });
+        if (signed) {
+          return { url: signed, isObjectUrl: false };
+        }
         const blob = await downloadR2Blob({
           objectKey: att.storagePath,
           recordId: att.id,
@@ -1003,10 +1038,15 @@ export async function restoreQuickDropItem(
 
 export async function deleteQuickDropItemPermanently(
   uid: string,
-  id: string
+  id: string,
+  attachmentsToRemove?: QuickDropAttachment[]
 ): Promise<{ synced: boolean; offlineQueued: boolean }> {
   const now = Date.now();
   const prevCache = readCachedQuickDropItems(uid);
+  const targetAttachments =
+    attachmentsToRemove ??
+    prevCache.find((x) => x.id === id)?.attachments ??
+    [];
   writeCachedQuickDropItems(
     uid,
     prevCache.filter((x) => x.id !== id)
@@ -1025,6 +1065,9 @@ export async function deleteQuickDropItemPermanently(
 
   try {
     await executeCloudMutation(uid, op);
+    for (const att of targetAttachments) {
+      void removeQuickDropAttachmentStorage(att);
+    }
     return { synced: true, offlineQueued: false };
   } catch (err) {
     if (isNetworkFailure(err) || isMissing016TableError(err)) {
@@ -1040,10 +1083,16 @@ export async function deleteQuickDropItemPermanently(
 }
 
 export async function emptyQuickDropTrash(
-  uid: string
+  uid: string,
+  attachmentsToRemove?: QuickDropAttachment[]
 ): Promise<{ synced: boolean; offlineQueued: boolean }> {
   const now = Date.now();
   const prevCache = readCachedQuickDropItems(uid);
+  const targetAttachments =
+    attachmentsToRemove ??
+    prevCache
+      .filter((x) => x.status === 'trashed')
+      .flatMap((x) => x.attachments || []);
   writeCachedQuickDropItems(
     uid,
     prevCache.filter((x) => x.status !== 'trashed')
@@ -1062,6 +1111,9 @@ export async function emptyQuickDropTrash(
 
   try {
     await executeCloudMutation(uid, op);
+    for (const att of targetAttachments) {
+      void removeQuickDropAttachmentStorage(att);
+    }
     return { synced: true, offlineQueued: false };
   } catch (err) {
     if (isNetworkFailure(err) || isMissing016TableError(err)) {

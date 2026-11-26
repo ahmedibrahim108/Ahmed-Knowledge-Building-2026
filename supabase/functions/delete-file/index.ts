@@ -3,7 +3,7 @@ import {
   checkRateLimit,
   createSupabaseAdminClient,
   getClientRateKey,
-  requireVerifiedAdmin,
+  requireVerifiedUser,
 } from '../_shared/auth.ts';
 import {
   errorResponse,
@@ -17,6 +17,7 @@ import {
   createR2Client,
   deleteR2Object,
   getR2Config,
+  isValidR2ObjectKey,
   sanitizeRecordId,
 } from '../_shared/r2.ts';
 
@@ -30,7 +31,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const adminClient = createSupabaseAdminClient();
-    const caller = await requireVerifiedAdmin(req, adminClient);
+    const caller = await requireVerifiedUser(req, adminClient);
 
     const rl = checkRateLimit(getClientRateKey(req, caller.uid), 60, 60_000);
     if (!rl.allowed) {
@@ -67,18 +68,42 @@ Deno.serve(async (req: Request) => {
     let objectKey = typeof body.objectKey === 'string' ? body.objectKey.trim() : '';
     let bucketName = r2Cfg.bucketName;
 
+    if (!caller.isAdmin) {
+      if (
+        !objectKey ||
+        !objectKey.startsWith(`quick_drop/attachments/${caller.uid}/`)
+      ) {
+        throw new AuthError(
+          403,
+          'ADMIN_REQUIRED',
+          'Only the approved platform administrator can perform this action.'
+        );
+      }
+    }
+
     if (!objectKey && recordId) {
-      const table =
-        recordType === 'image' ? 'image_attachments' : 'file_attachments';
-      const { data: row } = await adminClient
-        .from(table)
-        .select('object_key, storage_path, bucket_name, storage_provider')
-        .eq('owner_id', caller.uid)
-        .eq('id', recordId)
-        .maybeSingle();
-      if (row?.storage_provider === 'r2') {
-        objectKey = String(row.object_key || row.storage_path || '');
-        if (row.bucket_name) bucketName = String(row.bucket_name);
+      const candidateTables =
+        recordType === 'image'
+          ? (['image_attachments'] as const)
+          : recordType === 'file'
+          ? (['file_attachments'] as const)
+          : (['file_attachments', 'image_attachments'] as const);
+      for (const table of candidateTables) {
+        const { data: row } = await adminClient
+          .from(table)
+          .select('object_key, storage_path, bucket_name, storage_provider')
+          .eq('owner_id', caller.uid)
+          .eq('id', recordId)
+          .maybeSingle();
+        const candidateKey = String(row?.object_key || row?.storage_path || '');
+        if (
+          row &&
+          (row.storage_provider === 'r2' || isValidR2ObjectKey(candidateKey))
+        ) {
+          objectKey = candidateKey;
+          if (row.bucket_name) bucketName = String(row.bucket_name);
+          break;
+        }
       }
     }
 
@@ -89,32 +114,67 @@ Deno.serve(async (req: Request) => {
     }
 
     // 2. Delete metadata row in Supabase Postgres ONLY after R2 object deletion succeeds
-    if (recordId) {
-      if (recordType === 'image' || !recordType) {
-        await adminClient
-          .from('image_attachments')
-          .delete()
-          .eq('owner_id', caller.uid)
-          .eq('id', recordId);
-      }
-      if (recordType === 'file' || !recordType) {
-        await adminClient
+    if (caller.isAdmin) {
+      if (recordId) {
+        if (recordType === 'image' || !recordType) {
+          const { error: delImgErr } = await adminClient
+            .from('image_attachments')
+            .delete()
+            .eq('owner_id', caller.uid)
+            .eq('id', recordId);
+          if (delImgErr) {
+            return errorResponse(
+              req,
+              500,
+              'METADATA_DELETE_FAILED',
+              'R2 object deleted but failed removing image metadata row.'
+            );
+          }
+        }
+        if (recordType === 'file' || !recordType) {
+          const { error: delFileErr } = await adminClient
+            .from('file_attachments')
+            .delete()
+            .eq('owner_id', caller.uid)
+            .eq('id', recordId);
+          if (delFileErr) {
+            return errorResponse(
+              req,
+              500,
+              'METADATA_DELETE_FAILED',
+              'R2 object deleted but failed removing file metadata row.'
+            );
+          }
+        }
+      } else if (objectKey) {
+        const quotedKey = `"${objectKey.replace(/"/g, '')}"`;
+        const { error: delFileErr } = await adminClient
           .from('file_attachments')
           .delete()
           .eq('owner_id', caller.uid)
-          .eq('id', recordId);
+          .or(`object_key.eq.${quotedKey},storage_path.eq.${quotedKey}`);
+        if (delFileErr) {
+          return errorResponse(
+            req,
+            500,
+            'METADATA_DELETE_FAILED',
+            'R2 object deleted but failed removing file metadata row.'
+          );
+        }
+        const { error: delImgErr } = await adminClient
+          .from('image_attachments')
+          .delete()
+          .eq('owner_id', caller.uid)
+          .or(`object_key.eq.${quotedKey},storage_path.eq.${quotedKey}`);
+        if (delImgErr) {
+          return errorResponse(
+            req,
+            500,
+            'METADATA_DELETE_FAILED',
+            'R2 object deleted but failed removing image metadata row.'
+          );
+        }
       }
-    } else if (objectKey) {
-      await adminClient
-        .from('file_attachments')
-        .delete()
-        .eq('owner_id', caller.uid)
-        .eq('object_key', objectKey);
-      await adminClient
-        .from('image_attachments')
-        .delete()
-        .eq('owner_id', caller.uid)
-        .eq('object_key', objectKey);
     }
 
     return jsonResponse(req, {

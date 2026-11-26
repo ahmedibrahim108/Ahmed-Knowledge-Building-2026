@@ -228,6 +228,10 @@ export default function QuickDropSection({
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const isQuickDropImageFile = (file: File) =>
+    file.type.startsWith('image/') ||
+    /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|avif)$/i.test(file.name);
+
   const handleComposerFilesSelected = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     if (!uid || !canEdit) {
@@ -239,7 +243,7 @@ export default function QuickDropSection({
     try {
       const uploaded: QuickDropAttachment[] = [];
       for (const file of Array.from(files).slice(0, 6)) {
-        const isImage = file.type.startsWith('image/');
+        const isImage = isQuickDropImageFile(file);
         const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         if (!isImage && !isPdf) continue;
         const att = await uploadQuickDropAttachmentFile(uid, file);
@@ -250,8 +254,12 @@ export default function QuickDropSection({
       } else {
         setComposerAttachments((prev) => [...prev, ...uploaded].slice(0, 8));
       }
-    } catch {
-      setPasteError('تعذر إرفاق الملف مؤقتًا؛ حاول مرة أخرى.');
+    } catch (err) {
+      setPasteError(
+        err instanceof Error && err.message
+          ? err.message
+          : 'تعذر إرفاق الملف مؤقتًا؛ حاول مرة أخرى.'
+      );
     } finally {
       setUploadingFiles(false);
       if (composerFileRef.current) composerFileRef.current.value = '';
@@ -316,6 +324,25 @@ export default function QuickDropSection({
   };
 
   const handleOpenAttachment = async (att: QuickDropAttachment) => {
+    if (att.kind === 'pdf' && att.storagePath) {
+      const target: ActivePdfTarget = {
+        title: att.name,
+        fileName: att.name,
+        storagePath: att.storagePath,
+        storageProvider: att.storageProvider,
+        downloadUrl: att.downloadUrl || att.dataUrl,
+        mimeType: att.mimeType || 'application/pdf',
+        contextLabel: 'مرفق النقل السريع',
+        uid: uid || undefined,
+      };
+      if (onOpenPdf) {
+        onOpenPdf(target);
+      } else {
+        setLocalPdfTarget(target);
+      }
+      return;
+    }
+
     const resolved = await resolveQuickDropAttachmentUrl(att);
     if (!resolved) {
       showTransientNotice('تعذر فتح المرفق حاليًا.');
@@ -378,7 +405,7 @@ export default function QuickDropSection({
       return;
     }
     const file = files[0];
-    const isImage = file.type.startsWith('image/');
+    const isImage = isQuickDropImageFile(file);
     const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
     if (!isImage && !isPdf) {
       setReplacingTarget(null);
@@ -498,10 +525,12 @@ export default function QuickDropSection({
 
   const handlePermanentDelete = async (itemId: string) => {
     if (!uid || !canEdit) return onRequireAuth();
+    const targetAttachments =
+      items.find((x) => x.id === itemId)?.attachments || [];
     setItems((prev) => prev.filter((x) => x.id !== itemId));
     setConfirmDeleteId(null);
     try {
-      await deleteQuickDropItemPermanently(uid, itemId);
+      await deleteQuickDropItemPermanently(uid, itemId, targetAttachments);
       showTransientNotice('تم حذف العنصر نهائيًا.');
     } catch (err) {
       setSyncError(
@@ -513,10 +542,13 @@ export default function QuickDropSection({
 
   const handleEmptyTrash = async () => {
     if (!uid || !canEdit) return onRequireAuth();
+    const trashAttachments = items
+      .filter((x) => x.status === 'trashed')
+      .flatMap((x) => x.attachments || []);
     setItems((prev) => prev.filter((x) => x.status !== 'trashed'));
     setConfirmEmptyTrash(false);
     try {
-      await emptyQuickDropTrash(uid);
+      await emptyQuickDropTrash(uid, trashAttachments);
       showTransientNotice('تم إفراغ سلة المهملات بالكامل.');
     } catch (err) {
       setSyncError(

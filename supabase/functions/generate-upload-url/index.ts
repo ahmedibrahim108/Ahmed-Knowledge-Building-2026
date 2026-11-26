@@ -3,7 +3,7 @@ import {
   checkRateLimit,
   createSupabaseAdminClient,
   getClientRateKey,
-  requireVerifiedAdmin,
+  requireVerifiedUser,
 } from '../_shared/auth.ts';
 import {
   errorResponse,
@@ -147,7 +147,7 @@ Deno.serve(async (req: Request) => {
 
   try {
     const adminClient = createSupabaseAdminClient();
-    const caller = await requireVerifiedAdmin(req, adminClient);
+    const caller = await requireVerifiedUser(req, adminClient);
 
     const rl = checkRateLimit(getClientRateKey(req, caller.uid), 60, 60_000);
     if (!rl.allowed) {
@@ -183,6 +183,16 @@ Deno.serve(async (req: Request) => {
     // Allow clean cancellation/cleanup of an aborted multipart upload session
     if (action === 'abort') {
       const objectKey = assertOwnerKeyConfined(body.objectKey, caller.uid);
+      if (
+        !caller.isAdmin &&
+        !objectKey.startsWith(`quick_drop/attachments/${caller.uid}/`)
+      ) {
+        throw new AuthError(
+          403,
+          'ADMIN_REQUIRED',
+          'Only the approved platform administrator can perform this action.'
+        );
+      }
       const uploadId =
         typeof body.uploadId === 'string' ? body.uploadId.trim() : '';
       if (!uploadId) {
@@ -201,7 +211,13 @@ Deno.serve(async (req: Request) => {
       }
       const recordId =
         typeof body.recordId === 'string' ? sanitizeRecordId(body.recordId) : '';
-      const recordType = body.recordType === 'image' ? 'image' : body.recordType === 'file' ? 'file' : 'none';
+      const recordType = !caller.isAdmin
+        ? 'none'
+        : body.recordType === 'image'
+        ? 'image'
+        : body.recordType === 'file'
+        ? 'file'
+        : 'none';
       if (recordId && recordType !== 'none') {
         const tbl = recordType === 'image' ? 'image_attachments' : 'file_attachments';
         await adminClient
@@ -214,13 +230,23 @@ Deno.serve(async (req: Request) => {
     }
 
     const module = assertValidModule(body.module);
+    if (!caller.isAdmin && module !== 'quick_drop') {
+      throw new AuthError(
+        403,
+        'ADMIN_REQUIRED',
+        'Only the approved platform administrator can perform this action.'
+      );
+    }
+
     const { originalName, safeAsciiName } = sanitizeOriginalFileName(body.fileName);
     const mimeType = normalizeAndValidateMime(module, body.mimeType, originalName);
     const fileSize = validateFileSize(module, body.fileSize);
 
     const recordId = sanitizeRecordId(body.recordId);
     const recordType =
-      body.recordType === 'image'
+      !caller.isAdmin
+        ? 'none'
+        : body.recordType === 'image'
         ? 'image'
         : body.recordType === 'none'
         ? 'none'
@@ -360,7 +386,7 @@ Deno.serve(async (req: Request) => {
           ContentType: multipartCommandParams.ContentType,
           contentTypeAssigned,
           fileSize,
-          expiresIn: 1800,
+          expiresIn: 3600,
         }
       );
 
@@ -382,7 +408,7 @@ Deno.serve(async (req: Request) => {
           objectKey,
           mimeType,
           fileSize,
-          1800
+          3600
         );
       } catch (r2Err) {
         await markMetadataFailed();
@@ -410,7 +436,7 @@ Deno.serve(async (req: Request) => {
         uploadId: mp.uploadId,
         chunkSize: mp.chunkSize || MULTIPART_CHUNK_BYTES,
         parts: mp.parts,
-        expiresIn: 1800,
+        expiresIn: 3600,
       });
     }
 
@@ -432,7 +458,7 @@ Deno.serve(async (req: Request) => {
       contentTypeAssigned,
       requiredContentTypeHeader: mimeType,
       fileSize,
-      expiresIn: 300,
+      expiresIn: 1800,
     });
 
     if (!contentTypeAssigned) {
@@ -452,7 +478,7 @@ Deno.serve(async (req: Request) => {
         r2Cfg.bucketName,
         objectKey,
         mimeType,
-        300
+        1800
       );
     } catch (r2Err) {
       await markMetadataFailed();
@@ -481,7 +507,7 @@ Deno.serve(async (req: Request) => {
       requiredHeaders: {
         'Content-Type': mimeType,
       },
-      expiresIn: 300,
+      expiresIn: 1800,
     });
   } catch (err) {
     if (err instanceof R2ConfigError) {

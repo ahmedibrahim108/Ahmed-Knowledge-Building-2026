@@ -39,6 +39,7 @@ import {
 import { auth } from '../firebase';
 import type { StorageProvider } from '../services/storageService';
 import {
+  deleteCloudAttachment,
   downloadResourceAttachmentResult,
   isPdfAttachment,
   isViewableDocumentAttachment,
@@ -464,6 +465,10 @@ export default function TwelveMonthPlanView({
       return;
     }
 
+    const existingResource = activeMonth.resources.find((r) => r.id === targetResId);
+    const oldStoragePath = existingResource?.storagePath;
+    const oldStorageProvider = existingResource?.storageProvider;
+
     setUploadingResFile(true);
     setUploadProgressPct(0);
     setResourceActionError(null);
@@ -492,6 +497,18 @@ export default function TwelveMonthPlanView({
       });
       if (!uploaded.uploadedToCloud && uploaded.errorMessage) {
         setResourceActionError(uploaded.errorMessage);
+      } else if (
+        uploaded.uploadedToCloud &&
+        oldStoragePath &&
+        uploaded.storagePath &&
+        oldStoragePath !== uploaded.storagePath
+      ) {
+        void deleteCloudAttachment(
+          effectiveUid,
+          undefined,
+          oldStoragePath,
+          oldStorageProvider
+        );
       }
     } finally {
       setUploadingResFile(false);

@@ -606,7 +606,9 @@ async function fetchCloudImagesForScope(
       .eq('scope_key', scopeKey)
       .order('created_at_ms', { ascending: true });
     if (error) throw error;
-    return (data || []) as Record<string, unknown>[];
+    return ((data || []) as Record<string, unknown>[]).filter(
+      (r) => r.upload_status !== 'pending' && r.upload_status !== 'failed'
+    );
   });
 
   const allPaths = rows
@@ -1866,7 +1868,9 @@ export async function fetchAllJournalImagesSummary(
       .like('scope_key', 'journal:%')
       .order('created_at_ms', { ascending: true });
     if (error) throw error;
-    return (data || []) as Record<string, unknown>[];
+    return ((data || []) as Record<string, unknown>[]).filter(
+      (r) => r.upload_status !== 'pending' && r.upload_status !== 'failed'
+    );
   });
 
   const allPaths = rows
