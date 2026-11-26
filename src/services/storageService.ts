@@ -530,7 +530,7 @@ export async function uploadFileToR2(
     };
   }
 
-  // Multipart upload for large files (> 25 MB, 8 MiB parts)
+  // Multipart upload fallback only for objects exceeding single-PUT threshold (> 250 MB)
   const completedParts: Array<{ PartNumber: number; ETag: string }> = [];
   const totalBytes = Math.max(1, file.size);
   let uploadedBytes = 0;
@@ -648,7 +648,7 @@ export async function getFileUrl(options: {
           ...(options.downloadFileName
             ? { downloadFileName: options.downloadFileName }
             : {}),
-          expiresIn: options.expiresIn ?? 300,
+          expiresIn: options.expiresIn ?? 1800,
         },
         { requireAuth: false }
       );

@@ -614,9 +614,9 @@ export default function BookWorkspaceModal({
       onUpdateItem(item.id, {
         attachmentName: file.name,
         attachmentResourceId: resId,
-        storagePath: uploaded.storagePath,
-        storageProvider: uploaded.storageProvider,
-        downloadUrl: uploaded.downloadUrl,
+        storagePath: uploaded.uploadedToCloud ? uploaded.storagePath : undefined,
+        storageProvider: uploaded.uploadedToCloud ? uploaded.storageProvider : undefined,
+        downloadUrl: uploaded.uploadedToCloud ? uploaded.downloadUrl : undefined,
         ...(isPdfAttachment(file.name, file.type)
           ? { itemType: 'ملف PDF' as ReadingItemType }
           : {}),
@@ -861,6 +861,7 @@ export default function BookWorkspaceModal({
                     fileName: item.attachmentName || `${item.title}.pdf`,
                     resourceId: item.attachmentResourceId,
                     storagePath: item.storagePath,
+                    storageProvider: item.storageProvider,
                     downloadUrl: item.downloadUrl,
                     extractedPreview:
                       richHtmlToPlainText(draft.notesHtml) ||

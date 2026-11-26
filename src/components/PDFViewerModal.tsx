@@ -124,9 +124,16 @@ export default function PDFViewerModal({
   const [useNativeIframeFallback, setUseNativeIframeFallback] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
+  const [pageAspectRatio, setPageAspectRatio] = useState<number>(1.414);
+  const [visibleRange, setVisibleRange] = useState<{ start: number; end: number }>({
+    start: 1,
+    end: 10,
+  });
   const blobFallbackTriedRef = useRef(false);
   const blobUrlRef = useRef<string | null>(null);
   const rawBlobRef = useRef<Blob | null>(null);
+  const measuredHeightsRef = useRef<Record<number, number>>({});
+  const programmaticScrollUntilRef = useRef<number>(0);
 
   const attachmentKind = useMemo(
     () => getAttachmentKind(target?.fileName, target?.mimeType),
@@ -236,7 +243,23 @@ export default function PDFViewerModal({
             return;
           }
 
-          // 2) First fetch on this device: download blob from Supabase Storage & SAVE to IndexedDB cache!
+          // 2) Streaming signed URL first so 300+ page PDFs open Page 1 via HTTP Range requests immediately
+          const freshSignedUrl = await getFreshStudyFileSignedUrl({
+            uid: resolvedUid,
+            resourceId: target.resourceId,
+            storagePath: target.storagePath,
+            storageProvider: target.storageProvider,
+            fileName: target.fileName,
+          });
+          if (cancelled) return;
+          if (freshSignedUrl) {
+            setFreshExternalUrl(freshSignedUrl);
+            setPdfUrl(freshSignedUrl);
+            setCacheBadge('cloud');
+            return;
+          }
+
+          // 3) Fallback: download full blob from cloud/direct URL & save to IndexedDB cache
           const fetched = await getPdfBlobWithCacheInfo({
             uid: resolvedUid,
             resourceId: target.resourceId,
@@ -258,36 +281,17 @@ export default function PDFViewerModal({
             blobUrlRef.current = objUrl;
             setPdfUrl(objUrl);
             setCacheBadge(fetched.source);
-            void getFreshStudyFileSignedUrl({
-              uid: resolvedUid,
-              resourceId: target.resourceId,
-              storagePath: fetched.storagePath || target.storagePath,
-              storageProvider: target.storageProvider,
-              fileName: target.fileName,
-            }).then((signed) => {
-              if (!cancelled && signed) setFreshExternalUrl(signed);
-            });
             return;
           }
 
-          // 3) Fallback signed URL streaming (if blob download wasn't reachable)
-          const freshSignedUrl = await getFreshStudyFileSignedUrl({
-            uid: resolvedUid,
-            resourceId: target.resourceId,
-            storagePath: target.storagePath,
-            storageProvider: target.storageProvider,
-            fileName: target.fileName,
-          });
-          if (cancelled) return;
-          if (freshSignedUrl) {
-            setFreshExternalUrl(freshSignedUrl);
-            setPdfUrl(freshSignedUrl);
-            setCacheBadge('cloud');
-            return;
-          }
-
+          const hasCloudRef = Boolean(
+            (target.storagePath && !target.storagePath.startsWith('users/')) ||
+              target.downloadUrl
+          );
           setLoadError(
-            'لم يُعثر على ملف الـ PDF في التخزين السحابي (Supabase) ولا في كاش هذا الجهاز. إذا رفعته سابقًا من اللابتوب قبل تفعيل المزامنة السحابية، افتح الكورس من اللابتوب نفسه أو أعد رفع الملف ليزامن تلقائيًا لجميع أجهزتك.'
+            hasCloudRef
+              ? 'تعذر الوصول إلى ملف الـ PDF من التخزين السحابي حاليًا. تأكد من الاتصال بالإنترنت أو من تفعيل دوال Cloudflare R2 على الخادم، ثم أعد المحاولة.'
+              : 'هذا الملف غير محفوظ في التخزين السحابي بعد (رُفع محليًا فقط أو لم يكتمل رفعه إلى Cloudflare R2 / Supabase). أعد رفعه من الجهاز الأصلي ليظهر ويُفتح على كل الأجهزة.'
           );
         } else {
           const fetched = await getPdfBlobWithCacheInfo({
@@ -376,28 +380,108 @@ export default function PDFViewerModal({
     };
   }, [target, onClose, isExpanded]);
 
-  const renderedPages = useMemo(() => {
-    if (numPages <= 0) return [];
-    if (scrollMode === 'single') return [currentPage];
-    if (numPages <= 35) {
-      return Array.from({ length: numPages }, (_, i) => i + 1);
+  const pdfDocumentOptions = useMemo(
+    () => ({
+      rangeChunkSize: 524288,
+      disableAutoFetch: true,
+      disableStream: false,
+    }),
+    []
+  );
+
+  // Track visible page numbers during continuous scroll across all 1..numPages slots
+  useEffect(() => {
+    if (
+      !target ||
+      !isPdfMode ||
+      scrollMode !== 'all' ||
+      numPages <= 0 ||
+      useNativeIframeFallback
+    ) {
+      return;
     }
-    const start = Math.max(1, currentPage - 8);
-    const end = Math.min(numPages, currentPage + 8);
-    const arr: number[] = [];
-    for (let p = start; p <= end; p++) arr.push(p);
-    return arr;
-  }, [numPages, scrollMode, currentPage]);
+    const rootEl = bodyContainerRef.current;
+    if (!rootEl || typeof IntersectionObserver === 'undefined') return;
+
+    const visibleRatios = new Map<number, number>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const pAttr = (entry.target as HTMLElement).dataset.pageNumber;
+          const pageNum = pAttr ? Number(pAttr) : 0;
+          if (!pageNum) continue;
+          if (entry.isIntersecting) {
+            visibleRatios.set(pageNum, entry.intersectionRatio || 0.01);
+          } else {
+            visibleRatios.delete(pageNum);
+          }
+        }
+
+        if (visibleRatios.size > 0) {
+          const nums = Array.from(visibleRatios.keys()).sort((a, b) => a - b);
+          const minP = nums[0];
+          const maxP = nums[nums.length - 1];
+          setVisibleRange({
+            start: Math.max(1, minP - 4),
+            end: Math.min(numPages, maxP + 6),
+          });
+
+          if (Date.now() >= programmaticScrollUntilRef.current) {
+            // Pick page with highest visibility (tie-break to earlier page)
+            let bestPage = nums[0];
+            let bestRatio = -1;
+            for (const n of nums) {
+              const r = visibleRatios.get(n) ?? 0;
+              if (r > bestRatio) {
+                bestRatio = r;
+                bestPage = n;
+              }
+            }
+            setCurrentPage(bestPage);
+          }
+        }
+      },
+      {
+        root: rootEl,
+        rootMargin: '900px 0px',
+        threshold: [0, 0.15, 0.5, 0.85],
+      }
+    );
+
+    for (let p = 1; p <= numPages; p += 1) {
+      const node = pageRefs.current[p];
+      if (node) observer.observe(node);
+    }
+
+    return () => observer.disconnect();
+  }, [target, isPdfMode, scrollMode, numPages, useNativeIframeFallback]);
+
+  const isPageMounted = (pageNumber: number): boolean => {
+    if (scrollMode === 'single') return pageNumber === currentPage;
+    if (numPages <= 35) return true;
+    const minMount = Math.min(visibleRange.start, Math.max(1, currentPage - 4));
+    const maxMount = Math.max(
+      visibleRange.end,
+      Math.min(numPages, currentPage + 6)
+    );
+    return pageNumber >= minMount && pageNumber <= maxMount;
+  };
 
   if (!target) return null;
 
   const goToPage = (pageNum: number) => {
     const clamped = Math.max(1, Math.min(numPages || 1, pageNum));
+    const delta = Math.abs(clamped - currentPage);
+    programmaticScrollUntilRef.current = Date.now() + 650;
     setCurrentPage(clamped);
+    setVisibleRange({
+      start: Math.max(1, clamped - 4),
+      end: Math.min(numPages || clamped, clamped + 6),
+    });
     if (scrollMode === 'all') {
       window.setTimeout(() => {
         pageRefs.current[clamped]?.scrollIntoView({
-          behavior: 'smooth',
+          behavior: delta > 12 ? 'auto' : 'smooth',
           block: 'start',
         });
       }, 30);
@@ -739,6 +823,7 @@ export default function PDFViewerModal({
               >
                 <Document
                   file={pdfBinaryData || pdfUrl}
+                  options={pdfDocumentOptions}
                   loading={
                     <div className="flex items-center gap-2 text-slate-200 py-12 text-sm">
                       <Loader2
@@ -791,6 +876,7 @@ export default function PDFViewerModal({
                         fileName: target.fileName,
                         mimeType: target.mimeType,
                         storagePath: target.storagePath,
+                        storageProvider: target.storageProvider,
                         downloadUrl: target.downloadUrl,
                       }).then(async (fetched) => {
                         if (!fetched?.blob) {
@@ -817,28 +903,62 @@ export default function PDFViewerModal({
                     setUseNativeIframeFallback(true);
                   }}
                   onLoadSuccess={({ numPages: total }) => {
+                    measuredHeightsRef.current = {};
                     setNumPages(total);
                     setCurrentPage(1);
+                    setVisibleRange({ start: 1, end: Math.min(total, 10) });
                   }}
                 >
                   <div className="flex flex-col items-center gap-4">
-                    {renderedPages.map((pageNumber) => (
-                      <div
-                        key={pageNumber}
-                        ref={(el) => {
-                          pageRefs.current[pageNumber] = el;
-                        }}
-                        data-custom-card-surface="light"
-                        className="bg-white shadow-xl rounded-sm overflow-hidden"
-                      >
-                        <Page
-                          pageNumber={pageNumber}
-                          width={pageRenderWidth}
-                          renderTextLayer
-                          renderAnnotationLayer
-                        />
-                      </div>
-                    ))}
+                    {(scrollMode === 'single'
+                      ? [currentPage]
+                      : Array.from({ length: numPages }, (_, idx) => idx + 1)
+                    ).map((pageNumber) => {
+                      const mounted = isPageMounted(pageNumber);
+                      const estHeight =
+                        measuredHeightsRef.current[pageNumber] ||
+                        Math.round(pageRenderWidth * pageAspectRatio);
+
+                      return (
+                        <div
+                          key={pageNumber}
+                          data-page-number={pageNumber}
+                          ref={(el) => {
+                            pageRefs.current[pageNumber] = el;
+                          }}
+                          data-custom-card-surface="light"
+                          style={{
+                            width: pageRenderWidth,
+                            minHeight: estHeight,
+                          }}
+                          className="bg-white shadow-xl rounded-sm overflow-hidden flex items-center justify-center"
+                        >
+                          {mounted ? (
+                            <Page
+                              pageNumber={pageNumber}
+                              width={pageRenderWidth}
+                              renderTextLayer
+                              renderAnnotationLayer
+                              onLoadSuccess={(page) => {
+                                if (page.width > 0 && page.height > 0) {
+                                  const ratio = page.height / page.width;
+                                  measuredHeightsRef.current[pageNumber] = Math.round(
+                                    pageRenderWidth * ratio
+                                  );
+                                  if (pageNumber === 1) {
+                                    setPageAspectRatio(ratio);
+                                  }
+                                }
+                              }}
+                            />
+                          ) : (
+                            <div className="text-xs text-slate-400 font-medium tabular-nums select-none">
+                              صفحة {pageNumber} من {numPages}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </Document>
               </ErrorBoundary>

@@ -311,9 +311,11 @@ export default function LibraryView({
       );
       setPendingResId(resId);
       setPendingFileName(file.name);
-      setPendingStoragePath(uploaded.storagePath);
-      setPendingStorageProvider(uploaded.storageProvider);
-      setPendingDownloadUrl(uploaded.downloadUrl);
+      setPendingStoragePath(uploaded.uploadedToCloud ? uploaded.storagePath : undefined);
+      setPendingStorageProvider(
+        uploaded.uploadedToCloud ? uploaded.storageProvider : undefined
+      );
+      setPendingDownloadUrl(uploaded.uploadedToCloud ? uploaded.downloadUrl : undefined);
       if (!title.trim()) {
         setTitle(
           file.name.replace(/\.(pdf|docx|doc|txt|md|markdown)$/i, '').trim()
@@ -324,9 +326,11 @@ export default function LibraryView({
       }
       if (uploaded.uploadedToCloud) {
         setLastPickedFile(null);
+        const targetLabel =
+          uploaded.storageProvider === 'r2' ? 'Cloudflare R2' : 'التخزين السحابي';
         setUploadStatusMsg({
           ok: true,
-          text: 'تم رفع الملف ومزامنته سحابيًا ليفتح على الهاتف واللابتوب معًا.',
+          text: `تم رفع الملف إلى ${targetLabel} ومزامنته ليفتح على الهاتف واللابتوب معًا.`,
         });
       } else {
         setUploadStatusMsg({
@@ -719,7 +723,7 @@ export default function LibraryView({
                   ? `جاري رفع الملف للسحابة (${uploadProgressPct}%)...`
                   : pendingFileName
                   ? `تم إرفاق: ${pendingFileName}`
-                  : 'رفع PDF / Word حتى 100 ميجا (اختياري)'}
+                  : 'رفع PDF / Word حتى 250 ميجا (اختياري)'}
               </span>
             </button>
 
@@ -984,6 +988,13 @@ export default function LibraryView({
                             ملاحظات مدوّنة
                           </span>
                         )}
+                      </div>
+                    )}
+                    {hasAttachedFile && (!item.storagePath || item.storagePath.startsWith('users/')) && !item.downloadUrl && (
+                      <div className="pt-0.5">
+                        <span className="inline-flex items-center px-2 py-0.5 text-[10px] font-semibold bg-amber-50 text-amber-900 border border-amber-200 rounded-md">
+                          محلي فقط — يحتاج إعادة رفع للمزامنة على كل الأجهزة
+                        </span>
                       </div>
                     )}
                   </div>

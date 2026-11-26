@@ -46,11 +46,11 @@ export interface BundledAppDocument {
 export const BUNDLED_APP_DOCUMENTS: BundledAppDocument[] = [];
 
 const STUDY_FILES_BUCKET = 'study-files';
-const MAX_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB max on R2 (100 MB Supabase legacy fallback)
+const MAX_UPLOAD_BYTES = 250 * 1024 * 1024; // 250 MB max single-PUT directly on R2
 const MAX_SUPABASE_LEGACY_BYTES = 100 * 1024 * 1024;
 const TUS_RESUMABLE_THRESHOLD = 6 * 1024 * 1024; // 6 MB
-const TUS_CHUNK_SIZE = 6 * 1024 * 1024; // 6 MB chunks (Supabase recommended)
-const MAX_LOCAL_IDB_BYTES = 100 * 1024 * 1024; // Cache PDFs <= 100 MB locally for offline reading
+const TUS_CHUNK_SIZE = 6 * 1024 * 1024; // 6 MB chunks (legacy Supabase fallback only)
+const MAX_LOCAL_IDB_BYTES = 250 * 1024 * 1024; // Safe try/catch offline cache up to 250 MB
 
 function escapeHtml(text: string): string {
   return text
@@ -597,6 +597,8 @@ export async function uploadResourceAttachment(
 
   const safeId = resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
 
+  let r2UnavailableReason: string | null = null;
+
   // Primary external storage: Cloudflare R2 via Supabase Edge Functions
   if (isR2PrimaryUploadEnabled()) {
     try {
@@ -622,8 +624,11 @@ export async function uploadResourceAttachment(
       };
     } catch (r2Err) {
       if (r2Err instanceof R2UnavailableError) {
-        // Edge Functions or R2 secrets are not yet configured in cloud -> graceful legacy fallback
-        console.warn('R2 unavailable, falling back to Supabase Storage:', r2Err.message);
+        r2UnavailableReason =
+          r2Err.code === 'HTTP_404'
+            ? 'دوال Cloudflare R2 غير منشورة بعد على Supabase Edge Functions (HTTP 404).'
+            : r2Err.message || 'إعدادات Cloudflare R2 غير مكتملة على الخادم.';
+        console.warn('R2 unavailable, trying Supabase legacy fallback:', r2Err.code, r2Err.message);
       } else if (r2Err instanceof StorageOperationError) {
         return {
           mimeType,
@@ -651,7 +656,8 @@ export async function uploadResourceAttachment(
       sizeBytes: file.size,
       uploadedToCloud: false,
       errorMessage:
-        'يتطلب رفع ملفات أكبر من 100 ميجابايت تفعيل Cloudflare R2 Edge Functions.',
+        r2UnavailableReason ||
+        'يتطلب رفع ملفات أكبر من 100 ميجابايت نشر وتفعيل دوال Cloudflare R2 على Supabase.',
     };
   }
 
@@ -755,18 +761,21 @@ export async function uploadResourceAttachment(
         mimeType,
         sizeBytes: file.size,
         uploadedToCloud: false,
-        errorMessage:
-          'تجاوز الملف حد الحجم المفعّل حاليًا في لوحة Supabase Storage (الافتراضي 50 ميجابايت في الباقة المجانية، ويصل إلى 100 ميجابايت بعد رفعه من Storage Settings في باقة Pro).',
+        errorMessage: r2UnavailableReason
+          ? `${r2UnavailableReason} والملف يتجاوز حد Supabase Storage الافتراضي (50 ميجابايت). انشر دوال R2 ليتم الرفع مباشرة إلى Cloudflare حتى 250 ميجابايت.`
+          : 'تجاوز الملف حد الحجم المفعّل حاليًا في لوحة Supabase Storage (50 ميجابايت في الباقة المجانية).',
       };
     }
     return {
       mimeType,
       sizeBytes: file.size,
       uploadedToCloud: false,
-      errorMessage: formatSupabaseErrorMessage(
-        err,
-        'تعذر رفع الملف إلى التخزين السحابي. تم الاحتفاظ به محليًا على هذا الجهاز.'
-      ),
+      errorMessage: r2UnavailableReason
+        ? `${r2UnavailableReason} كما تعذّر الرفع البديل إلى Supabase: ${formatSupabaseErrorMessage(err, 'خطأ تخزين')}`
+        : formatSupabaseErrorMessage(
+            err,
+            'تعذر رفع الملف إلى التخزين السحابي. تم الاحتفاظ به محليًا على هذا الجهاز.'
+          ),
     };
   }
 }

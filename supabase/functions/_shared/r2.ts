@@ -33,8 +33,10 @@ export interface ModulePolicy {
 }
 
 const MB = 1024 * 1024;
-export const SINGLE_UPLOAD_MAX_BYTES = 25 * MB;
-export const MULTIPART_CHUNK_BYTES = 8 * MB;
+// R2 supports single PUT objects up to 5 GB natively; keep up to 250 MB in one single PUT
+// without splitting into S3 multipart chunks (avoids unnecessary ETag CORS & part overhead).
+export const SINGLE_UPLOAD_MAX_BYTES = 250 * MB;
+export const MULTIPART_CHUNK_BYTES = 25 * MB;
 export const MAX_DOCUMENT_BYTES = 250 * MB;
 export const MAX_IMAGE_BYTES = 25 * MB;
 
@@ -622,7 +624,7 @@ export async function signGetUrl(
     isPublicAsset?: boolean;
   }
 ): Promise<{ url: string; expiresIn: number; isPublicUrl: boolean }> {
-  const expiresIn = Math.min(900, Math.max(60, options?.expiresIn ?? 300));
+  const expiresIn = Math.min(3600, Math.max(60, options?.expiresIn ?? 1800));
 
   if (options?.publicUrlBase && options?.isPublicAsset) {
     const encodedPath = key
