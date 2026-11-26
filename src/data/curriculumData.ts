@@ -705,6 +705,24 @@ export type ReadingItemType =
 
 export type ReadingItemStatus = 'to_read' | 'reading' | 'completed';
 
+export interface BookChapterNote {
+  id: string;
+  title: string;
+  contentHtml: string;
+  updatedAtMs: number;
+}
+
+export type BookWorkspaceSection = 'notes' | 'insights' | 'quotes' | 'chapters';
+
+export interface BookWorkspaceData {
+  notesHtml?: string;
+  insightsHtml?: string;
+  quotesHtml?: string;
+  chapters?: BookChapterNote[];
+  paperColor?: NoteColorKey;
+  lastActiveSection?: BookWorkspaceSection;
+}
+
 export interface ReadingLibraryItem {
   id: string;
   title: string;
@@ -719,6 +737,10 @@ export interface ReadingLibraryItem {
   learningObjectives?: LearningObjective[];
   sortOrder?: number;
   isPublic?: boolean;
+  coverImageUrl?: string;
+  coverStoragePath?: string;
+  coverFrame?: ImageFrameSpec;
+  workspaceData?: BookWorkspaceData;
   attachmentName?: string;
   attachmentResourceId?: string;
   storagePath?: string;
@@ -1006,6 +1028,15 @@ export const DEFAULT_REFLECTION_IMAGE_FRAME: ImageFrameSpec = {
   offsetY: 50,
   sizePreset: 'sm',
   customHeightPx: 140,
+};
+
+export const DEFAULT_BOOK_COVER_FRAME: ImageFrameSpec = {
+  aspect: '3:4',
+  fitMode: 'cover',
+  zoom: 1,
+  offsetX: 50,
+  offsetY: 50,
+  sizePreset: 'md',
 };
 
 export const DEFAULT_DASHBOARD_HERO_FRAME: ImageFrameSpec = {

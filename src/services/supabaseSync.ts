@@ -4,7 +4,10 @@ import {
   ActivityEntityType,
   ActivityLogEntry,
   BlogPost,
+  BookChapterNote,
   BookNote,
+  BookWorkspaceData,
+  BookWorkspaceSection,
   CalendarCategory,
   CalendarColor,
   CalendarEvent,
@@ -13,6 +16,7 @@ import {
   ContentAccessGrant,
   CourseStudyStage,
   CustomCategory,
+  DEFAULT_BOOK_COVER_FRAME,
   DEFAULT_CALENDAR_PREFERENCES,
   DEFAULT_DASHBOARD_HERO_FRAME,
   DEFAULT_HUB_CATEGORIES,
@@ -1012,7 +1016,64 @@ export function buildLearningPathRow(uid: string, path: LearningPath) {
   };
 }
 
+function sanitizeBookWorkspaceData(raw: unknown): BookWorkspaceData | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const obj = raw as Record<string, unknown>;
+  const notesHtml = typeof obj.notesHtml === 'string' ? clip(obj.notesHtml, 60000) : '';
+  const insightsHtml =
+    typeof obj.insightsHtml === 'string' ? clip(obj.insightsHtml, 40000) : '';
+  const quotesHtml =
+    typeof obj.quotesHtml === 'string' ? clip(obj.quotesHtml, 40000) : '';
+  const rawChapters = Array.isArray(obj.chapters) ? obj.chapters : [];
+  const chapters: BookChapterNote[] = rawChapters
+    .filter((ch): ch is Record<string, unknown> => Boolean(ch && typeof ch === 'object'))
+    .slice(0, 60)
+    .map((ch, idx) => ({
+      id: clip(String(ch.id || `ch-${idx + 1}`), 120),
+      title: clip(String(ch.title || `فصل ${idx + 1}`), 240),
+      contentHtml: clip(String(ch.contentHtml || ''), 40000),
+      updatedAtMs: Number.isFinite(Number(ch.updatedAtMs))
+        ? Math.round(Number(ch.updatedAtMs))
+        : 0,
+    }));
+
+  const paperRaw = String(obj.paperColor ?? '');
+  const paperColor = VALID_NOTE_COLORS.includes(paperRaw as NoteColorKey)
+    ? (paperRaw as NoteColorKey)
+    : undefined;
+
+  const sectionRaw = String(obj.lastActiveSection ?? '');
+  const lastActiveSection: BookWorkspaceSection | undefined =
+    sectionRaw === 'notes' ||
+    sectionRaw === 'insights' ||
+    sectionRaw === 'quotes' ||
+    sectionRaw === 'chapters'
+      ? (sectionRaw as BookWorkspaceSection)
+      : undefined;
+
+  if (
+    !notesHtml &&
+    !insightsHtml &&
+    !quotesHtml &&
+    chapters.length === 0 &&
+    !paperColor &&
+    !lastActiveSection
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(notesHtml ? { notesHtml } : {}),
+    ...(insightsHtml ? { insightsHtml } : {}),
+    ...(quotesHtml ? { quotesHtml } : {}),
+    ...(chapters.length > 0 ? { chapters } : {}),
+    ...(paperColor ? { paperColor } : {}),
+    ...(lastActiveSection ? { lastActiveSection } : {}),
+  };
+}
+
 export function buildReadingItemRow(uid: string, item: ReadingLibraryItem) {
+  const cleanWorkspace = sanitizeBookWorkspaceData(item.workspaceData);
   return {
     owner_id: uid,
     id: sanitizeId(item.id),
@@ -1028,6 +1089,12 @@ export function buildReadingItemRow(uid: string, item: ReadingLibraryItem) {
     learning_objectives: sanitizeLearningObjectives(item.learningObjectives),
     sort_order: Math.max(0, Math.round(Number(item.sortOrder) || 0)),
     is_public: Boolean(item.isPublic),
+    cover_image_url: clip(item.coverImageUrl || '', 2000),
+    cover_storage_path: clip(item.coverStoragePath || '', 500),
+    cover_frame: item.coverFrame
+      ? sanitizeImageFrameSpec(item.coverFrame, DEFAULT_BOOK_COVER_FRAME)
+      : {},
+    workspace_data: cleanWorkspace ?? {},
     attachment_name: clip(item.attachmentName, 240),
     attachment_resource_id: clip(item.attachmentResourceId, 160),
     storage_bucket: 'study-files',
@@ -1728,6 +1795,11 @@ function mapLearningPathRow(raw: Record<string, unknown>): LearningPath {
 }
 
 function mapReadingItemRow(raw: Record<string, unknown>): ReadingLibraryItem {
+  const rawCoverFrame = raw.cover_frame;
+  const hasCoverFrame =
+    rawCoverFrame &&
+    typeof rawCoverFrame === 'object' &&
+    Object.keys(rawCoverFrame as Record<string, unknown>).length > 0;
   return {
     id: String(raw.id),
     title: String(raw.title ?? ''),
@@ -1745,6 +1817,14 @@ function mapReadingItemRow(raw: Record<string, unknown>): ReadingLibraryItem {
     learningObjectives: sanitizeLearningObjectives(raw.learning_objectives),
     sortOrder: Number(raw.sort_order ?? 0),
     isPublic: Boolean(raw.is_public),
+    coverImageUrl: raw.cover_image_url ? String(raw.cover_image_url) : undefined,
+    coverStoragePath: raw.cover_storage_path
+      ? String(raw.cover_storage_path)
+      : undefined,
+    coverFrame: hasCoverFrame
+      ? sanitizeImageFrameSpec(rawCoverFrame, DEFAULT_BOOK_COVER_FRAME)
+      : undefined,
+    workspaceData: sanitizeBookWorkspaceData(raw.workspace_data),
     attachmentName: raw.attachment_name ? String(raw.attachment_name) : undefined,
     attachmentResourceId: raw.attachment_resource_id
       ? String(raw.attachment_resource_id)
@@ -2576,8 +2656,25 @@ export function subscribeUserWorkspace(
       return;
     }
     if (!disposed) {
-      const rows = overlayOutboxOnRows('reading_items', (data || []) as Record<string, unknown>[], 'id');
-      callbacks.onReadingItems(rows.map((r) => mapReadingItemRow(r)));
+      const localExtras = readLocalReadingExtrasMap(uid);
+      const rows = overlayOutboxOnRows(
+        'reading_items',
+        (data || []) as Record<string, unknown>[],
+        'id'
+      );
+      const mapped = rows.map((r) => {
+        const item = mapReadingItemRow(r);
+        const extra = localExtras[item.id];
+        if (!extra) return item;
+        return {
+          ...item,
+          coverImageUrl: item.coverImageUrl || extra.coverImageUrl,
+          coverStoragePath: item.coverStoragePath || extra.coverStoragePath,
+          coverFrame: item.coverFrame || extra.coverFrame,
+          workspaceData: item.workspaceData || extra.workspaceData,
+        };
+      });
+      callbacks.onReadingItems(mapped);
     }
   };
 
@@ -3060,17 +3157,32 @@ function isMissingTableError(err: unknown): boolean {
   return code === '42P01' || code === 'PGRST205' || msg.includes('could not find the table');
 }
 
-function strip007Columns(
-  table: string,
-  row: Record<string, unknown>
+const OPTIONAL_019_COLUMNS_BY_TABLE: Record<string, string[]> = {
+  reading_items: [
+    'cover_image_url',
+    'cover_storage_path',
+    'cover_frame',
+    'workspace_data',
+  ],
+};
+
+function stripColumns(
+  row: Record<string, unknown>,
+  dropCols: string[]
 ): Record<string, unknown> {
-  const dropCols = OPTIONAL_007_COLUMNS_BY_TABLE[table] ?? [];
   if (dropCols.length === 0) return row;
   const clone: Record<string, unknown> = { ...row };
   for (const col of dropCols) {
     delete clone[col];
   }
   return clone;
+}
+
+function strip007Columns(
+  table: string,
+  row: Record<string, unknown>
+): Record<string, unknown> {
+  return stripColumns(row, OPTIONAL_007_COLUMNS_BY_TABLE[table] ?? []);
 }
 
 async function runWrite(
@@ -3096,7 +3208,33 @@ async function runUpsertWith007Fallback(
   await withFirebaseTokenRetry(async (client) => {
     const { error } = await client.from(table).upsert(row, { onConflict });
     if (!error) return;
-    if (isMissingColumnError(error) && OPTIONAL_007_COLUMNS_BY_TABLE[table]) {
+    const cols019 = OPTIONAL_019_COLUMNS_BY_TABLE[table] ?? [];
+    const cols007 = OPTIONAL_007_COLUMNS_BY_TABLE[table] ?? [];
+    if (isMissingColumnError(error) && (cols019.length > 0 || cols007.length > 0)) {
+      if (cols019.length > 0) {
+        const rowWithout019 = stripColumns(row, cols019);
+        const { error: err019 } = await client
+          .from(table)
+          .upsert(rowWithout019, { onConflict });
+        if (!err019) {
+          console.warn(
+            `Supabase table "${table}" is missing migration 019 columns; saved base columns while keeping local cache.`
+          );
+          return;
+        }
+        if (isMissingColumnError(err019) && cols007.length > 0) {
+          hasPending007Migration = true;
+          const rowLegacy = stripColumns(rowWithout019, cols007);
+          const { error: retryErr } = await client
+            .from(table)
+            .upsert(rowLegacy, { onConflict });
+          if (!retryErr) return;
+          console.error('Supabase fallback write error:', retryErr);
+          throw new Error(formatSupabaseErrorMessage(retryErr));
+        }
+        console.error('Supabase fallback write error:', err019);
+        throw new Error(formatSupabaseErrorMessage(err019));
+      }
       hasPending007Migration = true;
       console.warn(
         `Supabase table "${table}" is missing migration 007 columns; retrying with legacy schema:`,
@@ -3663,11 +3801,75 @@ export async function deleteLearningPathDoc(
   await runQueuedDelete({ uid, table: 'learning_paths', keyCol: 'id', keyVal: id });
 }
 
+type LocalReadingExtrasMap = Record<
+  string,
+  {
+    coverImageUrl?: string;
+    coverStoragePath?: string;
+    coverFrame?: ReadingLibraryItem['coverFrame'];
+    workspaceData?: BookWorkspaceData;
+  }
+>;
+
+function readLocalReadingExtrasMap(uid: string): LocalReadingExtrasMap {
+  if (typeof window === 'undefined' || !uid) return {};
+  try {
+    const raw = window.localStorage.getItem(`kb_reading_extras_${uid}`);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object'
+      ? (parsed as LocalReadingExtrasMap)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLocalReadingExtrasEntry(
+  uid: string,
+  itemId: string,
+  item?: ReadingLibraryItem | null
+): void {
+  if (typeof window === 'undefined' || !uid) return;
+  try {
+    const map = readLocalReadingExtrasMap(uid);
+    const cleanWs = item ? sanitizeBookWorkspaceData(item.workspaceData) : undefined;
+    if (
+      !item ||
+      (!item.coverImageUrl &&
+        !item.coverStoragePath &&
+        !item.coverFrame &&
+        !cleanWs)
+    ) {
+      delete map[itemId];
+    } else {
+      map[itemId] = {
+        ...(item.coverImageUrl ? { coverImageUrl: clip(item.coverImageUrl, 2000) } : {}),
+        ...(item.coverStoragePath
+          ? { coverStoragePath: clip(item.coverStoragePath, 500) }
+          : {}),
+        ...(item.coverFrame
+          ? {
+              coverFrame: sanitizeImageFrameSpec(
+                item.coverFrame,
+                DEFAULT_BOOK_COVER_FRAME
+              ),
+            }
+          : {}),
+        ...(cleanWs ? { workspaceData: cleanWs } : {}),
+      };
+    }
+    window.localStorage.setItem(`kb_reading_extras_${uid}`, JSON.stringify(map));
+  } catch {
+    // Ignore quota errors
+  }
+}
+
 export async function saveReadingItemDoc(
   uid: string,
   item: ReadingLibraryItem
 ): Promise<void> {
   const row = buildReadingItemRow(uid, item);
+  writeLocalReadingExtrasEntry(uid, row.id, item);
   await runQueuedUpsert({
     uid,
     table: 'reading_items',
@@ -3684,6 +3886,7 @@ export async function deleteReadingItemDoc(
   itemId: string
 ): Promise<void> {
   const id = sanitizeId(itemId);
+  writeLocalReadingExtrasEntry(uid, id, null);
   await runQueuedDelete({ uid, table: 'reading_items', keyCol: 'id', keyVal: id });
 }
 

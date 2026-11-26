@@ -188,6 +188,7 @@ import {
   subscribePublicSiteConfig,
   subscribeUserWorkspace,
 } from './services/supabaseSync';
+import { removeBookCoverStorage } from './utils/imageStorage';
 import { exportPlanToExcel } from './utils/excelExport';
 import {
   isAppOnline,
@@ -3065,6 +3066,9 @@ export default function App() {
         existing.storagePath
       );
     }
+    if (existing?.coverStoragePath) {
+      void removeBookCoverStorage(existing.coverStoragePath);
+    }
     setReadingItems((prev) => prev.filter((item) => item.id !== id));
     void deleteReadingItemDoc(user.uid, id);
   };
@@ -4447,6 +4451,9 @@ export default function App() {
             projects={projects}
             unifiedTasks={unifiedTasks}
             months={months}
+            bookNotes={bookNotes}
+            preferences={preferences}
+            onUpdatePreferences={handleUpdatePreferences}
             hubCategories={preferences.hubCategories ?? DEFAULT_HUB_CATEGORIES}
             activeHubFilter={activeHubFilter}
             onChangeHubFilter={setActiveHubFilter}
@@ -4459,6 +4466,7 @@ export default function App() {
             onOpenCalendar={() => navigateToTab('calendar')}
             onOpenTasksTab={() => navigateToTab('tasks')}
             onOpenPdf={setActivePdfTarget}
+            onOpenBookNote={(noteId) => handleOpenNoteById(noteId, false)}
             customReadingModes={preferences.customReadingModes}
             onUpdateReadingModes={(nextModes) =>
               handleUpdatePreferences({ customReadingModes: nextModes })

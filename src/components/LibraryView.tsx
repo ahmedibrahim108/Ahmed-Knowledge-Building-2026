@@ -1,26 +1,27 @@
 import { useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
-  ArrowRight,
   ArrowUp,
   ArrowUpDown,
   BookOpen,
-  Calendar,
-  CheckSquare,
-  Download,
   ExternalLink,
   Eye,
+  FileText,
   FileUp,
   Globe,
-  ListTodo,
-  Lock,
+  ImagePlus,
+  Layers,
   Plus,
   RefreshCw,
   Repeat,
-  Square,
+  SlidersHorizontal,
   Trash2,
 } from 'lucide-react';
 import {
+  BookNote,
+  DEFAULT_BOOK_COVER_FRAME,
+  DEFAULT_USER_PREFERENCES,
+  ImageFrameSpec,
   LEARNING_HUBS,
   LearningHubId,
   LearningPath,
@@ -34,6 +35,7 @@ import {
   ReadingMode,
   ReadingModeMeta,
   UnifiedTask,
+  UserPreferences,
   getHubMeta,
   getTodayDateKey,
   sortReadingItemsList,
@@ -42,17 +44,21 @@ import { auth } from '../firebase';
 import { formatSupabaseErrorMessage } from '../services/supabaseClient';
 import { CloudAttachmentItem } from '../services/supabaseSync';
 import {
-  downloadResourceAttachmentResult,
   isPdfAttachment,
   isViewableDocumentAttachment,
   uploadResourceAttachment,
 } from '../utils/documentImportExport';
+import {
+  isImageFile,
+  removeBookCoverStorage,
+  uploadBookCoverImage,
+} from '../utils/imageStorage';
+import { richHtmlToPlainText } from '../utils/richText';
 import BidiText from './BidiText';
+import BookWorkspaceModal from './BookWorkspaceModal';
 import ConfirmDialog from './ConfirmDialog';
-import LearningObjectivesPanel from './LearningObjectivesPanel';
+import { FramedImage, ImageFrameEditorModal } from './FramedImage';
 import type { ActivePdfTarget } from './PDFViewerModal';
-import SpacedRepetitionPanel from './SpacedRepetitionPanel';
-import TaskFormModal from './TaskFormModal';
 
 interface LibraryViewProps {
   uid?: string;
@@ -65,6 +71,9 @@ interface LibraryViewProps {
   projects?: PracticalProject[];
   unifiedTasks?: UnifiedTask[];
   months?: MonthPlan[];
+  bookNotes?: BookNote[];
+  preferences?: UserPreferences;
+  onUpdatePreferences?: (updates: Partial<UserPreferences>) => void;
   hubCategories: Record<LearningHubId, string[]>;
   activeHubFilter: LearningHubId | 'all';
   onChangeHubFilter: (hub: LearningHubId | 'all') => void;
@@ -77,6 +86,7 @@ interface LibraryViewProps {
   onOpenCalendar?: () => void;
   onOpenTasksTab?: () => void;
   onOpenPdf: (target: ActivePdfTarget) => void;
+  onOpenBookNote?: (noteId: string) => void;
   customReadingModes?: ReadingModeMeta[];
   onUpdateReadingModes?: (nextModes: ReadingModeMeta[]) => void;
 }
@@ -87,6 +97,36 @@ const STATUS_AR: Record<ReadingItemStatus, string> = {
   completed: 'مكتمل',
 };
 
+function getHubCoverTheme(hubId: LearningHubId): {
+  stageBg: string;
+  placeholderBg: string;
+  spineBorder: string;
+  accentText: string;
+} {
+  if (hubId === 'marketing') {
+    return {
+      stageBg: 'bg-amber-50/45',
+      placeholderBg: 'bg-gradient-to-br from-amber-50 via-white to-amber-100/70',
+      spineBorder: 'border-r-amber-700',
+      accentText: 'text-amber-900',
+    };
+  }
+  if (hubId === 'dental_career') {
+    return {
+      stageBg: 'bg-emerald-50/45',
+      placeholderBg: 'bg-gradient-to-br from-emerald-50 via-white to-teal-100/70',
+      spineBorder: 'border-r-emerald-700',
+      accentText: 'text-emerald-900',
+    };
+  }
+  return {
+    stageBg: 'bg-slate-100/60',
+    placeholderBg: 'bg-gradient-to-br from-[#F7F4EC] via-white to-slate-100',
+    spineBorder: 'border-r-[#1E3A5F]',
+    accentText: 'text-[#1E3A5F]',
+  };
+}
+
 export default function LibraryView({
   uid,
   canEdit,
@@ -96,6 +136,9 @@ export default function LibraryView({
   learningPaths = [],
   projects = [],
   unifiedTasks = [],
+  bookNotes = [],
+  preferences = DEFAULT_USER_PREFERENCES,
+  onUpdatePreferences,
   hubCategories,
   activeHubFilter,
   onChangeHubFilter,
@@ -108,6 +151,7 @@ export default function LibraryView({
   onOpenCalendar,
   onOpenTasksTab,
   onOpenPdf,
+  onOpenBookNote,
   customReadingModes,
   onUpdateReadingModes,
 }: LibraryViewProps) {
@@ -120,11 +164,6 @@ export default function LibraryView({
   const [onlyRepeated, setOnlyRepeated] = useState(false);
   const [onlyDueToday, setOnlyDueToday] = useState(false);
   const [sortMode, setSortMode] = useState<'manual' | 'stage' | 'title'>('manual');
-  const [taskModalState, setTaskModalState] = useState<{
-    open: boolean;
-    initialTask: UnifiedTask | null;
-    prefill?: Partial<UnifiedTask>;
-  }>({ open: false, initialTask: null });
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [title, setTitle] = useState('');
@@ -137,27 +176,37 @@ export default function LibraryView({
   const [totalPages, setTotalPages] = useState('');
   const [externalUrl, setExternalUrl] = useState('');
   const [takeaways, setTakeaways] = useState('');
+
+  // Pending Cover Upload on Add Form
+  const [pendingCoverUrl, setPendingCoverUrl] = useState('');
+  const [pendingCoverStoragePath, setPendingCoverStoragePath] = useState<
+    string | undefined
+  >();
+  const [pendingCoverFrame, setPendingCoverFrame] = useState<ImageFrameSpec>(
+    DEFAULT_BOOK_COVER_FRAME
+  );
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [coverUploadError, setCoverUploadError] = useState<string | null>(null);
+  const [coverFrameEditorOpen, setCoverFrameEditorOpen] = useState(false);
+  const coverFileRef = useRef<HTMLInputElement | null>(null);
+
+  // Pending PDF/Doc Upload on Add Form
   const [uploadingFile, setUploadingFile] = useState(false);
   const [uploadProgressPct, setUploadProgressPct] = useState<number>(0);
   const [uploadStatusMsg, setUploadStatusMsg] = useState<{
     ok: boolean;
     text: string;
   } | null>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [lastPickedFile, setLastPickedFile] = useState<File | null>(null);
-  const [lastReplaceTarget, setLastReplaceTarget] = useState<{
-    file: File;
-    itemId: string;
-  } | null>(null);
   const [pendingResId, setPendingResId] = useState('');
   const [pendingFileName, setPendingFileName] = useState('');
   const [pendingStoragePath, setPendingStoragePath] = useState<string | undefined>();
   const [pendingDownloadUrl, setPendingDownloadUrl] = useState<string | undefined>();
   const [confirmDelete, setConfirmDelete] = useState<ReadingLibraryItem | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const replaceFileRef = useRef<HTMLInputElement | null>(null);
 
   const today = getTodayDateKey();
+  const resolvedUid = uid || auth?.currentUser?.uid;
 
   const filteredItems = useMemo(() => {
     const base = items.filter((item) => {
@@ -185,6 +234,11 @@ export default function LibraryView({
     return sortReadingItemsList(base, sortMode);
   }, [items, activeHubFilter, modeFilter, onlyRepeated, onlyDueToday, today, sortMode]);
 
+  const selectedItem = useMemo(
+    () => items.find((i) => i.id === selectedItemId) ?? null,
+    [items, selectedItemId]
+  );
+
   const handleMoveItemOrder = (itemId: string, dir: -1 | 1) => {
     if (!canEdit) {
       onRequireAuth();
@@ -204,10 +258,34 @@ export default function LibraryView({
     });
   };
 
-  const selectedItem = useMemo(
-    () => items.find((i) => i.id === selectedItemId) ?? null,
-    [items, selectedItemId]
-  );
+  const handlePickAddCover = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!isImageFile(file)) {
+      setCoverUploadError('يرجى اختيار ملف صورة صالح للغلاف.');
+      return;
+    }
+    setUploadingCover(true);
+    setCoverUploadError(null);
+    try {
+      const tempId = `new_${Date.now()}`;
+      const res = await uploadBookCoverImage(tempId, file, resolvedUid);
+      setPendingCoverUrl(res.imageUrl || res.localObjectUrl);
+      setPendingCoverStoragePath(res.imageStoragePath || undefined);
+      setPendingCoverFrame(DEFAULT_BOOK_COVER_FRAME);
+      setCoverFrameEditorOpen(true);
+    } catch (err) {
+      setCoverUploadError(
+        formatSupabaseErrorMessage(
+          err,
+          'تعذر رفع صورة الغلاف. حاول مرة أخرى.'
+        )
+      );
+    } finally {
+      setUploadingCover(false);
+    }
+  };
 
   const performPickUpload = async (file: File) => {
     setLastPickedFile(file);
@@ -216,9 +294,8 @@ export default function LibraryView({
     setUploadStatusMsg(null);
     try {
       const resId = `lib-res-${Date.now()}`;
-      const effectiveUid = uid || auth?.currentUser?.uid;
       const uploaded = await uploadResourceAttachment(
-        effectiveUid,
+        resolvedUid,
         resId,
         file,
         undefined,
@@ -270,64 +347,6 @@ export default function LibraryView({
     await performPickUpload(file);
   };
 
-  const performReplaceUpload = async (file: File, item: ReadingLibraryItem) => {
-    setLastReplaceTarget({ file, itemId: item.id });
-    setUploadingFile(true);
-    setUploadProgressPct(0);
-    setDownloadError(null);
-    try {
-      const resId = item.attachmentResourceId || `lib-res-${Date.now()}`;
-      const effectiveUid = uid || auth?.currentUser?.uid;
-      const uploaded = await uploadResourceAttachment(
-        effectiveUid,
-        resId,
-        file,
-        undefined,
-        (pct) => setUploadProgressPct(pct)
-      );
-      onUpdateItem(item.id, {
-        attachmentName: file.name,
-        attachmentResourceId: resId,
-        storagePath: uploaded.storagePath,
-        downloadUrl: uploaded.downloadUrl,
-        ...(isPdfAttachment(file.name, file.type)
-          ? { itemType: 'ملف PDF' as ReadingItemType }
-          : {}),
-      });
-      if (uploaded.uploadedToCloud) {
-        setLastReplaceTarget(null);
-      } else {
-        setDownloadError(
-          uploaded.errorMessage ||
-            'تم ربط الملف محليًا فقط، تعذر رفعه للسحابة. جرّب إعادة المحاولة.'
-        );
-      }
-    } catch (err) {
-      setDownloadError(
-        formatSupabaseErrorMessage(
-          err,
-          'تعذر رفع الملف للسحابة. يمكنك إعادة المحاولة.'
-        )
-      );
-    } finally {
-      setUploadingFile(false);
-    }
-  };
-
-  const handleReplaceSelectedItemPdf = async (
-    e: React.ChangeEvent<HTMLInputElement>,
-    item: ReadingLibraryItem
-  ) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    if (!canEdit) {
-      onRequireAuth();
-      return;
-    }
-    await performReplaceUpload(file, item);
-  };
-
   const handleCreate = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canEdit) {
@@ -347,6 +366,9 @@ export default function LibraryView({
       currentPage: 0,
       totalPages: Math.max(0, parseInt(totalPages, 10) || 0),
       takeaways: takeaways.trim(),
+      coverImageUrl: pendingCoverUrl || undefined,
+      coverStoragePath: pendingCoverStoragePath || undefined,
+      coverFrame: pendingCoverUrl ? pendingCoverFrame : undefined,
       attachmentName: pendingFileName || undefined,
       attachmentResourceId: pendingResId || undefined,
       storagePath: pendingStoragePath,
@@ -368,6 +390,10 @@ export default function LibraryView({
     setTotalPages('');
     setExternalUrl('');
     setTakeaways('');
+    setPendingCoverUrl('');
+    setPendingCoverStoragePath(undefined);
+    setPendingCoverFrame(DEFAULT_BOOK_COVER_FRAME);
+    setCoverUploadError(null);
     setPendingResId('');
     setPendingFileName('');
     setPendingStoragePath(undefined);
@@ -375,451 +401,6 @@ export default function LibraryView({
     setUploadStatusMsg(null);
     setShowAddForm(false);
   };
-
-  // Dedicated Single Library Item View
-  if (selectedItem) {
-    const hubMeta = getHubMeta(selectedItem.hubId);
-    const hasAttachedFile =
-      Boolean(selectedItem.attachmentName) ||
-      Boolean(selectedItem.downloadUrl) ||
-      Boolean(selectedItem.storagePath);
-    const isPdf =
-      isPdfAttachment(selectedItem.attachmentName) ||
-      (!selectedItem.attachmentName &&
-        Boolean(selectedItem.downloadUrl || selectedItem.storagePath) &&
-        selectedItem.itemType === 'ملف PDF');
-    const isViewable =
-      hasAttachedFile &&
-      (isPdf ||
-        isViewableDocumentAttachment(selectedItem.attachmentName) ||
-        Boolean(selectedItem.attachmentResourceId));
-    const resolvedUid = uid || auth?.currentUser?.uid;
-    const linkedBookTasks = unifiedTasks.filter(
-      (ut) =>
-        ut.linkedBookId === selectedItem.id ||
-        ut.projectId === `book:${selectedItem.id}` ||
-        ut.projectId?.startsWith(`book:${selectedItem.id}:`)
-    );
-
-    return (
-      <div className="space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={() => setSelectedItemId(null)}
-            className="inline-flex items-center gap-2 px-4 py-2 min-h-[40px] text-xs font-semibold text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
-          >
-            <ArrowRight className="w-4 h-4" aria-hidden="true" />
-            <span>العودة إلى مكتبة القراءة والملفات</span>
-          </button>
-
-          {canEdit && (
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  onUpdateItem(selectedItem.id, {
-                    isPublic: !selectedItem.isPublic,
-                  })
-                }
-                className={`inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] text-xs font-semibold rounded-lg border cursor-pointer ${
-                  selectedItem.isPublic
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                {selectedItem.isPublic ? (
-                  <Globe className="w-3.5 h-3.5" aria-hidden="true" />
-                ) : (
-                  <Lock className="w-3.5 h-3.5" aria-hidden="true" />
-                )}
-                <span>
-                  {selectedItem.isPublic ? 'منشور في الموقع العام' : 'مادة خاصة'}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(selectedItem)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 min-h-[40px] text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded-lg cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>حذف المادة</span>
-              </button>
-            </div>
-          )}
-        </div>
-
-        <section className="bg-white border border-slate-200 rounded-xl p-6 sm:p-8 space-y-6">
-          <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-slate-100 pb-5">
-            <div className="space-y-2 max-w-3xl">
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span
-                  className={`px-2.5 py-0.5 font-semibold border rounded-md ${hubMeta.badgeClass}`}
-                >
-                  {hubMeta.title}
-                </span>
-                <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md">
-                  {selectedItem.itemType}
-                </span>
-                {selectedItem.categoryLabel && (
-                  <span className="text-slate-600">· {selectedItem.categoryLabel}</span>
-                )}
-              </div>
-              <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900">
-                {selectedItem.title}
-              </h1>
-              {selectedItem.author && (
-                <p className="text-sm text-slate-600">
-                  المؤلف / المصدر: {selectedItem.author}
-                </p>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              {hasAttachedFile && isViewable && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDownloadError(null);
-                    onOpenPdf({
-                      uid: resolvedUid,
-                      title: selectedItem.title,
-                      fileName:
-                        selectedItem.attachmentName ||
-                        `${selectedItem.title}.pdf`,
-                      resourceId: selectedItem.attachmentResourceId,
-                      storagePath: selectedItem.storagePath,
-                      downloadUrl: selectedItem.downloadUrl,
-                      extractedPreview: selectedItem.takeaways || undefined,
-                      contextLabel: `مكتبة القراءة · ${hubMeta.title}`,
-                    });
-                  }}
-                  className="inline-flex items-center gap-1.5 px-4 py-2.5 min-h-[40px] text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg cursor-pointer"
-                >
-                  <Eye className="w-4 h-4" aria-hidden="true" />
-                  <span>
-                    {isPdf
-                      ? 'فتح وقراءة PDF داخل المنصة'
-                      : 'فتح وقراءة المستند داخل المنصة'}
-                  </span>
-                </button>
-              )}
-              {hasAttachedFile && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setDownloadError(null);
-                    const result = await downloadResourceAttachmentResult({
-                      uid: resolvedUid,
-                      resourceId: selectedItem.attachmentResourceId,
-                      fileName:
-                        selectedItem.attachmentName ||
-                        `${selectedItem.title}.pdf`,
-                      storagePath: selectedItem.storagePath,
-                      downloadUrl: selectedItem.downloadUrl,
-                    });
-                    if (!result.ok && result.errorMessage) {
-                      setDownloadError(result.errorMessage);
-                    }
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>{isPdf ? 'تنزيل PDF' : 'تنزيل الملف'}</span>
-                </button>
-              )}
-              {canEdit && (
-                <>
-                  <input
-                    ref={replaceFileRef}
-                    type="file"
-                    accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword,.txt,text/plain,.md,.markdown"
-                    className="hidden"
-                    onChange={(e) =>
-                      void handleReplaceSelectedItemPdf(e, selectedItem)
-                    }
-                  />
-                  <button
-                    type="button"
-                    disabled={uploadingFile}
-                    onClick={() => replaceFileRef.current?.click()}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2.5 min-h-[40px] text-xs font-medium text-[#1E3A5F] bg-slate-50 border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer disabled:opacity-60"
-                  >
-                    <FileUp className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>
-                      {uploadingFile
-                        ? `جاري الرفع ${uploadProgressPct}%...`
-                        : hasAttachedFile
-                        ? 'تحديث / استبدال الملف'
-                        : 'إرفاق PDF / ملف (حتى 100 ميجا)'}
-                    </span>
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-
-          {downloadError && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex flex-wrap items-center justify-between gap-2">
-              <span>{downloadError}</span>
-              <div className="flex items-center gap-2">
-                {lastReplaceTarget && lastReplaceTarget.itemId === selectedItem.id && (
-                  <button
-                    type="button"
-                    disabled={uploadingFile}
-                    onClick={() =>
-                      void performReplaceUpload(lastReplaceTarget.file, selectedItem)
-                    }
-                    className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-200/70 hover:bg-amber-200 text-amber-950 font-semibold rounded cursor-pointer"
-                  >
-                    <RefreshCw className="w-3 h-3" aria-hidden="true" />
-                    <span>إعادة المحاولة</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setDownloadError(null)}
-                  className="text-amber-700 hover:text-amber-950 font-semibold cursor-pointer"
-                >
-                  إغلاق
-                </button>
-              </div>
-            </div>
-          )}
-
-          <LearningObjectivesPanel
-            objectives={selectedItem.learningObjectives}
-            canEdit={canEdit}
-            onChange={(next) =>
-              onUpdateItem(selectedItem.id, { learningObjectives: next })
-            }
-          />
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <label className="block text-xs font-medium text-slate-700">
-              حالة القراءة
-              <select
-                disabled={!canEdit}
-                value={selectedItem.status}
-                onChange={(e) =>
-                  onUpdateItem(selectedItem.id, {
-                    status: e.target.value as ReadingItemStatus,
-                  })
-                }
-                className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg"
-              >
-                <option value="to_read">للقراءة</option>
-                <option value="reading">أقرؤه حاليًا</option>
-                <option value="completed">مكتمل</option>
-              </select>
-            </label>
-            <label className="block text-xs font-medium text-slate-700">
-              الصفحة الحالية (اختياري)
-              <input
-                type="number"
-                min={0}
-                disabled={!canEdit}
-                value={selectedItem.currentPage}
-                onChange={(e) =>
-                  onUpdateItem(selectedItem.id, {
-                    currentPage: Math.max(0, parseInt(e.target.value, 10) || 0),
-                  })
-                }
-                className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg tabular-nums"
-              />
-            </label>
-            <label className="block text-xs font-medium text-slate-700">
-              إجمالي الصفحات (اختياري)
-              <input
-                type="number"
-                min={0}
-                disabled={!canEdit}
-                value={selectedItem.totalPages}
-                onChange={(e) =>
-                  onUpdateItem(selectedItem.id, {
-                    totalPages: Math.max(0, parseInt(e.target.value, 10) || 0),
-                  })
-                }
-                className="mt-1 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-300 rounded-lg tabular-nums"
-              />
-            </label>
-          </div>
-
-          <label className="block text-xs font-semibold text-slate-700">
-            أهم الأفكار والملخصات (اختياري)
-            <textarea
-              rows={5}
-              readOnly={!canEdit}
-              value={selectedItem.takeaways}
-              onChange={(e) =>
-                onUpdateItem(selectedItem.id, { takeaways: e.target.value })
-              }
-              placeholder="دوّن خلاصة ما استوعبته أو نقاط التطبيق..."
-              className="mt-1.5 w-full px-4 py-3 text-sm bg-slate-50 border border-slate-300 rounded-xl leading-relaxed"
-            />
-          </label>
-
-          <SpacedRepetitionPanel
-            canEdit={canEdit}
-            value={selectedItem}
-            onChange={(updates) => onUpdateItem(selectedItem.id, updates)}
-            customReadingModes={customReadingModes}
-            onUpdateReadingModes={onUpdateReadingModes}
-          />
-
-          {/* Linked Unified Tasks for this Book / Library Material */}
-          <div className="space-y-3 pt-4 border-t border-slate-100">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                <ListTodo className="w-4 h-4 text-[#1E3A5F]" aria-hidden="true" />
-                <span>المهام وجدولة القراءة المرتبطة ({linkedBookTasks.length})</span>
-              </h2>
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                {canEdit && onAddUnifiedTask && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setTaskModalState({
-                        open: true,
-                        initialTask: null,
-                        prefill: {
-                          hubId: selectedItem.hubId,
-                          linkedBookId: selectedItem.id,
-                          linkedLabel: selectedItem.title,
-                          projectId: `book:${selectedItem.id}`,
-                        },
-                      })
-                    }
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                    <span>إنشاء مهمة مرتبطة بالكتاب</span>
-                  </button>
-                )}
-                {onOpenTasksTab && (
-                  <button
-                    type="button"
-                    onClick={onOpenTasksTab}
-                    className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-                  >
-                    كل المهام ←
-                  </button>
-                )}
-                {onOpenCalendar && (
-                  <button
-                    type="button"
-                    onClick={onOpenCalendar}
-                    className="font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-                  >
-                    التقويم ←
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {linkedBookTasks.length === 0 ? (
-              <p className="text-xs text-slate-500">
-                لا توجد مهام مجدولة لهذا الكتاب أو الملف بعد.
-              </p>
-            ) : (
-              <div className="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden">
-                {linkedBookTasks.map((ut) => {
-                  const isDone = ut.status === 'done';
-                  return (
-                    <div
-                      key={ut.id}
-                      className="px-3.5 py-2.5 bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-                    >
-                      <button
-                        type="button"
-                        disabled={!canEdit || !onUpdateUnifiedTask}
-                        onClick={() =>
-                          onUpdateUnifiedTask?.(ut.id, {
-                            status: isDone ? 'todo' : 'done',
-                          })
-                        }
-                        className="flex items-start gap-2.5 text-right flex-1 min-w-0 cursor-pointer disabled:opacity-60"
-                      >
-                        {isDone ? (
-                          <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" aria-hidden="true" />
-                        ) : (
-                          <Square className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" aria-hidden="true" />
-                        )}
-                        <span
-                          className={`text-xs leading-relaxed break-words min-w-0 ${
-                            isDone ? 'line-through text-slate-400' : 'text-slate-800 font-medium'
-                          }`}
-                        >
-                          {ut.title}
-                        </span>
-                      </button>
-                      <div className="flex items-center gap-2 pr-6 sm:pr-0 shrink-0">
-                        {(ut.scheduledDate || ut.dueDate) && (
-                          <span className="inline-flex items-center gap-1 text-[11px] text-[#1E3A5F] font-medium tabular-nums">
-                            <Calendar className="w-3 h-3" aria-hidden="true" />
-                            {ut.scheduledDate || ut.dueDate}
-                            {ut.startTime ? ` · ${ut.startTime}` : ''}
-                          </span>
-                        )}
-                        {canEdit && onUpdateUnifiedTask && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setTaskModalState({
-                                open: true,
-                                initialTask: ut,
-                              })
-                            }
-                            className="px-2 py-1 text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
-                          >
-                            تعديل
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </section>
-
-        <ConfirmDialog
-          open={Boolean(confirmDelete)}
-          title="تأكيد حذف المادة"
-          message={`هل تريد حذف «${confirmDelete?.title ?? ''}» من مكتبة القراءة؟`}
-          onConfirm={() => {
-            if (confirmDelete) {
-              onDeleteItem(confirmDelete.id);
-              setConfirmDelete(null);
-              setSelectedItemId(null);
-            }
-          }}
-          onCancel={() => setConfirmDelete(null)}
-        />
-
-        <TaskFormModal
-          open={taskModalState.open}
-          onClose={() => setTaskModalState({ open: false, initialTask: null })}
-          initialTask={taskModalState.initialTask}
-          prefill={taskModalState.prefill}
-          courses={courses}
-          learningPaths={learningPaths}
-          readingItems={items}
-          projects={projects}
-          hubCategories={hubCategories}
-          onSubmit={(payload, existingId) => {
-            if (existingId && onUpdateUnifiedTask) {
-              onUpdateUnifiedTask(existingId, payload);
-            } else if (onAddUnifiedTask) {
-              onAddUnifiedTask(payload);
-            }
-          }}
-          onDelete={onDeleteUnifiedTask}
-        />
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
@@ -832,7 +413,7 @@ export default function LibraryView({
             مكتبة القراءة والمعرفة الموحدة ({items.length})
           </h1>
           <p className="text-sm text-slate-600 leading-relaxed">
-            اجمع كتبك ومقالاتك وملفات الـ PDF عبر الماركتينج والدنتال والثقافة، واقرأ الـ PDF مباشرة داخل المنصة مع متابعة أنماط القراءة والتكرار المتباعد.
+            اجمع كتبك ومقالاتك وملفات الـ PDF، واضغط على أي كتاب لفتح مساحة القراءة والتدوين التفاعلية مع ملخصات الفصول والاقتباسات والتكرار المتباعد.
           </p>
         </div>
 
@@ -1030,6 +611,81 @@ export default function LibraryView({
             </label>
           </div>
 
+          {/* Book Cover Upload Picker */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center gap-3">
+            <input
+              ref={coverFileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => void handlePickAddCover(e)}
+            />
+            {pendingCoverUrl ? (
+              <div className="w-16 shrink-0">
+                <FramedImage
+                  srcUrl={pendingCoverUrl}
+                  storagePath={pendingCoverStoragePath}
+                  frame={{
+                    ...pendingCoverFrame,
+                    customHeightPx: undefined,
+                    aspect: pendingCoverFrame.aspect || '3:4',
+                  }}
+                  defaultFrame={DEFAULT_BOOK_COVER_FRAME}
+                  alt="معاينة غلاف الكتاب"
+                  mode="card"
+                  className="rounded-md ring-1 ring-black/10"
+                />
+              </div>
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+              <button
+                type="button"
+                disabled={uploadingCover}
+                onClick={() => coverFileRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-100 rounded-lg cursor-pointer disabled:opacity-60"
+              >
+                <ImagePlus className="w-4 h-4" aria-hidden="true" />
+                <span>
+                  {uploadingCover
+                    ? 'جاري رفع صورة الغلاف...'
+                    : pendingCoverUrl
+                    ? 'تغيير صورة الغلاف'
+                    : 'إضافة صورة غلاف الكتاب (اختياري)'}
+                </span>
+              </button>
+              {pendingCoverUrl && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setCoverFrameEditorOpen(true)}
+                    className="inline-flex items-center gap-1 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg cursor-pointer"
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>تعديل إطار الغلاف</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (pendingCoverStoragePath) {
+                        void removeBookCoverStorage(pendingCoverStoragePath);
+                      }
+                      setPendingCoverUrl('');
+                      setPendingCoverStoragePath(undefined);
+                    }}
+                    className="px-2.5 py-2 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"
+                  >
+                    إزالة
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+          {coverUploadError && (
+            <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              {coverUploadError}
+            </p>
+          )}
+
           <div className="flex flex-wrap items-center gap-3">
             <input
               ref={fileRef}
@@ -1106,7 +762,7 @@ export default function LibraryView({
             </button>
             <button
               type="submit"
-              disabled={uploadingFile}
+              disabled={uploadingFile || uploadingCover}
               className="px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] rounded-lg cursor-pointer disabled:opacity-50"
             >
               حفظ المادة
@@ -1129,6 +785,8 @@ export default function LibraryView({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredItems.map((item, itemIdx) => {
             const hubMeta = getHubMeta(item.hubId);
+            const coverTheme = getHubCoverTheme(item.hubId);
+            const hasCover = Boolean(item.coverImageUrl || item.coverStoragePath);
             const hasAttachedFile =
               Boolean(item.attachmentName) ||
               Boolean(item.downloadUrl) ||
@@ -1144,169 +802,318 @@ export default function LibraryView({
                 isViewableDocumentAttachment(item.attachmentName) ||
                 Boolean(item.attachmentResourceId));
             const due = Boolean(item.nextReviewDateKey && item.nextReviewDateKey <= today);
-            const resolvedUid = uid || auth?.currentUser?.uid;
+            const progressPct =
+              item.totalPages > 0
+                ? Math.min(100, Math.round((item.currentPage / item.totalPages) * 100))
+                : 0;
+            const ws = item.workspaceData;
+            const chaptersCount = ws?.chapters?.length ?? 0;
+            const hasWorkspaceContent =
+              Boolean(richHtmlToPlainText(ws?.notesHtml || item.takeaways || '')) ||
+              Boolean(richHtmlToPlainText(ws?.insightsHtml || '')) ||
+              Boolean(richHtmlToPlainText(ws?.quotesHtml || '')) ||
+              chaptersCount > 0;
 
             return (
               <article
                 key={item.id}
-                className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-4"
+                onClick={() => setSelectedItemId(item.id)}
+                className="group bg-white border border-slate-200 hover:border-[#1E3A5F]/45 rounded-xl overflow-hidden flex flex-col cursor-pointer transition-all hover:shadow-sm"
               >
-                <div className="space-y-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+                {/* Book Cover / Placeholder Showcase Band */}
+                <div
+                  className={`relative h-52 sm:h-56 px-4 pt-10 pb-4 border-b border-slate-100 flex items-center justify-center ${coverTheme.stageBg}`}
+                >
+                  {/* Top floating meta badges */}
+                  <div className="absolute top-2.5 inset-x-3 flex items-center justify-between gap-1.5 text-[11px] pointer-events-none">
                     <span
                       className={`px-2 py-0.5 font-semibold border rounded-md ${hubMeta.badgeClass}`}
                     >
                       {hubMeta.shortTitle}
                     </span>
-                    <div className="flex items-center gap-1.5 text-slate-500">
+                    <div className="flex items-center gap-1">
                       {item.isPublic && (
                         <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-[10px] font-medium">
                           <Globe className="w-2.5 h-2.5" aria-hidden="true" />
                           عام
                         </span>
                       )}
-                      <span>
-                        {item.itemType} · {STATUS_AR[item.status]}
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                          item.status === 'completed'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : item.status === 'reading'
+                            ? 'bg-sky-50 text-sky-800 border-sky-200'
+                            : 'bg-white text-slate-600 border-slate-200'
+                        }`}
+                      >
+                        {STATUS_AR[item.status]}
                       </span>
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setSelectedItemId(item.id)}
-                    className="text-right block w-full cursor-pointer group"
-                  >
-                    <h2 className="text-base font-bold text-slate-900 group-hover:text-[#1E3A5F]">
-                      <BidiText text={item.title} />
-                    </h2>
-                  </button>
-
-                  {item.author && (
-                    <p className="text-xs text-slate-500">
-                      <BidiText text={item.author} />
-                    </p>
-                  )}
-
-                  {(item.readingModes?.length ?? 0) > 0 && (
-                    <div className="flex flex-wrap gap-1">
-                      {item.readingModes.map((m) => {
-                        const meta = readingModesList.find((rm) => rm.id === m);
-                        return (
-                          <span
-                            key={m}
-                            className="px-2 py-0.5 text-[10px] font-semibold bg-slate-100 text-slate-700 rounded-md"
-                          >
-                            {meta?.label ?? m}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {(due || item.listenCount >= 2 || item.reviewCount >= 2) && (
-                    <div className="flex flex-wrap gap-1.5 text-[10px]">
-                      {due && (
-                        <span className="px-2 py-0.5 bg-rose-50 text-rose-800 border border-rose-200 rounded-md font-semibold">
-                          مراجعة اليوم
+                  {/* Book Cover Spine Sleeve */}
+                  <div className="w-[114px] sm:w-[122px] shrink-0 transition-transform duration-200 group-hover:scale-[1.03]">
+                    {hasCover ? (
+                      <FramedImage
+                        srcUrl={item.coverImageUrl}
+                        storagePath={item.coverStoragePath}
+                        frame={{
+                          ...(item.coverFrame ?? DEFAULT_BOOK_COVER_FRAME),
+                          customHeightPx: undefined,
+                          aspect: item.coverFrame?.aspect || '3:4',
+                        }}
+                        defaultFrame={DEFAULT_BOOK_COVER_FRAME}
+                        alt={item.title}
+                        mode="card"
+                        className="rounded-r-lg rounded-l-sm shadow-md ring-1 ring-black/10"
+                      />
+                    ) : (
+                      <div
+                        data-custom-card-surface="light"
+                        className={`aspect-[3/4] w-full rounded-r-lg rounded-l-sm border border-slate-200 border-r-4 shadow-sm flex flex-col justify-between p-2.5 text-center ${coverTheme.placeholderBg} ${coverTheme.spineBorder}`}
+                      >
+                        <div className="flex items-center justify-center gap-1 text-[9px] font-semibold text-slate-500">
+                          <BookOpen className="w-3 h-3" aria-hidden="true" />
+                          <span className="truncate">{item.itemType}</span>
+                        </div>
+                        <p
+                          className={`font-editorial text-xs font-bold leading-snug line-clamp-3 ${coverTheme.accentText}`}
+                        >
+                          <BidiText text={item.title} />
+                        </p>
+                        <span className="text-[9px] text-slate-500 truncate">
+                          {item.author || hubMeta.shortTitle}
                         </span>
-                      )}
-                      {item.listenCount >= 2 && (
-                        <span className="px-2 py-0.5 bg-amber-50 text-amber-900 border border-amber-200 rounded-md font-semibold">
-                          مسموع {item.listenCount}×
-                        </span>
-                      )}
-                      {item.reviewCount >= 2 && (
-                        <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-md font-semibold">
-                          مراجعة {item.reviewCount}×
-                        </span>
-                      )}
-                    </div>
-                  )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedItemId(item.id)}
-                      className="text-xs font-semibold text-[#1E3A5F] hover:underline cursor-pointer"
-                    >
-                      التفاصيل والتكرار ←
-                    </button>
-                    {isViewable && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onOpenPdf({
-                            uid: resolvedUid,
-                            title: item.title,
-                            fileName:
-                              item.attachmentName || `${item.title}.pdf`,
-                            resourceId: item.attachmentResourceId,
-                            storagePath: item.storagePath,
-                            downloadUrl: item.downloadUrl,
-                            extractedPreview: item.takeaways || undefined,
-                            contextLabel: `مكتبة القراءة · ${hubMeta.shortTitle}`,
-                          })
-                        }
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md cursor-pointer"
-                      >
-                        <Eye className="w-3 h-3" aria-hidden="true" />
-                        <span>{isPdf ? 'فتح PDF' : 'فتح الملف'}</span>
-                      </button>
+                {/* Card Details & Actions */}
+                <div className="p-4 sm:p-5 flex-1 flex flex-col justify-between gap-3.5">
+                  <div className="space-y-2">
+                    <div className="space-y-1">
+                      <h2 className="text-base font-bold text-slate-900 group-hover:text-[#1E3A5F] line-clamp-2 leading-snug">
+                        <BidiText text={item.title} />
+                      </h2>
+                      {item.author && (
+                        <p className="text-xs text-slate-500 truncate">
+                          <BidiText text={item.author} />
+                        </p>
+                      )}
+                    </div>
+
+                    {item.totalPages > 0 && (
+                      <div className="space-y-1 pt-0.5">
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 tabular-nums">
+                          <span>
+                            {item.currentPage} / {item.totalPages} ص
+                          </span>
+                          <span className="font-semibold text-[#1E3A5F]">
+                            {progressPct}%
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-[#1E3A5F] transition-all"
+                            style={{ width: `${progressPct}%` }}
+                          />
+                        </div>
+                      </div>
                     )}
-                    {!hasAttachedFile && item.externalUrl && (
-                      <a
-                        href={item.externalUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-1 text-[#1E3A5F] hover:underline"
-                        aria-label="فتح الرابط الخارجي"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
-                      </a>
+
+                    {(item.readingModes?.length ?? 0) > 0 && (
+                      <div className="flex flex-wrap gap-1 pt-0.5">
+                        {item.readingModes.map((m) => {
+                          const meta = readingModesList.find((rm) => rm.id === m);
+                          return (
+                            <span
+                              key={m}
+                              className="px-2 py-0.5 text-[10px] font-semibold bg-slate-100 text-slate-700 rounded-md"
+                            >
+                              {meta?.label ?? m}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {(due ||
+                      item.listenCount >= 2 ||
+                      item.reviewCount >= 2 ||
+                      hasWorkspaceContent) && (
+                      <div className="flex flex-wrap gap-1.5 text-[10px]">
+                        {due && (
+                          <span className="px-2 py-0.5 bg-rose-50 text-rose-800 border border-rose-200 rounded-md font-semibold">
+                            مراجعة اليوم
+                          </span>
+                        )}
+                        {item.listenCount >= 2 && (
+                          <span className="px-2 py-0.5 bg-amber-50 text-amber-900 border border-amber-200 rounded-md font-semibold">
+                            مسموع {item.listenCount}×
+                          </span>
+                        )}
+                        {item.reviewCount >= 2 && (
+                          <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-md font-semibold">
+                            مراجعة {item.reviewCount}×
+                          </span>
+                        )}
+                        {chaptersCount > 0 && (
+                          <span className="inline-flex items-center gap-0.5 px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">
+                            <Layers className="w-2.5 h-2.5" aria-hidden="true" />
+                            {chaptersCount} فصول
+                          </span>
+                        )}
+                        {hasWorkspaceContent && chaptersCount === 0 && (
+                          <span className="inline-flex items-center gap-0.5 px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">
+                            <FileText className="w-2.5 h-2.5" aria-hidden="true" />
+                            ملاحظات مدوّنة
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
 
-                  {canEdit && (
-                    <div className="flex items-center gap-1">
-                      {sortMode === 'manual' && (
-                        <>
-                          <button
-                            type="button"
-                            disabled={itemIdx === 0}
-                            onClick={() => handleMoveItemOrder(item.id, -1)}
-                            aria-label="تقديم المادة"
-                            className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
-                          >
-                            <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={itemIdx === filteredItems.length - 1}
-                            onClick={() => handleMoveItemOrder(item.id, 1)}
-                            aria-label="تأخير المادة"
-                            className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
-                          >
-                            <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
-                          </button>
-                        </>
+                  {/* Card Footer */}
+                  <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-[#1E3A5F] group-hover:underline">
+                        مساحة القراءة والتدوين ←
+                      </span>
+                      {isViewable && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenPdf({
+                              uid: resolvedUid,
+                              title: item.title,
+                              fileName:
+                                item.attachmentName || `${item.title}.pdf`,
+                              resourceId: item.attachmentResourceId,
+                              storagePath: item.storagePath,
+                              downloadUrl: item.downloadUrl,
+                              extractedPreview:
+                                richHtmlToPlainText(
+                                  item.workspaceData?.notesHtml || ''
+                                ) ||
+                                item.takeaways ||
+                                undefined,
+                              contextLabel: `مكتبة القراءة · ${hubMeta.shortTitle}`,
+                            });
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-md cursor-pointer"
+                        >
+                          <Eye className="w-3 h-3" aria-hidden="true" />
+                          <span>{isPdf ? 'فتح PDF' : 'فتح الملف'}</span>
+                        </button>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => setConfirmDelete(item)}
-                        aria-label={`حذف ${item.title}`}
-                        className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                      </button>
+                      {!hasAttachedFile && item.externalUrl && (
+                        <a
+                          href={item.externalUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="p-1 text-[#1E3A5F] hover:underline"
+                          aria-label="فتح الرابط الخارجي"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+                        </a>
+                      )}
                     </div>
-                  )}
+
+                    {canEdit && (
+                      <div
+                        className="flex items-center gap-1"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {sortMode === 'manual' && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={itemIdx === 0}
+                              onClick={() => handleMoveItemOrder(item.id, -1)}
+                              aria-label="تقديم المادة"
+                              className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={itemIdx === filteredItems.length - 1}
+                              onClick={() => handleMoveItemOrder(item.id, 1)}
+                              aria-label="تأخير المادة"
+                              className="p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />
+                            </button>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDelete(item)}
+                          aria-label={`حذف ${item.title}`}
+                          className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </article>
             );
           })}
         </div>
+      )}
+
+      {/* Interactive Book Workspace Modal (Desktop Popup / Mobile Full-Screen) */}
+      {selectedItem && (
+        <BookWorkspaceModal
+          item={selectedItem}
+          uid={resolvedUid}
+          canEdit={canEdit}
+          onRequireAuth={onRequireAuth}
+          preferences={preferences}
+          onUpdatePreferences={onUpdatePreferences}
+          courses={courses}
+          learningPaths={learningPaths}
+          projects={projects}
+          allReadingItems={items}
+          unifiedTasks={unifiedTasks}
+          bookNotes={bookNotes}
+          hubCategories={hubCategories}
+          customReadingModes={customReadingModes}
+          onUpdateReadingModes={onUpdateReadingModes}
+          onUpdateItem={onUpdateItem}
+          onDeleteItem={onDeleteItem}
+          onAddUnifiedTask={onAddUnifiedTask}
+          onUpdateUnifiedTask={onUpdateUnifiedTask}
+          onDeleteUnifiedTask={onDeleteUnifiedTask}
+          onOpenCalendar={onOpenCalendar}
+          onOpenTasksTab={onOpenTasksTab}
+          onOpenPdf={onOpenPdf}
+          onOpenBookNote={onOpenBookNote}
+          onClose={() => setSelectedItemId(null)}
+        />
+      )}
+
+      {/* Cover Frame Editor on Add Form */}
+      {coverFrameEditorOpen && pendingCoverUrl && (
+        <ImageFrameEditorModal
+          open={coverFrameEditorOpen}
+          srcUrl={pendingCoverUrl}
+          storagePath={pendingCoverStoragePath}
+          initialFrame={pendingCoverFrame}
+          defaultFrame={DEFAULT_BOOK_COVER_FRAME}
+          title="ضبط إطار غلاف الكتاب الجديد"
+          onSave={(nextFrame) => {
+            setPendingCoverFrame(nextFrame);
+            setCoverFrameEditorOpen(false);
+          }}
+          onClose={() => setCoverFrameEditorOpen(false)}
+        />
       )}
 
       <ConfirmDialog
@@ -1316,6 +1123,9 @@ export default function LibraryView({
         onConfirm={() => {
           if (confirmDelete) {
             onDeleteItem(confirmDelete.id);
+            if (selectedItemId === confirmDelete.id) {
+              setSelectedItemId(null);
+            }
             setConfirmDelete(null);
           }
         }}

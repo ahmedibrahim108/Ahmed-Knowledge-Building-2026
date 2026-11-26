@@ -1177,6 +1177,77 @@ export async function deleteDentalCaseCoverStorage(
   }
 }
 
+export async function uploadBookCoverImage(
+  itemId: string,
+  file: File,
+  uidOverride?: string
+): Promise<{
+  imageUrl: string;
+  imageStoragePath: string;
+  localObjectUrl: string;
+  uploadedToCloud: boolean;
+}> {
+  const uid = uidOverride || auth?.currentUser?.uid;
+  const compressed = await compressImageFileForCloud(file);
+  const localObjectUrl = URL.createObjectURL(compressed.blob);
+  let imageStoragePath = '';
+  let imageUrl = '';
+  let uploadedToCloud = false;
+
+  if (uid && isSupabaseConfigured && supabase && isAppOnline()) {
+    try {
+      const safeId = sanitizeImageId(itemId);
+      const safeName = sanitizeStorageImageName(file.name || 'book-cover.jpg');
+      const storagePath = `${uid}/images/book_cover_${safeId}/${safeName}`;
+      await withFirebaseTokenRetry(async (client) => {
+        const { error: uploadErr } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .upload(storagePath, compressed.blob, {
+            contentType: compressed.mimeType || 'image/jpeg',
+            upsert: true,
+          });
+        if (uploadErr) throw uploadErr;
+
+        const { data: signed } = await client.storage
+          .from(USER_IMAGES_BUCKET)
+          .createSignedUrl(storagePath, 3600);
+        imageStoragePath = storagePath;
+        imageUrl = signed?.signedUrl || '';
+        uploadedToCloud = true;
+      });
+    } catch (err) {
+      if (!isNetworkOrOfflineError(err)) throw err;
+    }
+  }
+
+  return {
+    imageUrl: imageUrl || compressed.dataUrl || localObjectUrl,
+    imageStoragePath,
+    localObjectUrl,
+    uploadedToCloud,
+  };
+}
+
+export async function removeBookCoverStorage(
+  storagePath?: string
+): Promise<void> {
+  if (
+    !storagePath ||
+    storagePath.startsWith('users/') ||
+    !isSupabaseConfigured ||
+    !supabase
+  ) {
+    return;
+  }
+  try {
+    await withFirebaseTokenRetry(async (client) =>
+      client.storage.from(USER_IMAGES_BUCKET).remove([storagePath])
+    );
+  } catch {
+    // Non-fatal storage cleanup
+  }
+}
+
 export async function replaceStoredImage(
   existing: StoredImageRecord,
   newFile: File,
