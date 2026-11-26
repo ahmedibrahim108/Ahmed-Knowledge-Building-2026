@@ -97,6 +97,8 @@ interface PDFViewerModalProps {
   onClose: () => void;
 }
 
+const PAGE_BATCH_SIZE = 10;
+
 export default function PDFViewerModal({
   uid,
   target,
@@ -115,20 +117,27 @@ export default function PDFViewerModal({
   const [containerWidth, setContainerWidth] = useState<number>(760);
   const bodyContainerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
 
   const [freshExternalUrl, setFreshExternalUrl] = useState<string | null>(null);
-  const [cacheBadge, setCacheBadge] = useState<'cache' | 'cloud' | null>(null);
+  const [cacheBadge, setCacheBadge] = useState<'cache' | 'cloud' | 'stream' | null>(null);
+  const [cachingFullBlob, setCachingFullBlob] = useState(false);
   const [pdfBinaryData, setPdfBinaryData] = useState<{ data: Uint8Array } | null>(
     null
   );
   const [useNativeIframeFallback, setUseNativeIframeFallback] = useState(false);
+  const [enableTextLayer, setEnableTextLayer] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [pageAspectRatio, setPageAspectRatio] = useState<number>(1.414);
+  const [loadedPageLimit, setLoadedPageLimit] = useState<number>(PAGE_BATCH_SIZE);
   const [visibleRange, setVisibleRange] = useState<{ start: number; end: number }>({
     start: 1,
-    end: 3,
+    end: 2,
   });
+  const [renderedPageKeys, setRenderedPageKeys] = useState<Record<string, true>>({});
+  const [pageErrors, setPageErrors] = useState<Record<number, string>>({});
+  const [pageRetryNonce, setPageRetryNonce] = useState<Record<number, number>>({});
   const blobFallbackTriedRef = useRef(false);
   const blobUrlRef = useRef<string | null>(null);
   const rawBlobRef = useRef<Blob | null>(null);
@@ -180,6 +189,15 @@ export default function PDFViewerModal({
       setCurrentPage(1);
       setLoadError(null);
       setDownloadNotice(null);
+      setNumPages(0);
+      setCurrentPage(1);
+      setLoadedPageLimit(PAGE_BATCH_SIZE);
+      setVisibleRange({ start: 1, end: 2 });
+      setRenderedPageKeys({});
+      setPageErrors({});
+      setPageRetryNonce({});
+      setEnableTextLayer(false);
+      setCachingFullBlob(false);
       setIsExpanded(false);
       blobFallbackTriedRef.current = false;
       return;
@@ -202,12 +220,19 @@ export default function PDFViewerModal({
       setPdfUrl(null);
       setPdfBinaryData(null);
       setUseNativeIframeFallback(false);
+      setEnableTextLayer(false);
+      setCachingFullBlob(false);
       setCacheBadge(null);
       setFreshExternalUrl(target.downloadUrl || null);
       setDocHtml(null);
       setPreviewOnlyNotice(false);
       setNumPages(0);
       setCurrentPage(1);
+      setLoadedPageLimit(PAGE_BATCH_SIZE);
+      setVisibleRange({ start: 1, end: 2 });
+      setRenderedPageKeys({});
+      setPageErrors({});
+      setPageRetryNonce({});
       setZoom(1);
 
       try {
@@ -243,7 +268,7 @@ export default function PDFViewerModal({
             return;
           }
 
-          // 2) Streaming signed URL first so 600+ page PDFs open Page 1 via HTTP Range requests immediately
+          // 2) Streaming signed URL first so 300-600+ page PDFs open Page 1 via HTTP Range requests immediately without loading full file
           const freshSignedUrl = await getFreshStudyFileSignedUrl({
             uid: resolvedUid,
             resourceId: target.resourceId,
@@ -256,7 +281,7 @@ export default function PDFViewerModal({
           if (freshSignedUrl) {
             setFreshExternalUrl(freshSignedUrl);
             setPdfUrl(freshSignedUrl);
-            setCacheBadge('cloud');
+            setCacheBadge('stream');
             return;
           }
 
@@ -383,14 +408,56 @@ export default function PDFViewerModal({
 
   const pdfDocumentOptions = useMemo(
     () => ({
-      rangeChunkSize: 262144,
-      disableAutoFetch: false,
+      rangeChunkSize: 131072,
+      disableAutoFetch: true,
       disableStream: false,
     }),
     []
   );
 
-  // Track visible page numbers during continuous scroll across all 1..numPages slots
+  // Progressively grow rendered page slots in scroll mode as user nears the bottom sentinel
+  useEffect(() => {
+    if (
+      !target ||
+      !isPdfMode ||
+      scrollMode !== 'all' ||
+      numPages <= 0 ||
+      loadedPageLimit >= numPages ||
+      useNativeIframeFallback
+    ) {
+      return;
+    }
+    const rootEl = bodyContainerRef.current;
+    const sentinel = loadMoreSentinelRef.current;
+    if (!rootEl || !sentinel || typeof IntersectionObserver === 'undefined') return;
+
+    const sentinelObserver = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setLoadedPageLimit((prev) =>
+            Math.min(numPages, prev + PAGE_BATCH_SIZE)
+          );
+        }
+      },
+      {
+        root: rootEl,
+        rootMargin: '450px 0px',
+        threshold: 0,
+      }
+    );
+
+    sentinelObserver.observe(sentinel);
+    return () => sentinelObserver.disconnect();
+  }, [
+    target,
+    isPdfMode,
+    scrollMode,
+    numPages,
+    loadedPageLimit,
+    useNativeIframeFallback,
+  ]);
+
+  // Track visible page numbers during continuous scroll across currently loaded page slots
   useEffect(() => {
     if (
       !target ||
@@ -404,6 +471,7 @@ export default function PDFViewerModal({
     const rootEl = bodyContainerRef.current;
     if (!rootEl) return;
 
+    const maxRenderedSlot = Math.min(numPages, loadedPageLimit);
     const visibleRatios = new Map<number, number>();
     let observer: IntersectionObserver | null = null;
     if (typeof IntersectionObserver !== 'undefined') {
@@ -426,7 +494,7 @@ export default function PDFViewerModal({
             const maxP = nums[nums.length - 1];
             setVisibleRange({
               start: Math.max(1, minP - 1),
-              end: Math.min(numPages, maxP + 2),
+              end: Math.min(maxRenderedSlot, maxP + 1),
             });
 
             if (Date.now() >= programmaticScrollUntilRef.current) {
@@ -445,27 +513,26 @@ export default function PDFViewerModal({
         },
         {
           root: rootEl,
-          rootMargin: '280px 0px',
+          rootMargin: '240px 0px',
           threshold: [0, 0.25, 0.6],
         }
       );
 
-      for (let p = 1; p <= numPages; p += 1) {
+      for (let p = 1; p <= maxRenderedSlot; p += 1) {
         const node = pageRefs.current[p];
         if (node) observer.observe(node);
       }
     }
 
-    // Companion RAF scroll sync for rapid scrollbar drags across 300+ page documents
+    // Companion RAF scroll sync for rapid scrollbar drags
     let rafId = 0;
     const syncFromScroll = () => {
       rafId = 0;
       if (Date.now() < programmaticScrollUntilRef.current) return;
       const rootRect = rootEl.getBoundingClientRect();
       const targetY = rootRect.top + rootRect.height * 0.35;
-      // Binary search over measured/estimated page slots (rendered sequentially top-to-bottom)
       let lo = 1;
-      let hi = numPages;
+      let hi = maxRenderedSlot;
       let best = 1;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
@@ -486,7 +553,7 @@ export default function PDFViewerModal({
       setCurrentPage((prev) => (prev === best ? prev : best));
       setVisibleRange((prev) => {
         const nextStart = Math.max(1, best - 1);
-        const nextEnd = Math.min(numPages, best + 2);
+        const nextEnd = Math.min(maxRenderedSlot, best + 1);
         if (prev.start === nextStart && prev.end === nextEnd) return prev;
         return { start: nextStart, end: nextEnd };
       });
@@ -509,6 +576,7 @@ export default function PDFViewerModal({
     isPdfMode,
     scrollMode,
     numPages,
+    loadedPageLimit,
     useNativeIframeFallback,
     pdfUrl,
     pdfBinaryData,
@@ -516,12 +584,13 @@ export default function PDFViewerModal({
 
   const isPageMounted = (pageNumber: number): boolean => {
     if (scrollMode === 'single') return pageNumber === currentPage;
-    if (numPages <= 8) return true;
-    if (Math.abs(pageNumber - currentPage) > 4) return false;
+    if (numPages <= 6) return true;
+    if (pageNumber > loadedPageLimit) return false;
+    if (Math.abs(pageNumber - currentPage) > 2) return false;
     const minMount = Math.max(1, Math.min(visibleRange.start, currentPage - 1));
     const maxMount = Math.min(
       numPages,
-      Math.max(visibleRange.end, currentPage + 2)
+      Math.max(visibleRange.end, currentPage + 1)
     );
     return pageNumber >= minMount && pageNumber <= maxMount;
   };
@@ -532,10 +601,13 @@ export default function PDFViewerModal({
     const clamped = Math.max(1, Math.min(numPages || 1, pageNum));
     const delta = Math.abs(clamped - currentPage);
     programmaticScrollUntilRef.current = Date.now() + 650;
+    if (clamped + 2 > loadedPageLimit) {
+      setLoadedPageLimit(Math.min(numPages || clamped, clamped + PAGE_BATCH_SIZE - 2));
+    }
     setCurrentPage(clamped);
     setVisibleRange({
       start: Math.max(1, clamped - 1),
-      end: Math.min(numPages || clamped, clamped + 2),
+      end: Math.min(numPages || clamped, clamped + 1),
     });
     if (scrollMode === 'all') {
       window.setTimeout(() => {
@@ -543,7 +615,46 @@ export default function PDFViewerModal({
           behavior: delta > 12 ? 'auto' : 'smooth',
           block: 'start',
         });
-      }, 30);
+      }, 45);
+    }
+  };
+
+  const handleCacheFullPdfLocally = async () => {
+    if (cachingFullBlob) return;
+    setCachingFullBlob(true);
+    setDownloadNotice(null);
+    try {
+      const fetched = await getPdfBlobWithCacheInfo({
+        uid: uid || target.uid,
+        resourceId: target.resourceId,
+        fileName: target.fileName,
+        mimeType: target.mimeType,
+        storagePath: target.storagePath,
+        storageProvider: target.storageProvider,
+        downloadUrl: target.downloadUrl,
+      });
+      if (!fetched?.blob) {
+        setDownloadNotice('تعذر تحميل نسخة الكاش الكاملة حاليًا. جرب عارض المتصفح السريع أو التنزيل المباشر.');
+        return;
+      }
+      const typedBlob =
+        fetched.blob.type === 'application/pdf'
+          ? fetched.blob
+          : new Blob([fetched.blob], { type: 'application/pdf' });
+      rawBlobRef.current = typedBlob;
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+      const objUrl = URL.createObjectURL(typedBlob);
+      blobUrlRef.current = objUrl;
+      setPdfBinaryData(null);
+      setPdfUrl(objUrl);
+      setCacheBadge('cache');
+      setPageErrors({});
+      setRenderedPageKeys({});
+    } finally {
+      setCachingFullBlob(false);
     }
   };
 
@@ -608,8 +719,21 @@ export default function PDFViewerModal({
                   <span className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-semibold">
                     {cacheBadge === 'cache'
                       ? 'من كاش الجهاز (بدون نت/باقة)'
+                      : cacheBadge === 'stream'
+                      ? 'تحميل متدرج عند الطلب'
                       : 'تم التنزيل والحفظ في كاش الجهاز'}
                   </span>
+                )}
+                {isPdfMode && cacheBadge === 'stream' && (
+                  <button
+                    type="button"
+                    disabled={cachingFullBlob}
+                    onClick={() => void handleCacheFullPdfLocally()}
+                    className="px-1.5 py-0.5 rounded bg-slate-200/80 hover:bg-slate-200 text-[#1E3A5F] text-[10px] font-semibold cursor-pointer disabled:opacity-60"
+                    title="تنزيل نسخة كاملة في كاش الجهاز لتسريع التنقل بين كل الصفحات والعمل بدون إنترنت"
+                  >
+                    {cachingFullBlob ? 'جاري الحفظ بالكاش...' : 'حفظ كامل بالكاش'}
+                  </button>
                 )}
               </div>
             )}
@@ -743,15 +867,29 @@ export default function PDFViewerModal({
                   {useNativeIframeFallback ? 'العارض التفاعلي' : 'عارض المتصفح السريع'}
                 </button>
                 {!useNativeIframeFallback && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setScrollMode((m) => (m === 'all' ? 'single' : 'all'))
-                    }
-                    className="px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
-                  >
-                    {scrollMode === 'all' ? 'نمط التمرير' : 'صفحة بصفحة'}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setScrollMode((m) => (m === 'all' ? 'single' : 'all'))
+                      }
+                      className="px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                    >
+                      {scrollMode === 'all' ? 'تمرير متدرج' : 'صفحة بصفحة'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEnableTextLayer((v) => !v)}
+                      className={`px-2.5 py-1.5 text-[11px] font-medium rounded-lg cursor-pointer ${
+                        enableTextLayer
+                          ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                          : 'text-slate-700 bg-slate-100 hover:bg-slate-200'
+                      }`}
+                      title="تفعيل طبقة تحديد ونسخ النص (قد يبطئ قليلاً في الملفات الضخمة)"
+                    >
+                      {enableTextLayer ? 'تحديد النص: مفعّل' : 'تحديد النص'}
+                    </button>
+                  </>
                 )}
               </>
             )}
@@ -988,18 +1126,31 @@ export default function PDFViewerModal({
                     measuredHeightsRef.current = {};
                     setNumPages(total);
                     setCurrentPage(1);
-                    setVisibleRange({ start: 1, end: Math.min(total, 3) });
+                    setLoadedPageLimit(Math.min(total, PAGE_BATCH_SIZE));
+                    setVisibleRange({ start: 1, end: Math.min(total, 2) });
+                    setRenderedPageKeys({});
+                    setPageErrors({});
+                    setEnableTextLayer(total <= 30);
                   }}
                 >
                   <div className="flex flex-col items-center gap-4">
                     {(scrollMode === 'single'
                       ? [currentPage]
-                      : Array.from({ length: numPages }, (_, idx) => idx + 1)
+                      : Array.from(
+                          { length: Math.min(numPages, loadedPageLimit) },
+                          (_, idx) => idx + 1
+                        )
                     ).map((pageNumber) => {
                       const mounted = isPageMounted(pageNumber);
                       const estHeight =
                         measuredHeightsRef.current[pageNumber] ||
                         Math.round(pageRenderWidth * pageAspectRatio);
+                      const retryVer = pageRetryNonce[pageNumber] || 0;
+                      const renderKey = `${pageNumber}:${pageRenderWidth}:${retryVer}:${
+                        enableTextLayer ? 1 : 0
+                      }`;
+                      const isRendered = Boolean(renderedPageKeys[renderKey]);
+                      const pageErrMsg = pageErrors[pageNumber];
 
                       return (
                         <div
@@ -1013,58 +1164,167 @@ export default function PDFViewerModal({
                             width: pageRenderWidth,
                             minHeight: estHeight,
                           }}
-                          className="bg-white shadow-xl rounded-sm overflow-hidden flex items-center justify-center"
+                          className={`relative shadow-xl rounded-sm overflow-hidden flex items-center justify-center ${
+                            mounted
+                              ? 'bg-white'
+                              : 'bg-slate-100 border border-slate-300/80'
+                          }`}
                         >
                           {mounted ? (
-                            <Page
-                              pageNumber={pageNumber}
-                              width={pageRenderWidth}
-                              devicePixelRatio={cappedCanvasDpr}
-                              renderTextLayer={Math.abs(pageNumber - currentPage) <= 1}
-                              renderAnnotationLayer={false}
-                              loading={
-                                <div className="flex flex-col items-center gap-2 text-xs text-slate-500 py-8 select-none">
+                            <>
+                              {!isRendered && !pageErrMsg && (
+                                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-slate-50/92 text-xs text-slate-600 pointer-events-none select-none">
                                   <Loader2
                                     className="w-5 h-5 animate-spin text-[#1E3A5F]"
                                     aria-hidden="true"
                                   />
-                                  <span className="tabular-nums">
-                                    جاري تحميل صفحة {pageNumber} من {numPages}...
+                                  <span className="tabular-nums font-medium">
+                                    جاري عرض صفحة {pageNumber} من {numPages}...
                                   </span>
                                 </div>
-                              }
-                              error={
-                                <div className="flex flex-col items-center gap-2 text-xs text-slate-600 p-4 text-center">
-                                  <span>تعذر رسم الصفحة {pageNumber}.</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => setUseNativeIframeFallback(true)}
-                                    className="px-3 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] rounded-md cursor-pointer"
-                                  >
-                                    التبديل إلى عارض المتصفح السريع
-                                  </button>
+                              )}
+                              {pageErrMsg ? (
+                                <div className="flex flex-col items-center gap-2.5 text-xs text-slate-700 p-6 text-center max-w-sm">
+                                  <p className="font-semibold text-slate-900">
+                                    تعذر تحميل أو رسم صفحة {pageNumber}
+                                  </p>
+                                  <p className="text-[11px] text-slate-500">
+                                    {pageErrMsg}
+                                  </p>
+                                  <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setPageErrors((prev) => {
+                                          const next = { ...prev };
+                                          delete next[pageNumber];
+                                          return next;
+                                        });
+                                        setPageRetryNonce((prev) => ({
+                                          ...prev,
+                                          [pageNumber]: (prev[pageNumber] || 0) + 1,
+                                        }));
+                                      }}
+                                      className="inline-flex items-center gap-1 px-3 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] rounded-md cursor-pointer"
+                                    >
+                                      <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                                      <span>إعادة تحميل الصفحة</span>
+                                    </button>
+                                    {cacheBadge === 'stream' && (
+                                      <button
+                                        type="button"
+                                        disabled={cachingFullBlob}
+                                        onClick={() => void handleCacheFullPdfLocally()}
+                                        className="px-3 py-1.5 text-[11px] font-medium text-[#1E3A5F] bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer disabled:opacity-60"
+                                      >
+                                        {cachingFullBlob ? 'جاري التنزيل...' : 'حفظ كامل بالكاش'}
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => setUseNativeIframeFallback(true)}
+                                      className="px-3 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer"
+                                    >
+                                      عارض المتصفح السريع
+                                    </button>
+                                  </div>
                                 </div>
-                              }
-                              onLoadSuccess={(page) => {
-                                if (page.width > 0 && page.height > 0) {
-                                  const ratio = page.height / page.width;
-                                  measuredHeightsRef.current[pageNumber] = Math.round(
-                                    pageRenderWidth * ratio
-                                  );
-                                  if (pageNumber === 1) {
-                                    setPageAspectRatio(ratio);
+                              ) : (
+                                <Page
+                                  key={`page-${pageNumber}-${retryVer}`}
+                                  pageNumber={pageNumber}
+                                  width={pageRenderWidth}
+                                  devicePixelRatio={cappedCanvasDpr}
+                                  renderTextLayer={enableTextLayer}
+                                  renderAnnotationLayer={false}
+                                  loading={
+                                    <div className="flex flex-col items-center gap-2 text-xs text-slate-500 py-8 select-none">
+                                      <Loader2
+                                        className="w-5 h-5 animate-spin text-[#1E3A5F]"
+                                        aria-hidden="true"
+                                      />
+                                      <span className="tabular-nums">
+                                        جاري جلب صفحة {pageNumber} من {numPages}...
+                                      </span>
+                                    </div>
                                   }
-                                }
-                              }}
-                            />
+                                  error={null}
+                                  onLoadError={(err) => {
+                                    setPageErrors((prev) => ({
+                                      ...prev,
+                                      [pageNumber]:
+                                        err?.message ||
+                                        'تعذر جلب بيانات الصفحة من السحابة.',
+                                    }));
+                                  }}
+                                  onRenderError={(err) => {
+                                    setPageErrors((prev) => ({
+                                      ...prev,
+                                      [pageNumber]:
+                                        err?.message ||
+                                        'تعذر رسم محتوى الصفحة على الذاكرة.',
+                                    }));
+                                  }}
+                                  onRenderSuccess={() => {
+                                    setRenderedPageKeys((prev) =>
+                                      prev[renderKey]
+                                        ? prev
+                                        : { ...prev, [renderKey]: true }
+                                    );
+                                  }}
+                                  onLoadSuccess={(page) => {
+                                    if (page.width > 0 && page.height > 0) {
+                                      const ratio = page.height / page.width;
+                                      measuredHeightsRef.current[pageNumber] =
+                                        Math.round(pageRenderWidth * ratio);
+                                      if (pageNumber === 1) {
+                                        setPageAspectRatio(ratio);
+                                      }
+                                    }
+                                  }}
+                                />
+                              )}
+                            </>
                           ) : (
-                            <div className="text-xs text-slate-400 font-medium tabular-nums select-none">
-                              صفحة {pageNumber} من {numPages}
+                            <div className="flex flex-col items-center gap-2 text-xs text-slate-500 font-medium tabular-nums select-none p-4 text-center">
+                              <span>
+                                صفحة {pageNumber} من {numPages} · تُحمّل عند الوصول إليها
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => goToPage(pageNumber)}
+                                className="px-2.5 py-1 text-[11px] font-semibold text-[#1E3A5F] bg-white border border-slate-300 hover:bg-slate-50 rounded-md cursor-pointer"
+                              >
+                                تحميل وعرض الآن
+                              </button>
                             </div>
                           )}
                         </div>
                       );
                     })}
+
+                    {scrollMode === 'all' && loadedPageLimit < numPages && (
+                      <div
+                        ref={loadMoreSentinelRef}
+                        className="w-full max-w-md py-4 flex flex-col items-center gap-2 text-center"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLoadedPageLimit((prev) =>
+                              Math.min(numPages, prev + PAGE_BATCH_SIZE)
+                            )
+                          }
+                          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#1E3A5F] hover:bg-[#162C49] rounded-lg shadow cursor-pointer tabular-nums"
+                        >
+                          <span>
+                            تحميل الصفحات التالية ({loadedPageLimit + 1} –{' '}
+                            {Math.min(numPages, loadedPageLimit + PAGE_BATCH_SIZE)} من{' '}
+                            {numPages})
+                          </span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </Document>
               </ErrorBoundary>
