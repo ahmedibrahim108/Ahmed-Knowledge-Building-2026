@@ -1306,11 +1306,13 @@ export async function deleteCloudAttachment(
   uid: string | undefined,
   resourceId?: string,
   storagePath?: string,
-  storageProvider?: StorageProvider
+  storageProvider?: StorageProvider,
+  fileName?: string
 ): Promise<void> {
   const safeId = resourceId
     ? resourceId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
     : undefined;
+  const fileCacheKey = fileName?.trim() ? `file:${fileName.trim()}` : undefined;
 
   let pathToRemove = storagePath;
   let providerToRemove: StorageProvider = resolveEffectiveStorageProvider(
@@ -1324,6 +1326,7 @@ export async function deleteCloudAttachment(
       resourceId,
       safeId,
       pathToRemove ? `path:${pathToRemove}` : undefined,
+      fileCacheKey,
     ]);
     return;
   }
@@ -1333,6 +1336,7 @@ export async function deleteCloudAttachment(
       resourceId,
       safeId,
       pathToRemove ? `path:${pathToRemove}` : undefined,
+      fileCacheKey,
     ]);
     return;
   }
@@ -1374,6 +1378,7 @@ export async function deleteCloudAttachment(
     resourceId,
     safeId,
     pathToRemove ? `path:${pathToRemove}` : undefined,
+    fileCacheKey,
   ]);
 
   try {

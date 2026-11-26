@@ -127,7 +127,7 @@ export default function PDFViewerModal({
   const [pageAspectRatio, setPageAspectRatio] = useState<number>(1.414);
   const [visibleRange, setVisibleRange] = useState<{ start: number; end: number }>({
     start: 1,
-    end: 10,
+    end: 3,
   });
   const blobFallbackTriedRef = useRef(false);
   const blobUrlRef = useRef<string | null>(null);
@@ -383,8 +383,8 @@ export default function PDFViewerModal({
 
   const pdfDocumentOptions = useMemo(
     () => ({
-      rangeChunkSize: 524288,
-      disableAutoFetch: true,
+      rangeChunkSize: 262144,
+      disableAutoFetch: false,
       disableStream: false,
     }),
     []
@@ -402,68 +402,126 @@ export default function PDFViewerModal({
       return;
     }
     const rootEl = bodyContainerRef.current;
-    if (!rootEl || typeof IntersectionObserver === 'undefined') return;
+    if (!rootEl) return;
 
     const visibleRatios = new Map<number, number>();
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const pAttr = (entry.target as HTMLElement).dataset.pageNumber;
-          const pageNum = pAttr ? Number(pAttr) : 0;
-          if (!pageNum) continue;
-          if (entry.isIntersecting) {
-            visibleRatios.set(pageNum, entry.intersectionRatio || 0.01);
-          } else {
-            visibleRatios.delete(pageNum);
-          }
-        }
-
-        if (visibleRatios.size > 0) {
-          const nums = Array.from(visibleRatios.keys()).sort((a, b) => a - b);
-          const minP = nums[0];
-          const maxP = nums[nums.length - 1];
-          setVisibleRange({
-            start: Math.max(1, minP - 4),
-            end: Math.min(numPages, maxP + 6),
-          });
-
-          if (Date.now() >= programmaticScrollUntilRef.current) {
-            // Pick page with highest visibility (tie-break to earlier page)
-            let bestPage = nums[0];
-            let bestRatio = -1;
-            for (const n of nums) {
-              const r = visibleRatios.get(n) ?? 0;
-              if (r > bestRatio) {
-                bestRatio = r;
-                bestPage = n;
-              }
+    let observer: IntersectionObserver | null = null;
+    if (typeof IntersectionObserver !== 'undefined') {
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            const pAttr = (entry.target as HTMLElement).dataset.pageNumber;
+            const pageNum = pAttr ? Number(pAttr) : 0;
+            if (!pageNum) continue;
+            if (entry.isIntersecting) {
+              visibleRatios.set(pageNum, entry.intersectionRatio || 0.01);
+            } else {
+              visibleRatios.delete(pageNum);
             }
-            setCurrentPage(bestPage);
           }
-        }
-      },
-      {
-        root: rootEl,
-        rootMargin: '900px 0px',
-        threshold: [0, 0.15, 0.5, 0.85],
-      }
-    );
 
-    for (let p = 1; p <= numPages; p += 1) {
-      const node = pageRefs.current[p];
-      if (node) observer.observe(node);
+          if (visibleRatios.size > 0) {
+            const nums = Array.from(visibleRatios.keys()).sort((a, b) => a - b);
+            const minP = nums[0];
+            const maxP = nums[nums.length - 1];
+            setVisibleRange({
+              start: Math.max(1, minP - 1),
+              end: Math.min(numPages, maxP + 2),
+            });
+
+            if (Date.now() >= programmaticScrollUntilRef.current) {
+              let bestPage = nums[0];
+              let bestRatio = -1;
+              for (const n of nums) {
+                const r = visibleRatios.get(n) ?? 0;
+                if (r > bestRatio) {
+                  bestRatio = r;
+                  bestPage = n;
+                }
+              }
+              setCurrentPage(bestPage);
+            }
+          }
+        },
+        {
+          root: rootEl,
+          rootMargin: '280px 0px',
+          threshold: [0, 0.25, 0.6],
+        }
+      );
+
+      for (let p = 1; p <= numPages; p += 1) {
+        const node = pageRefs.current[p];
+        if (node) observer.observe(node);
+      }
     }
 
-    return () => observer.disconnect();
-  }, [target, isPdfMode, scrollMode, numPages, useNativeIframeFallback]);
+    // Companion RAF scroll sync for rapid scrollbar drags across 300+ page documents
+    let rafId = 0;
+    const syncFromScroll = () => {
+      rafId = 0;
+      if (Date.now() < programmaticScrollUntilRef.current) return;
+      const rootRect = rootEl.getBoundingClientRect();
+      const targetY = rootRect.top + rootRect.height * 0.35;
+      // Binary search over measured/estimated page slots (rendered sequentially top-to-bottom)
+      let lo = 1;
+      let hi = numPages;
+      let best = 1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const el = pageRefs.current[mid];
+        if (!el) break;
+        const rect = el.getBoundingClientRect();
+        if (rect.top <= targetY && rect.bottom >= targetY) {
+          best = mid;
+          break;
+        }
+        if (rect.top < targetY) {
+          best = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      setCurrentPage((prev) => (prev === best ? prev : best));
+      setVisibleRange((prev) => {
+        const nextStart = Math.max(1, best - 1);
+        const nextEnd = Math.min(numPages, best + 2);
+        if (prev.start === nextStart && prev.end === nextEnd) return prev;
+        return { start: nextStart, end: nextEnd };
+      });
+    };
+
+    const handleScroll = () => {
+      if (!rafId) {
+        rafId = window.requestAnimationFrame(syncFromScroll);
+      }
+    };
+    rootEl.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      observer?.disconnect();
+      rootEl.removeEventListener('scroll', handleScroll);
+      if (rafId) window.cancelAnimationFrame(rafId);
+    };
+  }, [
+    target,
+    isPdfMode,
+    scrollMode,
+    numPages,
+    useNativeIframeFallback,
+    pdfUrl,
+    pdfBinaryData,
+  ]);
 
   const isPageMounted = (pageNumber: number): boolean => {
     if (scrollMode === 'single') return pageNumber === currentPage;
-    if (numPages <= 35) return true;
-    const minMount = Math.min(visibleRange.start, Math.max(1, currentPage - 4));
-    const maxMount = Math.max(
-      visibleRange.end,
-      Math.min(numPages, currentPage + 6)
+    if (numPages <= 8) return true;
+    if (Math.abs(pageNumber - currentPage) > 4) return false;
+    const minMount = Math.max(1, Math.min(visibleRange.start, currentPage - 1));
+    const maxMount = Math.min(
+      numPages,
+      Math.max(visibleRange.end, currentPage + 2)
     );
     return pageNumber >= minMount && pageNumber <= maxMount;
   };
@@ -476,8 +534,8 @@ export default function PDFViewerModal({
     programmaticScrollUntilRef.current = Date.now() + 650;
     setCurrentPage(clamped);
     setVisibleRange({
-      start: Math.max(1, clamped - 4),
-      end: Math.min(numPages || clamped, clamped + 6),
+      start: Math.max(1, clamped - 1),
+      end: Math.min(numPages || clamped, clamped + 2),
     });
     if (scrollMode === 'all') {
       window.setTimeout(() => {
@@ -508,6 +566,10 @@ export default function PDFViewerModal({
   };
 
   const pageRenderWidth = Math.round(containerWidth * zoom);
+  const cappedCanvasDpr = Math.min(
+    typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
+    1.5
+  );
   const downloadLabel = isPdfMode
     ? 'تنزيل PDF'
     : attachmentKind === 'docx' || attachmentKind === 'doc'
@@ -665,15 +727,33 @@ export default function PDFViewerModal({
 
           <div className="flex flex-wrap items-center gap-1.5">
             {isPdfMode && (
-              <button
-                type="button"
-                onClick={() =>
-                  setScrollMode((m) => (m === 'all' ? 'single' : 'all'))
-                }
-                className="px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
-              >
-                {scrollMode === 'all' ? 'نمط التمرير' : 'صفحة بصفحة'}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setUseNativeIframeFallback((v) => !v)
+                  }
+                  className={`px-2.5 py-1.5 text-[11px] font-medium rounded-lg cursor-pointer ${
+                    useNativeIframeFallback
+                      ? 'bg-[#1E3A5F] text-white'
+                      : 'text-slate-700 bg-slate-100 hover:bg-slate-200'
+                  }`}
+                  title="التبديل إلى عارض المتصفح المدمج للملفات الضخمة"
+                >
+                  {useNativeIframeFallback ? 'العارض التفاعلي' : 'عارض المتصفح السريع'}
+                </button>
+                {!useNativeIframeFallback && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setScrollMode((m) => (m === 'all' ? 'single' : 'all'))
+                    }
+                    className="px-2.5 py-1.5 text-[11px] font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  >
+                    {scrollMode === 'all' ? 'نمط التمرير' : 'صفحة بصفحة'}
+                  </button>
+                )}
+              </>
             )}
             <button
               type="button"
@@ -908,7 +988,7 @@ export default function PDFViewerModal({
                     measuredHeightsRef.current = {};
                     setNumPages(total);
                     setCurrentPage(1);
-                    setVisibleRange({ start: 1, end: Math.min(total, 10) });
+                    setVisibleRange({ start: 1, end: Math.min(total, 3) });
                   }}
                 >
                   <div className="flex flex-col items-center gap-4">
@@ -939,8 +1019,32 @@ export default function PDFViewerModal({
                             <Page
                               pageNumber={pageNumber}
                               width={pageRenderWidth}
-                              renderTextLayer
-                              renderAnnotationLayer
+                              devicePixelRatio={cappedCanvasDpr}
+                              renderTextLayer={Math.abs(pageNumber - currentPage) <= 1}
+                              renderAnnotationLayer={false}
+                              loading={
+                                <div className="flex flex-col items-center gap-2 text-xs text-slate-500 py-8 select-none">
+                                  <Loader2
+                                    className="w-5 h-5 animate-spin text-[#1E3A5F]"
+                                    aria-hidden="true"
+                                  />
+                                  <span className="tabular-nums">
+                                    جاري تحميل صفحة {pageNumber} من {numPages}...
+                                  </span>
+                                </div>
+                              }
+                              error={
+                                <div className="flex flex-col items-center gap-2 text-xs text-slate-600 p-4 text-center">
+                                  <span>تعذر رسم الصفحة {pageNumber}.</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setUseNativeIframeFallback(true)}
+                                    className="px-3 py-1.5 text-[11px] font-semibold text-white bg-[#1E3A5F] rounded-md cursor-pointer"
+                                  >
+                                    التبديل إلى عارض المتصفح السريع
+                                  </button>
+                                </div>
+                              }
                               onLoadSuccess={(page) => {
                                 if (page.width > 0 && page.height > 0) {
                                   const ratio = page.height / page.width;

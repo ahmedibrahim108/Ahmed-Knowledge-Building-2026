@@ -132,6 +132,17 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;');
 }
 
+function normalizeExternalHref(raw?: string): string | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) return null;
+  if (/^(javascript|data|vbscript):/i.test(trimmed)) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/|$|\?|#)/i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return trimmed;
+}
+
 function buildInitialWorkspaceDraft(item: ReadingLibraryItem): WorkspaceDraftState {
   const ws = item.workspaceData ?? {};
   const seededNotes =
@@ -223,6 +234,7 @@ export default function BookWorkspaceModal({
 
   // Sub-modals
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [confirmDeleteFileOpen, setConfirmDeleteFileOpen] = useState(false);
   const [taskModalState, setTaskModalState] = useState<{
     open: boolean;
     initialTask: UnifiedTask | null;
@@ -327,7 +339,14 @@ export default function BookWorkspaceModal({
     document.body.style.overflow = 'hidden';
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (frameEditorOpen || confirmDeleteOpen || taskModalState.open) return;
+        if (
+          frameEditorOpen ||
+          confirmDeleteOpen ||
+          confirmDeleteFileOpen ||
+          taskModalState.open
+        ) {
+          return;
+        }
         handleCloseWithFlush();
       }
     };
@@ -341,6 +360,7 @@ export default function BookWorkspaceModal({
     };
   }, [
     confirmDeleteOpen,
+    confirmDeleteFileOpen,
     frameEditorOpen,
     handleCloseWithFlush,
     taskModalState.open,
@@ -653,6 +673,39 @@ export default function BookWorkspaceModal({
       );
     } finally {
       setUploadingFile(false);
+    }
+  };
+
+  const handleRemoveAttachedFile = () => {
+    if (!canEdit) {
+      onRequireAuth();
+      return;
+    }
+    const oldResId = item.attachmentResourceId;
+    const oldPath = item.storagePath;
+    const oldProvider = item.storageProvider;
+    const oldName = item.attachmentName;
+    const nextItemType: ReadingItemType =
+      item.itemType === 'ملف PDF'
+        ? item.externalUrl?.trim()
+          ? 'مقال'
+          : 'كتاب'
+        : item.itemType;
+
+    setDownloadError(null);
+    setLastReplaceFile(null);
+    onUpdateItem(item.id, {
+      attachmentName: undefined,
+      attachmentResourceId: undefined,
+      storagePath: undefined,
+      storageProvider: undefined,
+      downloadUrl: undefined,
+      itemType: nextItemType,
+      updatedAtLabel: new Date().toLocaleDateString('ar-EG'),
+    });
+
+    if (oldResId || oldPath || oldName) {
+      void deleteCloudAttachment(uid, oldResId, oldPath, oldProvider, oldName);
     }
   };
 
@@ -1841,20 +1894,36 @@ export default function BookWorkspaceModal({
                           : 'إرفاق PDF'}
                       </span>
                     </button>
+                    {hasAttachedFile && !uploadingFile && (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteFileOpen(true)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>حذف الملف</span>
+                      </button>
+                    )}
                   </>
                 )}
 
-                {item.externalUrl && (
-                  <a
-                    href={item.externalUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-100 rounded-lg"
-                  >
-                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                    <span>رابط خارجي</span>
-                  </a>
-                )}
+                {(() => {
+                  const safeHref = normalizeExternalHref(item.externalUrl);
+                  if (!safeHref) return null;
+                  const isDrive = /drive\.google\.com|docs\.google\.com/i.test(safeHref);
+                  return (
+                    <a
+                      href={safeHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-[#1E3A5F] bg-white border border-slate-200 hover:bg-slate-100 rounded-lg"
+                      title={safeHref}
+                    >
+                      <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                      <span>{isDrive ? 'رابط Drive' : 'رابط خارجي'}</span>
+                    </a>
+                  );
+                })()}
               </div>
 
               {downloadError && (
@@ -2085,6 +2154,18 @@ export default function BookWorkspaceModal({
           onClose();
         }}
         onCancel={() => setConfirmDeleteOpen(false)}
+      />
+
+      {/* Delete Attached File Only Confirm Dialog */}
+      <ConfirmDialog
+        open={confirmDeleteFileOpen}
+        title="تأكيد حذف الملف المرفق"
+        message={`هل تريد حذف الملف المرفق (${item.attachmentName || 'ملف PDF'}) من «${item.title}»؟ ستبقى بطاقة الكتاب وملاحظاته وروابطه الخارجية كما هي.`}
+        onConfirm={() => {
+          setConfirmDeleteFileOpen(false);
+          handleRemoveAttachedFile();
+        }}
+        onCancel={() => setConfirmDeleteFileOpen(false)}
       />
 
       {/* Linked Task Form Modal */}

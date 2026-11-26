@@ -713,10 +713,14 @@ export async function uploadFileToR2(
 
   if (!hasMultipartPayload) {
     const keysPreview = Object.keys(rawInit || {}).slice(0, 8).join(', ') || 'empty';
+    const rawMessageValue =
+      typeof rawInit.message === 'string' && rawInit.message.trim()
+        ? ` — النص المُرجع: "${rawInit.message.trim().slice(0, 120)}"`
+        : '';
     throw new StorageOperationError(
       502,
       'UNEXPECTED_UPLOAD_INIT_RESPONSE',
-      `استجابة غير مكتملة من دالة generate-upload-url (keys: ${keysPreview}). تأكد من نشر أحدث كود للدالة في Supabase.`
+      `استجابة غير مكتملة من دالة generate-upload-url (keys: ${keysPreview}${rawMessageValue}). الدالة المنشورة في Supabase لا تُرجع روابط R2 المطلوبة بعد؛ انشر أحدث كود لدالة generate-upload-url (مع ملفات _shared أو بنسخة ملف واحد).`
     );
   }
 
@@ -983,6 +987,23 @@ export async function testCloudflareR2Connection(): Promise<CloudflareR2HealthRe
   const code = parsed?.error?.code || `HTTP_${res.status}`;
   const rawMsg =
     parsed?.error?.message || parsed?.message || res.statusText || '';
+
+  if (res.ok) {
+    const keysPreview =
+      parsed && typeof parsed === 'object'
+        ? Object.keys(parsed).slice(0, 8).join(', ') || 'empty'
+        : 'non-json';
+    return {
+      ok: false,
+      status: 'failed',
+      latencyMs,
+      detail: `استجابت دالة generate-upload-url برمز ${res.status} لكن برد غير متوقع (keys: ${keysPreview}) — أي أن الدالة المنشورة في Supabase ليست كود Cloudflare R2 الفعلي بعد.`,
+      errorCode: 'UNEXPECTED_EDGE_PAYLOAD',
+      errorMessage: rawMsg || `Keys: ${keysPreview}`,
+      probableCause:
+        'الدالة المنشورة حاليًا قد تكون القالب الافتراضي (Hello/message) أو إصدارًا غير مكتمل. أعد نشر الدالة generate-upload-url من supabase/functions/generate-upload-url/index.ts (وتأكد من وجود _shared أو الكود الكامل).',
+    };
+  }
 
   if (res.status === 400 && code === 'INVALID_MODULE') {
     return {
