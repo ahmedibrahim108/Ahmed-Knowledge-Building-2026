@@ -29,6 +29,114 @@ import {
   validateFileSize,
 } from '../_shared/r2.ts';
 
+interface R2ClientErrorDetails {
+  code: string;
+  message: string;
+  r2ErrorName: string;
+  r2StatusCode?: number;
+}
+
+class R2ClientOperationError extends Error {
+  readonly code: string;
+  readonly r2ErrorName: string;
+  readonly r2StatusCode?: number;
+  readonly operation: string;
+
+  constructor(operation: string, details: R2ClientErrorDetails) {
+    super(details.message);
+    this.name = 'R2ClientOperationError';
+    this.operation = operation;
+    this.code = details.code;
+    this.r2ErrorName = details.r2ErrorName;
+    this.r2StatusCode = details.r2StatusCode;
+  }
+}
+
+function describeR2ClientFailure(
+  operation: string,
+  err: unknown
+): R2ClientErrorDetails {
+  const errObj =
+    err && typeof err === 'object'
+      ? (err as {
+          name?: unknown;
+          Code?: unknown;
+          code?: unknown;
+          message?: unknown;
+          $metadata?: { httpStatusCode?: unknown };
+        })
+      : null;
+
+  const r2ErrorName =
+    typeof errObj?.name === 'string' && errObj.name.trim()
+      ? errObj.name.trim()
+      : 'R2ClientError';
+  const rawCode =
+    typeof errObj?.Code === 'string' && errObj.Code.trim()
+      ? errObj.Code.trim()
+      : typeof errObj?.code === 'string' && errObj.code.trim()
+      ? errObj.code.trim()
+      : '';
+  const r2StatusCode =
+    typeof errObj?.$metadata?.httpStatusCode === 'number'
+      ? errObj.$metadata.httpStatusCode
+      : undefined;
+  const rawMessage =
+    err instanceof Error
+      ? err.message
+      : typeof errObj?.message === 'string'
+      ? errObj.message
+      : String(err || 'Unknown R2 client failure');
+  const safeReason = rawMessage.replace(/\s+/g, ' ').trim().slice(0, 220);
+  const lower = `${r2ErrorName} ${rawCode} ${safeReason}`.toLowerCase();
+
+  if (lower.includes('nosuchbucket') || r2StatusCode === 404) {
+    return {
+      code: 'R2_BUCKET_NOT_FOUND',
+      message: `Cloudflare R2 bucket was not found during ${operation}. Verify R2_BUCKET_NAME.`,
+      r2ErrorName,
+      r2StatusCode,
+    };
+  }
+
+  if (
+    lower.includes('invalidaccesskeyid') ||
+    lower.includes('signaturedoesnotmatch') ||
+    lower.includes('accessdenied') ||
+    r2StatusCode === 401 ||
+    r2StatusCode === 403
+  ) {
+    return {
+      code: 'R2_AUTH_FAILED',
+      message: `Cloudflare R2 authentication or permissions failed during ${operation}. Verify R2 API credentials and bucket permissions.`,
+      r2ErrorName,
+      r2StatusCode,
+    };
+  }
+
+  if (
+    lower.includes('enotfound') ||
+    lower.includes('econnrefused') ||
+    lower.includes('etimedout') ||
+    lower.includes('dns') ||
+    lower.includes('network')
+  ) {
+    return {
+      code: 'R2_ENDPOINT_UNREACHABLE',
+      message: `Unable to reach Cloudflare R2 endpoint during ${operation}. Verify R2_ENDPOINT and CLOUDFLARE_ACCOUNT_ID.`,
+      r2ErrorName,
+      r2StatusCode,
+    };
+  }
+
+  return {
+    code: 'R2_CLIENT_ERROR',
+    message: `Cloudflare R2 client failed during ${operation}: ${safeReason || r2ErrorName}`,
+    r2ErrorName,
+    r2StatusCode,
+  };
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return handleCorsPreflight(req);
@@ -53,7 +161,15 @@ Deno.serve(async (req: Request) => {
     }
 
     const r2Cfg = getR2Config();
-    const r2Client = createR2Client(r2Cfg);
+    let r2Client: ReturnType<typeof createR2Client>;
+    try {
+      r2Client = createR2Client(r2Cfg);
+    } catch (clientErr) {
+      throw new R2ClientOperationError(
+        'createR2Client',
+        describeR2ClientFailure('client initialization', clientErr)
+      );
+    }
 
     let body: Record<string, unknown>;
     try {
@@ -72,7 +188,17 @@ Deno.serve(async (req: Request) => {
       if (!uploadId) {
         return errorResponse(req, 400, 'MISSING_UPLOAD_ID', 'uploadId is required.');
       }
-      await abortMultipartSession(r2Client, r2Cfg.bucketName, objectKey, uploadId);
+      try {
+        await abortMultipartSession(r2Client, r2Cfg.bucketName, objectKey, uploadId);
+      } catch (r2Err) {
+        if (r2Err instanceof R2ValidationError || r2Err instanceof R2ConfigError) {
+          throw r2Err;
+        }
+        throw new R2ClientOperationError(
+          'abortMultipartSession',
+          describeR2ClientFailure('multipart abort', r2Err)
+        );
+      }
       const recordId =
         typeof body.recordId === 'string' ? sanitizeRecordId(body.recordId) : '';
       const recordType = body.recordType === 'image' ? 'image' : body.recordType === 'file' ? 'file' : 'none';
@@ -204,15 +330,71 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    const markMetadataFailed = async () => {
+      if (recordType === 'none') return;
+      const tbl = recordType === 'image' ? 'image_attachments' : 'file_attachments';
+      await adminClient
+        .from(tbl)
+        .update({ upload_status: 'failed' })
+        .eq('owner_id', caller.uid)
+        .eq('id', recordId);
+    };
+
     if (useMultipart) {
-      const mp = await createMultipartSession(
-        r2Client,
-        r2Cfg.bucketName,
-        objectKey,
-        mimeType,
-        fileSize,
-        1800
+      const multipartCommandParams = {
+        Bucket: r2Cfg.bucketName,
+        Key: objectKey,
+        ContentType: mimeType,
+      };
+      const contentTypeAssigned =
+        typeof multipartCommandParams.ContentType === 'string' &&
+        multipartCommandParams.ContentType.trim().length > 0;
+
+      console.log(
+        '[generate-upload-url] S3 CreateMultipartUploadCommand presign params:',
+        {
+          mode: 'multipart',
+          module,
+          Bucket: multipartCommandParams.Bucket,
+          Key: multipartCommandParams.Key,
+          ContentType: multipartCommandParams.ContentType,
+          contentTypeAssigned,
+          fileSize,
+          expiresIn: 1800,
+        }
       );
+
+      if (!contentTypeAssigned) {
+        await markMetadataFailed();
+        return errorResponse(
+          req,
+          400,
+          'MISSING_CONTENT_TYPE',
+          'A valid Content-Type header must be assigned before generating multipart upload URLs.'
+        );
+      }
+
+      let mp: Awaited<ReturnType<typeof createMultipartSession>>;
+      try {
+        mp = await createMultipartSession(
+          r2Client,
+          r2Cfg.bucketName,
+          objectKey,
+          mimeType,
+          fileSize,
+          1800
+        );
+      } catch (r2Err) {
+        await markMetadataFailed();
+        if (r2Err instanceof R2ValidationError || r2Err instanceof R2ConfigError) {
+          throw r2Err;
+        }
+        throw new R2ClientOperationError(
+          'createMultipartSession',
+          describeR2ClientFailure('multipart upload URL generation', r2Err)
+        );
+      }
+
       return jsonResponse(req, {
         ok: true,
         mode: 'multipart',
@@ -232,13 +414,56 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const uploadUrl = await signSinglePutUrl(
-      r2Client,
-      r2Cfg.bucketName,
-      objectKey,
-      mimeType,
-      300
-    );
+    const putCommandParams = {
+      Bucket: r2Cfg.bucketName,
+      Key: objectKey,
+      ContentType: mimeType,
+    };
+    const contentTypeAssigned =
+      typeof putCommandParams.ContentType === 'string' &&
+      putCommandParams.ContentType.trim().length > 0;
+
+    console.log('[generate-upload-url] S3 PutObjectCommand presign params:', {
+      mode: 'single',
+      module,
+      Bucket: putCommandParams.Bucket,
+      Key: putCommandParams.Key,
+      ContentType: putCommandParams.ContentType,
+      contentTypeAssigned,
+      requiredContentTypeHeader: mimeType,
+      fileSize,
+      expiresIn: 300,
+    });
+
+    if (!contentTypeAssigned) {
+      await markMetadataFailed();
+      return errorResponse(
+        req,
+        400,
+        'MISSING_CONTENT_TYPE',
+        'A valid Content-Type header must be assigned for PutObjectCommand presigning.'
+      );
+    }
+
+    let uploadUrl: string;
+    try {
+      uploadUrl = await signSinglePutUrl(
+        r2Client,
+        r2Cfg.bucketName,
+        objectKey,
+        mimeType,
+        300
+      );
+    } catch (r2Err) {
+      await markMetadataFailed();
+      if (r2Err instanceof R2ValidationError || r2Err instanceof R2ConfigError) {
+        throw r2Err;
+      }
+      throw new R2ClientOperationError(
+        'signSinglePutUrl',
+        describeR2ClientFailure('presigned PUT URL generation', r2Err)
+      );
+    }
 
     return jsonResponse(req, {
       ok: true,
@@ -261,6 +486,22 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     if (err instanceof R2ConfigError) {
       return errorResponse(req, 503, err.code, err.message);
+    }
+    if (err instanceof R2ClientOperationError) {
+      console.error('[generate-upload-url] R2 client failure:', {
+        operation: err.operation,
+        code: err.code,
+        r2ErrorName: err.r2ErrorName,
+        r2StatusCode: err.r2StatusCode,
+        message: err.message,
+      });
+      return errorResponse(req, 502, err.code, err.message, {
+        operation: err.operation,
+        r2ErrorName: err.r2ErrorName,
+        ...(err.r2StatusCode !== undefined
+          ? { r2StatusCode: err.r2StatusCode }
+          : {}),
+      });
     }
     if (err instanceof R2ValidationError || err instanceof AuthError) {
       return errorResponse(req, err.status, err.code, err.message);
