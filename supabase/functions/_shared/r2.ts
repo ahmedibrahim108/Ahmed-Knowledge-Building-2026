@@ -1,10 +1,12 @@
 import {
   PutObjectCommand,
   HeadObjectCommand,
+  HeadBucketCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   CreateMultipartUploadCommand,
   UploadPartCommand,
+  ListPartsCommand,
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
   S3Client,
@@ -509,23 +511,101 @@ export async function createMultipartSession(
   };
 }
 
+const MIN_NON_FINAL_PART_BYTES = 5 * 1024 * 1024;
+
+function normalizeEtagValue(etag: string): string {
+  return etag.trim().replace(/^"+|"+$/g, '').toLowerCase();
+}
+
+export async function listMultipartParts(
+  client: S3Client,
+  bucket: string,
+  key: string,
+  uploadId: string
+): Promise<Array<{ partNumber: number; etag: string; size: number }>> {
+  const collected: Array<{ partNumber: number; etag: string; size: number }> = [];
+  let partNumberMarker: string | undefined;
+
+  try {
+    while (true) {
+      const res = await client.send(
+        new ListPartsCommand({
+          Bucket: bucket,
+          Key: key,
+          UploadId: uploadId,
+          MaxParts: 1000,
+          ...(partNumberMarker ? { PartNumberMarker: partNumberMarker } : {}),
+        })
+      );
+
+      for (const p of res.Parts || []) {
+        const partNumber = Number(p.PartNumber ?? 0);
+        const etag = typeof p.ETag === 'string' ? p.ETag.trim() : '';
+        const size = Number(p.Size ?? 0);
+        if (partNumber >= 1 && etag) {
+          collected.push({ partNumber, etag, size });
+        }
+      }
+
+      if (res.IsTruncated && res.NextPartNumberMarker) {
+        partNumberMarker = String(res.NextPartNumberMarker);
+      } else {
+        break;
+      }
+    }
+  } catch (err) {
+    const metaStatus = (err as { $metadata?: { httpStatusCode?: number }; name?: string; Code?: string })
+      ?.$metadata?.httpStatusCode;
+    const errName = String((err as { name?: string; Code?: string })?.name || (err as { Code?: string })?.Code || '');
+    if (metaStatus === 404 || errName === 'NoSuchUpload') {
+      throw new R2ValidationError(
+        404,
+        'MULTIPART_UPLOAD_NOT_FOUND',
+        'Multipart upload session was not found or has expired in Cloudflare R2.'
+      );
+    }
+    throw err;
+  }
+
+  return collected.sort((a, b) => a.partNumber - b.partNumber);
+}
+
 export async function completeMultipartSession(
   client: S3Client,
   bucket: string,
   key: string,
   uploadId: string,
-  parts: CompletedPart[]
-): Promise<{ etag?: string }> {
-  const sorted = [...parts]
-    .filter(
-      (p) =>
-        typeof p.PartNumber === 'number' &&
-        p.PartNumber >= 1 &&
-        typeof p.ETag === 'string' &&
-        p.ETag.trim().length > 0
-    )
-    .sort((a, b) => (a.PartNumber ?? 0) - (b.PartNumber ?? 0));
+  parts: CompletedPart[],
+  options?: {
+    expectedFileSize?: number;
+    expectedTotalParts?: number;
+  }
+): Promise<{ etag?: string; totalPartsBytes: number; partCount: number }> {
+  const seenNumbers = new Set<number>();
+  const normalizedClientParts: Array<{ PartNumber: number; ETag: string }> = [];
 
+  for (const p of parts) {
+    const partNumber = Number(p.PartNumber);
+    const etag = typeof p.ETag === 'string' ? p.ETag.trim() : '';
+    if (!Number.isInteger(partNumber) || partNumber < 1 || !etag) {
+      throw new R2ValidationError(
+        400,
+        'INVALID_MULTIPART_PARTS',
+        'Each multipart part must include a valid integer PartNumber and ETag.'
+      );
+    }
+    if (seenNumbers.has(partNumber)) {
+      throw new R2ValidationError(
+        400,
+        'DUPLICATE_MULTIPART_PART',
+        `Duplicate multipart part number detected: #${partNumber}.`
+      );
+    }
+    seenNumbers.add(partNumber);
+    normalizedClientParts.push({ PartNumber: partNumber, ETag: etag });
+  }
+
+  const sorted = normalizedClientParts.sort((a, b) => a.PartNumber - b.PartNumber);
   if (sorted.length === 0) {
     throw new R2ValidationError(
       400,
@@ -534,15 +614,128 @@ export async function completeMultipartSession(
     );
   }
 
+  // Verify contiguous part numbers 1..N without gaps
+  for (let i = 0; i < sorted.length; i += 1) {
+    const expectedNumber = i + 1;
+    if (sorted[i].PartNumber !== expectedNumber) {
+      throw new R2ValidationError(
+        400,
+        'MISSING_MULTIPART_PARTS',
+        `Multipart upload is missing part #${expectedNumber}.`
+      );
+    }
+  }
+
+  if (
+    options?.expectedTotalParts &&
+    options.expectedTotalParts > 0 &&
+    sorted.length !== options.expectedTotalParts
+  ) {
+    throw new R2ValidationError(
+      400,
+      'INCOMPLETE_MULTIPART_PARTS',
+      `Expected ${options.expectedTotalParts} uploaded parts, but received ${sorted.length}.`
+    );
+  }
+
+  // Query Cloudflare R2 directly to verify every part is present, intact, and matches ETag
+  const r2Parts = await listMultipartParts(client, bucket, key, uploadId);
+  if (r2Parts.length === 0) {
+    throw new R2ValidationError(
+      400,
+      'NO_UPLOADED_PARTS_IN_R2',
+      'No uploaded parts were found in Cloudflare R2 for this multipart session.'
+    );
+  }
+
+  const r2ByPartNumber = new Map<number, { partNumber: number; etag: string; size: number }>();
+  for (const r2Part of r2Parts) {
+    r2ByPartNumber.set(r2Part.partNumber, r2Part);
+  }
+
+  if (r2Parts.length !== sorted.length) {
+    const missingInR2 = sorted
+      .map((p) => p.PartNumber)
+      .filter((num) => !r2ByPartNumber.has(num));
+    throw new R2ValidationError(
+      400,
+      'INCOMPLETE_MULTIPART_PARTS',
+      missingInR2.length > 0
+        ? `Incomplete multipart upload in R2: missing part(s) ${missingInR2.join(', ')}.`
+        : `Multipart part count mismatch: client sent ${sorted.length} parts, R2 holds ${r2Parts.length}.`
+    );
+  }
+
+  const canonicalParts: CompletedPart[] = [];
+  let totalPartsBytes = 0;
+
+  for (let i = 0; i < sorted.length; i += 1) {
+    const clientPart = sorted[i];
+    const r2Part = r2ByPartNumber.get(clientPart.PartNumber);
+    if (!r2Part) {
+      throw new R2ValidationError(
+        400,
+        'INCOMPLETE_MULTIPART_PARTS',
+        `Part #${clientPart.PartNumber} was not found in Cloudflare R2.`
+      );
+    }
+    if (!Number.isFinite(r2Part.size) || r2Part.size <= 0) {
+      throw new R2ValidationError(
+        400,
+        'EMPTY_MULTIPART_PART',
+        `Uploaded part #${clientPart.PartNumber} in Cloudflare R2 is empty.`
+      );
+    }
+    if (i < sorted.length - 1 && r2Part.size < MIN_NON_FINAL_PART_BYTES) {
+      throw new R2ValidationError(
+        400,
+        'MULTIPART_PART_TOO_SMALL',
+        `Non-final part #${clientPart.PartNumber} (${r2Part.size} bytes) is smaller than the 5 MiB S3/R2 minimum.`
+      );
+    }
+
+    const clientEtagNorm = normalizeEtagValue(clientPart.ETag);
+    const r2EtagNorm = normalizeEtagValue(r2Part.etag);
+    if (!clientEtagNorm || clientEtagNorm !== r2EtagNorm) {
+      throw new R2ValidationError(
+        409,
+        'PART_ETAG_MISMATCH',
+        `Part #${clientPart.PartNumber} ETag mismatch between client and Cloudflare R2.`
+      );
+    }
+
+    totalPartsBytes += r2Part.size;
+    canonicalParts.push({
+      PartNumber: clientPart.PartNumber,
+      ETag: r2Part.etag,
+    });
+  }
+
+  if (
+    options?.expectedFileSize &&
+    options.expectedFileSize > 0 &&
+    totalPartsBytes !== options.expectedFileSize
+  ) {
+    throw new R2ValidationError(
+      400,
+      'MULTIPART_SIZE_MISMATCH',
+      `Uploaded parts total (${totalPartsBytes} bytes) does not match expected file size (${options.expectedFileSize} bytes).`
+    );
+  }
+
   const res = await client.send(
     new CompleteMultipartUploadCommand({
       Bucket: bucket,
       Key: key,
       UploadId: uploadId,
-      MultipartUpload: { Parts: sorted },
+      MultipartUpload: { Parts: canonicalParts },
     })
   );
-  return { etag: res.ETag };
+  return {
+    etag: res.ETag,
+    totalPartsBytes,
+    partCount: canonicalParts.length,
+  };
 }
 
 export async function abortMultipartSession(
@@ -556,6 +749,17 @@ export async function abortMultipartSession(
       Bucket: bucket,
       Key: key,
       UploadId: uploadId,
+    })
+  );
+}
+
+export async function headR2Bucket(
+  client: S3Client,
+  bucket: string
+): Promise<void> {
+  await client.send(
+    new HeadBucketCommand({
+      Bucket: bucket,
     })
   );
 }

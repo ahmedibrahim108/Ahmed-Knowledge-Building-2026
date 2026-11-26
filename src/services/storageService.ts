@@ -212,6 +212,31 @@ function mapEdgeErrorToUserMessage(
   if (code === 'R2_ENDPOINT_UNREACHABLE') {
     return 'تعذر الوصول إلى خادم Cloudflare R2. تحقق من R2_ENDPOINT و CLOUDFLARE_ACCOUNT_ID.';
   }
+  if (
+    code === 'MISSING_MULTIPART_PARTS' ||
+    code === 'INCOMPLETE_MULTIPART_PARTS' ||
+    code === 'NO_UPLOADED_PARTS_IN_R2' ||
+    code === 'DUPLICATE_MULTIPART_PART' ||
+    code === 'INVALID_MULTIPART_PARTS' ||
+    code === 'MULTIPART_PART_TOO_SMALL' ||
+    code === 'EMPTY_MULTIPART_PART'
+  ) {
+    return `لم تكتمل أجزاء الملف متعدد الأجزاء بشكل سليم في Cloudflare R2 (${serverMessage || code}). أعد المحاولة.`;
+  }
+  if (
+    code === 'PART_ETAG_MISMATCH' ||
+    code === 'MULTIPART_SIZE_MISMATCH' ||
+    code === 'FILE_INTEGRITY_MISMATCH' ||
+    code === 'OBJECT_KEY_MISMATCH'
+  ) {
+    return `فشل التحقق من سلامة الملف المرفوع في Cloudflare R2 (${serverMessage || code}). تم إلغاء الملف التالف؛ أعد الرفع.`;
+  }
+  if (code === 'MULTIPART_UPLOAD_NOT_FOUND') {
+    return 'انتهت جلسة الرفع متعدد الأجزاء أو لم تُعثر عليها في R2. أعد محاولة رفع الملف.';
+  }
+  if (code === 'MULTIPART_INIT_INCOMPLETE') {
+    return 'لم تُرجع دالة generate-upload-url روابط الأجزاء الكاملة للرفع متعدد الأجزاء.';
+  }
   return serverMessage || 'تعذر إتمام العملية مع خادم التخزين.';
 }
 
@@ -313,6 +338,16 @@ async function callR2EdgeFunction<T>(
       500,
       'EMPTY_RESPONSE',
       'استجابة غير متوقعة من خادم التخزين.'
+    );
+  }
+
+  if (parsed.ok === false) {
+    const code = parsed?.error?.code || 'EDGE_FUNCTION_ERROR';
+    const rawMsg = parsed?.error?.message || parsed?.message || '';
+    throw new StorageOperationError(
+      res.status || 400,
+      code,
+      mapEdgeErrorToUserMessage(res.status || 400, code, rawMsg)
     );
   }
 
@@ -542,8 +577,8 @@ export async function uploadFileToR2(
 
   onProgress?.(2);
 
-  const initRes = await callR2EdgeFunction<
-    GenerateUploadSingleResponse | GenerateUploadMultipartResponse
+  const rawInitResponse = await callR2EdgeFunction<
+    GenerateUploadSingleResponse | GenerateUploadMultipartResponse | Record<string, unknown>
   >(
     'generate-upload-url',
     {
@@ -569,14 +604,57 @@ export async function uploadFileToR2(
 
   onProgress?.(5);
 
+  // Unwrap nested { data: ... } payload if returned by custom/legacy Edge Function deployments
+  const rawInit: Record<string, unknown> =
+    rawInitResponse &&
+    typeof rawInitResponse === 'object' &&
+    'data' in rawInitResponse &&
+    rawInitResponse.data &&
+    typeof rawInitResponse.data === 'object' &&
+    !('mode' in rawInitResponse) &&
+    !('uploadUrl' in rawInitResponse) &&
+    !('uploadId' in rawInitResponse)
+      ? (rawInitResponse.data as Record<string, unknown>)
+      : (rawInitResponse as Record<string, unknown>);
+
+  const uploadUrlCandidate = [
+    rawInit.uploadUrl,
+    rawInit.signedUrl,
+    rawInit.url,
+    rawInit.presignedUrl,
+  ].find((v): v is string => typeof v === 'string' && v.trim().length > 0);
+
+  const hasMultipartPayload =
+    rawInit.mode === 'multipart' ||
+    Boolean(rawInit.uploadId && Array.isArray(rawInit.parts));
+
   const isSingleMode =
-    initRes.mode === 'single' ||
-    (!(initRes as { mode?: string }).mode &&
-      typeof (initRes as { uploadUrl?: unknown }).uploadUrl === 'string');
+    rawInit.mode === 'single' ||
+    (!hasMultipartPayload && typeof uploadUrlCandidate === 'string');
+
+  const resolvedObjectKey =
+    typeof rawInit.objectKey === 'string' ? rawInit.objectKey.trim() : '';
+  const resolvedOriginalName =
+    typeof rawInit.originalName === 'string' && rawInit.originalName.trim()
+      ? rawInit.originalName
+      : fileName;
+  const resolvedMimeType =
+    typeof rawInit.mimeType === 'string' && rawInit.mimeType.trim()
+      ? rawInit.mimeType
+      : mimeType;
+  const resolvedRecordId =
+    typeof rawInit.recordId === 'string' && rawInit.recordId.trim()
+      ? rawInit.recordId
+      : recordId;
+  const resolvedRecordType =
+    rawInit.recordType === 'image' ||
+    rawInit.recordType === 'file' ||
+    rawInit.recordType === 'none'
+      ? rawInit.recordType
+      : recordType;
 
   if (isSingleMode) {
-    const singleRes = initRes as GenerateUploadSingleResponse;
-    if (!singleRes.uploadUrl || !singleRes.uploadUrl.startsWith('http')) {
+    if (!uploadUrlCandidate || !uploadUrlCandidate.startsWith('http')) {
       throw new StorageOperationError(
         502,
         'INVALID_UPLOAD_URL',
@@ -584,12 +662,17 @@ export async function uploadFileToR2(
       );
     }
 
+    const requiredHeaders =
+      rawInit.requiredHeaders && typeof rawInit.requiredHeaders === 'object'
+        ? (rawInit.requiredHeaders as Record<string, string>)
+        : { 'Content-Type': resolvedMimeType };
+
     await retryOperation(
       () =>
         putBlobWithXhr(
-          singleRes.uploadUrl,
+          uploadUrlCandidate,
           file,
-          singleRes.requiredHeaders || { 'Content-Type': singleRes.mimeType },
+          requiredHeaders,
           (loaded, total) => {
             const pct = 5 + Math.round((loaded / Math.max(1, total)) * 88);
             onProgress?.(Math.min(93, Math.max(5, pct)));
@@ -603,12 +686,13 @@ export async function uploadFileToR2(
     const confirmed = await callR2EdgeFunction<ConfirmUploadResponse>(
       'confirm-upload',
       {
-        objectKey: singleRes.objectKey,
+        objectKey: resolvedObjectKey,
         module,
-        fileName: singleRes.originalName,
-        mimeType: singleRes.mimeType,
-        recordId: singleRes.recordId,
-        recordType: singleRes.recordType,
+        fileName: resolvedOriginalName,
+        mimeType: resolvedMimeType,
+        fileSize: file.size,
+        recordId: resolvedRecordId,
+        recordType: resolvedRecordType,
       },
       { requireAuth: true, signal }
     );
@@ -627,17 +711,63 @@ export async function uploadFileToR2(
     };
   }
 
+  if (!hasMultipartPayload) {
+    const keysPreview = Object.keys(rawInit || {}).slice(0, 8).join(', ') || 'empty';
+    throw new StorageOperationError(
+      502,
+      'UNEXPECTED_UPLOAD_INIT_RESPONSE',
+      `استجابة غير مكتملة من دالة generate-upload-url (keys: ${keysPreview}). تأكد من نشر أحدث كود للدالة في Supabase.`
+    );
+  }
+
   // Multipart upload for larger files (> threshold)
-  const multipartRes = initRes as GenerateUploadMultipartResponse;
-  if (
-    !multipartRes.uploadId ||
-    !Array.isArray(multipartRes.parts) ||
-    multipartRes.parts.length === 0
-  ) {
+  const uploadId =
+    typeof rawInit.uploadId === 'string' ? rawInit.uploadId.trim() : '';
+  const rawParts = Array.isArray(rawInit.parts) ? rawInit.parts : [];
+  const normalizedParts = rawParts
+    .filter((p): p is Record<string, unknown> => Boolean(p && typeof p === 'object'))
+    .map((p) => ({
+      partNumber: Number(p.partNumber ?? p.PartNumber ?? 0),
+      url: String(p.url ?? p.signedUrl ?? '').trim(),
+    }))
+    .filter(
+      (p) =>
+        Number.isInteger(p.partNumber) &&
+        p.partNumber >= 1 &&
+        p.url.startsWith('http')
+    )
+    .sort((a, b) => a.partNumber - b.partNumber);
+
+  const rawChunkSize = Number(rawInit.chunkSize ?? 0);
+  const chunkSize =
+    Number.isFinite(rawChunkSize) && rawChunkSize > 0
+      ? rawChunkSize
+      : normalizedParts.length === 1
+      ? Math.max(1, file.size)
+      : 0;
+
+  const missingFields: string[] = [];
+  if (!uploadId) missingFields.push('uploadId');
+  if (!resolvedObjectKey) missingFields.push('objectKey');
+  if (normalizedParts.length === 0 || normalizedParts.length !== rawParts.length) {
+    missingFields.push('parts');
+  }
+  if (chunkSize <= 0) missingFields.push('chunkSize');
+
+  if (missingFields.length > 0) {
     throw new StorageOperationError(
       502,
       'INVALID_MULTIPART_RESPONSE',
-      'استجابة الرفع متعدد الأجزاء من دالة generate-upload-url غير مكتملة.'
+      `استجابة الرفع متعدد الأجزاء من دالة generate-upload-url غير مكتملة (${missingFields.join(', ')}).`
+    );
+  }
+
+  const expectedPartsCount = Math.max(1, Math.ceil(file.size / chunkSize));
+  if (normalizedParts.length !== expectedPartsCount) {
+    throw new StorageOperationError(
+      502,
+      'INVALID_MULTIPART_RESPONSE',
+      `عدد أجزاء الرفع متعدد الأجزاء (${normalizedParts.length}) لا يطابق حجم الملف المتوقع (${expectedPartsCount}).`
     );
   }
 
@@ -646,9 +776,17 @@ export async function uploadFileToR2(
   let uploadedBytes = 0;
 
   try {
-    for (const part of multipartRes.parts) {
-      const start = (part.partNumber - 1) * multipartRes.chunkSize;
-      const end = Math.min(start + multipartRes.chunkSize, file.size);
+    for (let i = 0; i < normalizedParts.length; i += 1) {
+      const part = normalizedParts[i];
+      if (part.partNumber !== i + 1) {
+        throw new StorageOperationError(
+          502,
+          'INVALID_MULTIPART_RESPONSE',
+          `تسلسل أجزاء الرفع متعدد الأجزاء غير مكتمل عند الجزء رقم ${i + 1}.`
+        );
+      }
+      const start = (part.partNumber - 1) * chunkSize;
+      const end = Math.min(start + chunkSize, file.size);
       const chunk = file.slice(start, end);
 
       const partRes = await retryOperation(
@@ -686,13 +824,16 @@ export async function uploadFileToR2(
     const confirmed = await callR2EdgeFunction<ConfirmUploadResponse>(
       'confirm-upload',
       {
-        objectKey: initRes.objectKey,
+        objectKey: resolvedObjectKey,
         module,
-        fileName: initRes.originalName,
-        mimeType: initRes.mimeType,
-        recordId: initRes.recordId,
-        recordType: initRes.recordType,
-        uploadId: initRes.uploadId,
+        fileName: resolvedOriginalName,
+        mimeType: resolvedMimeType,
+        fileSize: file.size,
+        chunkSize,
+        totalParts: completedParts.length,
+        recordId: resolvedRecordId,
+        recordType: resolvedRecordType,
+        uploadId,
         parts: completedParts,
       },
       { requireAuth: true, signal }
@@ -716,15 +857,191 @@ export async function uploadFileToR2(
       'generate-upload-url',
       {
         action: 'abort',
-        objectKey: initRes.objectKey,
-        uploadId: initRes.uploadId,
-        recordId: initRes.recordId,
-        recordType: initRes.recordType,
+        objectKey: resolvedObjectKey,
+        uploadId,
+        recordId: resolvedRecordId,
+        recordType: resolvedRecordType,
       },
       { requireAuth: true }
     ).catch(() => {});
     throw err;
   }
+}
+
+export interface CloudflareR2HealthResult {
+  ok: boolean | null;
+  status: 'connected' | 'warning' | 'failed' | 'unconfigured';
+  latencyMs: number;
+  bucketName?: string;
+  endpointHost?: string;
+  detail: string;
+  errorCode?: string;
+  errorMessage?: string;
+  probableCause?: string;
+}
+
+export async function testCloudflareR2Connection(): Promise<CloudflareR2HealthResult> {
+  const startedAt =
+    typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const elapsed = () =>
+    Math.max(
+      1,
+      Math.round(
+        (typeof performance !== 'undefined' ? performance.now() : Date.now()) -
+          startedAt
+      )
+    );
+
+  if (!isSupabaseConfigured || !supabaseUrl || !supabaseAnonKey) {
+    return {
+      ok: false,
+      status: 'unconfigured',
+      latencyMs: 0,
+      detail: 'متغيرات Supabase غير مهيأة، لذلك يتعذر استدعاء دوال Cloudflare R2.',
+      errorCode: 'SUPABASE_NOT_CONFIGURED',
+      errorMessage: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.',
+    };
+  }
+
+  let token = await getFirebaseIdToken(false);
+  if (!token && auth?.currentUser) {
+    token = await getFirebaseIdToken(true);
+  }
+  if (!token) {
+    return {
+      ok: null,
+      status: 'warning',
+      latencyMs: elapsed(),
+      detail: 'سجّل الدخول بحساب المسؤول لاختبار الاتصال المباشر مع Cloudflare R2.',
+    };
+  }
+
+  const endpoint = `${supabaseUrl}/functions/v1/generate-upload-url`;
+  const doProbe = (bearer: string) =>
+    fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${bearer}`,
+      },
+      body: JSON.stringify({ action: 'health' }),
+    });
+
+  let res: Response;
+  try {
+    res = await doProbe(token);
+    if (res.status === 401 && auth?.currentUser) {
+      const fresh = await getFirebaseIdToken(true);
+      if (fresh) {
+        res = await doProbe(fresh);
+      }
+    }
+  } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      status: 'failed',
+      latencyMs: elapsed(),
+      detail: 'تعذر الوصول إلى دالة generate-upload-url في Supabase.',
+      errorCode: 'EDGE_NETWORK_ERROR',
+      errorMessage: rawMsg,
+      probableCause:
+        'تحقق من اتصال الإنترنت، أو من نشر دالة generate-upload-url وإعدادات CORS الخاصة بها.',
+    };
+  }
+
+  type R2HealthProbePayload = {
+    ok?: boolean;
+    r2Connected?: boolean;
+    bucketName?: string;
+    endpointHost?: string;
+    latencyMs?: number;
+    error?: { code?: string; message?: string };
+    message?: string;
+  };
+  let parsed: R2HealthProbePayload | null = null;
+  try {
+    parsed = (await res.json()) as R2HealthProbePayload;
+  } catch {
+    parsed = null;
+  }
+
+  const latencyMs = elapsed();
+
+  if (res.ok && parsed?.ok && parsed?.r2Connected) {
+    return {
+      ok: true,
+      status: 'connected',
+      latencyMs,
+      bucketName: parsed.bucketName,
+      endpointHost: parsed.endpointHost,
+      detail: `متصل بنجاح بحاوية "${parsed.bucketName || 'R2'}" (${parsed.endpointHost || 'Cloudflare R2'}) خلال ${parsed.latencyMs ?? latencyMs}ms.`,
+    };
+  }
+
+  const code = parsed?.error?.code || `HTTP_${res.status}`;
+  const rawMsg =
+    parsed?.error?.message || parsed?.message || res.statusText || '';
+
+  if (res.status === 400 && code === 'INVALID_MODULE') {
+    return {
+      ok: false,
+      status: 'warning',
+      latencyMs,
+      detail:
+        'الدالة مستجيبة وتقبل التوثيق، لكن النسخة المنشورة في Supabase قديمة ولا تدعم فحص R2 المباشر أو تعديلات الرفع الأحدث.',
+      errorCode: code,
+      errorMessage: rawMsg || 'Deployed generate-upload-url rejected action=health.',
+      probableCause:
+        'أعد نشر أحدث كود لدوال generate-upload-url و confirm-upload في Supabase Edge Functions.',
+    };
+  }
+
+  if (res.status === 401) {
+    return {
+      ok: false,
+      status: 'failed',
+      latencyMs,
+      detail: mapEdgeErrorToUserMessage(401, code, rawMsg),
+      errorCode: code,
+      errorMessage: rawMsg || '401 Unauthorized / Invalid JWT',
+      probableCause:
+        'عطّل خيار "Verify JWT" في إعدادات دوال Edge Functions الأربع داخل Supabase Dashboard.',
+    };
+  }
+
+  if (res.status === 404) {
+    return {
+      ok: false,
+      status: 'failed',
+      latencyMs,
+      detail: 'دالة generate-upload-url غير منشورة على Supabase (404).',
+      errorCode: 'EDGE_FUNCTION_NOT_FOUND',
+      errorMessage: rawMsg || 'HTTP 404 from /functions/v1/generate-upload-url',
+      probableCause:
+        'انشر الدوال الأربع (generate-upload-url و confirm-upload و generate-download-url و delete-file) عبر Supabase Dashboard أو CLI.',
+    };
+  }
+
+  return {
+    ok: false,
+    status: 'failed',
+    latencyMs,
+    detail: mapEdgeErrorToUserMessage(res.status, code, rawMsg),
+    errorCode: code,
+    errorMessage: rawMsg || `HTTP ${res.status}`,
+    probableCause:
+      code === 'R2_NOT_CONFIGURED'
+        ? 'أضف أسرار R2 في Supabase Edge Function Secrets: CLOUDFLARE_ACCOUNT_ID و R2_BUCKET_NAME و R2_ACCESS_KEY_ID و R2_SECRET_ACCESS_KEY.'
+        : code === 'R2_AUTH_FAILED'
+        ? 'تحقق من صحة R2_ACCESS_KEY_ID و R2_SECRET_ACCESS_KEY وصلاحية Object Read & Write للتوكن.'
+        : code === 'R2_BUCKET_NOT_FOUND'
+        ? 'تحقق من مطابقة R2_BUCKET_NAME لاسم الحاوية الفعلي في Cloudflare R2.'
+        : code === 'R2_ENDPOINT_UNREACHABLE'
+        ? 'تحقق من R2_ENDPOINT (https://<ACCOUNT_ID>.r2.cloudflarestorage.com).'
+        : undefined,
+  };
 }
 
 export async function getFileUrl(options: {

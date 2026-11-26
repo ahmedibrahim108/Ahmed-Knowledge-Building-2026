@@ -86,8 +86,66 @@ Deno.serve(async (req: Request) => {
         ? 'none'
         : 'file';
 
+    const markMetadataFailed = async () => {
+      if (recordType === 'none') return;
+      const tbl = recordType === 'image' ? 'image_attachments' : 'file_attachments';
+      await adminClient
+        .from(tbl)
+        .update({ upload_status: 'failed' })
+        .eq('owner_id', caller.uid)
+        .eq('id', recordId);
+    };
+
+    // Read pending metadata record (if created during generate-upload-url) to cross-check file size
+    let pendingExpectedSize = 0;
+    if (recordType === 'file' || recordType === 'image') {
+      const tbl = recordType === 'image' ? 'image_attachments' : 'file_attachments';
+      const { data: pendingRow } = await adminClient
+        .from(tbl)
+        .select('file_size, size_bytes, object_key')
+        .eq('owner_id', caller.uid)
+        .eq('id', recordId)
+        .maybeSingle();
+      if (pendingRow) {
+        if (pendingRow.object_key && pendingRow.object_key !== objectKey) {
+          return errorResponse(
+            req,
+            409,
+            'OBJECT_KEY_MISMATCH',
+            'Confirmed objectKey does not match the initialized upload record.'
+          );
+        }
+        pendingExpectedSize = Number(
+          pendingRow.file_size || pendingRow.size_bytes || 0
+        );
+      }
+    }
+
+    const bodyFileSize =
+      typeof body.fileSize === 'number' && Number.isFinite(body.fileSize) && body.fileSize > 0
+        ? Math.round(body.fileSize)
+        : 0;
+    const expectedFileSize =
+      pendingExpectedSize > 0 ? pendingExpectedSize : bodyFileSize;
+
+    const uploadId =
+      typeof body.uploadId === 'string' ? body.uploadId.trim() : '';
+    const hasPartsArray = Array.isArray(body.parts) && body.parts.length > 0;
+    if (!uploadId && hasPartsArray) {
+      return errorResponse(
+        req,
+        400,
+        'MISSING_UPLOAD_ID',
+        'uploadId is required when confirming a multipart upload.'
+      );
+    }
+
     let completedEtag = '';
-    if (typeof body.uploadId === 'string' && body.uploadId.trim()) {
+    let verifiedMultipartBytes = 0;
+    let verifiedMultipartParts = 0;
+    const isMultipart = Boolean(uploadId);
+
+    if (isMultipart) {
       const rawParts = Array.isArray(body.parts) ? body.parts : [];
       const parts = rawParts
         .filter((p): p is { partNumber?: unknown; PartNumber?: unknown; etag?: unknown; ETag?: unknown } =>
@@ -97,18 +155,40 @@ Deno.serve(async (req: Request) => {
           PartNumber: Number(p.PartNumber ?? p.partNumber),
           ETag: String(p.ETag ?? p.etag ?? ''),
         }));
-      const completed = await completeMultipartSession(
-        r2Client,
-        r2Cfg.bucketName,
-        objectKey,
-        body.uploadId.trim(),
-        parts
-      );
-      completedEtag = completed.etag || '';
+
+      const rawTotalParts = Number(body.totalParts ?? 0);
+      const rawChunkSize = Number(body.chunkSize ?? 0);
+      const expectedTotalParts =
+        Number.isInteger(rawTotalParts) && rawTotalParts > 0
+          ? rawTotalParts
+          : rawChunkSize > 0 && expectedFileSize > 0
+          ? Math.max(1, Math.ceil(expectedFileSize / rawChunkSize))
+          : undefined;
+
+      try {
+        const completed = await completeMultipartSession(
+          r2Client,
+          r2Cfg.bucketName,
+          objectKey,
+          uploadId,
+          parts,
+          {
+            expectedFileSize: expectedFileSize > 0 ? expectedFileSize : undefined,
+            expectedTotalParts,
+          }
+        );
+        completedEtag = completed.etag || '';
+        verifiedMultipartBytes = completed.totalPartsBytes;
+        verifiedMultipartParts = completed.partCount;
+      } catch (mpErr) {
+        await markMetadataFailed();
+        throw mpErr;
+      }
     }
 
     const head = await headR2Object(r2Client, r2Cfg.bucketName, objectKey);
     if (!head.exists) {
+      await markMetadataFailed();
       return errorResponse(
         req,
         404,
@@ -119,11 +199,28 @@ Deno.serve(async (req: Request) => {
 
     if (head.contentLength <= 0 || head.contentLength > policy.maxBytes) {
       await deleteR2Object(r2Client, r2Cfg.bucketName, objectKey);
+      await markMetadataFailed();
       return errorResponse(
         req,
         413,
         'OBJECT_SIZE_INVALID',
         'Uploaded object size exceeds the allowed server policy.'
+      );
+    }
+
+    if (
+      (isMultipart && verifiedMultipartBytes > 0 && head.contentLength !== verifiedMultipartBytes) ||
+      (expectedFileSize > 0 && head.contentLength !== expectedFileSize)
+    ) {
+      await deleteR2Object(r2Client, r2Cfg.bucketName, objectKey);
+      await markMetadataFailed();
+      return errorResponse(
+        req,
+        422,
+        'FILE_INTEGRITY_MISMATCH',
+        `Assembled R2 object size (${head.contentLength} bytes) does not match expected size (${
+          verifiedMultipartBytes || expectedFileSize
+        } bytes).`
       );
     }
 
@@ -136,6 +233,7 @@ Deno.serve(async (req: Request) => {
       (rawHeadMime === 'text/html' && module !== 'library_book' && module !== 'note_attachment')
     ) {
       await deleteR2Object(r2Client, r2Cfg.bucketName, objectKey);
+      await markMetadataFailed();
       return errorResponse(
         req,
         415,
@@ -156,6 +254,7 @@ Deno.serve(async (req: Request) => {
       normalizedMime = normalizeAndValidateMime(module, preferredMime, originalName);
     } catch (mimeErr) {
       await deleteR2Object(r2Client, r2Cfg.bucketName, objectKey);
+      await markMetadataFailed();
       throw mimeErr;
     }
 
@@ -247,6 +346,8 @@ Deno.serve(async (req: Request) => {
       downloadUrl: signed.url,
       expiresIn: signed.expiresIn,
       uploadStatus: 'completed',
+      multipartVerified: isMultipart,
+      ...(isMultipart ? { partCount: verifiedMultipartParts } : {}),
     });
   } catch (err) {
     if (err instanceof R2ConfigError) {

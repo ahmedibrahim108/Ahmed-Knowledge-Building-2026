@@ -1,6 +1,11 @@
 import { SupabaseClient, createClient } from '@supabase/supabase-js';
 import { onIdTokenChanged } from 'firebase/auth';
-import { OWNER_ADMIN_EMAIL, auth } from '../firebase';
+import {
+  FIREBASE_PROJECT_INFO,
+  OWNER_ADMIN_EMAIL,
+  auth,
+  firebaseInitError,
+} from '../firebase';
 
 const rawSupabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
 const rawSupabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
@@ -360,13 +365,17 @@ export async function testSupabaseConnection(
     };
   }
 
-  // Step 1: Firebase Auth user session
-  if (!currentUser) {
+  // Step 1: Firebase Auth user session & SDK init
+  if (firebaseInitError || !currentUser) {
     checks.push({
       id: 'firebase_auth',
-      label: '1. Firebase Google Sign-In',
-      ok: null,
-      detail: 'Not signed in yet — sign in with Google to run authenticated Firebase -> Supabase checks.',
+      label: firebaseInitError
+        ? '1. Firebase SDK & Google Sign-In'
+        : '1. Firebase Google Sign-In',
+      ok: firebaseInitError ? false : null,
+      detail: firebaseInitError
+        ? `خطأ تهيئة Firebase (${FIREBASE_PROJECT_INFO.projectId}): ${firebaseInitError}`
+        : `المشروع (${FIREBASE_PROJECT_INFO.projectId}) مهيأ، لكن لم يتم تسجيل الدخول بـ Google بعد.`,
     });
     try {
       const { data: anonRows, error: anonErr, status: httpStatus } = await supabase
@@ -406,11 +415,14 @@ export async function testSupabaseConnection(
       });
 
       return {
-        status: 'connected',
+        status: firebaseInitError ? 'failed' : 'connected',
         checkedAt,
         latencyMs,
         authenticated: false,
         checks,
+        ...(firebaseInitError
+          ? { errorCode: 'FIREBASE_INIT_ERROR', errorMessage: firebaseInitError }
+          : {}),
       };
     } catch (err) {
       const endedAt =

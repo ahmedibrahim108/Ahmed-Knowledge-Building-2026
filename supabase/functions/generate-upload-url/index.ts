@@ -22,6 +22,7 @@ import {
   createMultipartSession,
   createR2Client,
   getR2Config,
+  headR2Bucket,
   normalizeAndValidateMime,
   sanitizeOriginalFileName,
   sanitizeRecordId,
@@ -179,6 +180,38 @@ Deno.serve(async (req: Request) => {
     }
 
     const action = typeof body.action === 'string' ? body.action : 'init';
+
+    // Read-only health probe for admin server diagnostics (verifies JWT + R2 secrets + bucket access)
+    if (action === 'health') {
+      if (!caller.isAdmin) {
+        throw new AuthError(
+          403,
+          'ADMIN_REQUIRED',
+          'Only the approved platform administrator can inspect Cloudflare R2 health.'
+        );
+      }
+      const startedAt = Date.now();
+      try {
+        await headR2Bucket(r2Client, r2Cfg.bucketName);
+      } catch (r2Err) {
+        if (r2Err instanceof R2ValidationError || r2Err instanceof R2ConfigError) {
+          throw r2Err;
+        }
+        throw new R2ClientOperationError(
+          'headR2Bucket',
+          describeR2ClientFailure('bucket health check', r2Err)
+        );
+      }
+      return jsonResponse(req, {
+        ok: true,
+        r2Connected: true,
+        bucketName: r2Cfg.bucketName,
+        endpointHost: new URL(r2Cfg.endpoint).host,
+        latencyMs: Math.max(1, Date.now() - startedAt),
+        singleUploadMaxBytes: SINGLE_UPLOAD_MAX_BYTES,
+        multipartChunkBytes: MULTIPART_CHUNK_BYTES,
+      });
+    }
 
     // Allow clean cancellation/cleanup of an aborted multipart upload session
     if (action === 'abort') {
@@ -421,6 +454,29 @@ Deno.serve(async (req: Request) => {
         );
       }
 
+      if (
+        !mp.uploadId ||
+        !Array.isArray(mp.parts) ||
+        mp.parts.length === 0 ||
+        mp.parts.some((p) => !p.partNumber || !p.url)
+      ) {
+        if (mp.uploadId) {
+          await abortMultipartSession(
+            r2Client,
+            r2Cfg.bucketName,
+            objectKey,
+            mp.uploadId
+          ).catch(() => {});
+        }
+        await markMetadataFailed();
+        return errorResponse(
+          req,
+          502,
+          'MULTIPART_INIT_INCOMPLETE',
+          'Cloudflare R2 multipart session initialization returned incomplete part URLs.'
+        );
+      }
+
       return jsonResponse(req, {
         ok: true,
         mode: 'multipart',
@@ -435,6 +491,7 @@ Deno.serve(async (req: Request) => {
         fileSize,
         uploadId: mp.uploadId,
         chunkSize: mp.chunkSize || MULTIPART_CHUNK_BYTES,
+        totalParts: mp.parts.length,
         parts: mp.parts,
         expiresIn: 3600,
       });
